@@ -189,7 +189,7 @@ pub enum Bech32mDecodeError {
 
 impl EncryptionPubKey {
     /// HRP for Bech32m encoding
-    const BECH32M_HRP: &str = "bn-enc";
+    const BECH32M_HRP: &'static str = "ba-enc";
 
     /// Encode to Bech32m format
     pub fn bech32m_encode(&self) -> String {

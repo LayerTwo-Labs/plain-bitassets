@@ -160,7 +160,11 @@ impl<T> RollBack<T> {
 
 impl BitAssetData {
     // initialize from BitAsset data provided during a registration
-    fn init(bitasset_data: types::BitAssetData, txid: Txid, height: u32) -> Self {
+    fn init(
+        bitasset_data: types::BitAssetData,
+        txid: Txid,
+        height: u32,
+    ) -> Self {
         Self {
             commitment: RollBack::new(bitasset_data.commitment, txid, height),
             is_icann: false,
@@ -864,7 +868,8 @@ impl State {
                 name_hash: *updated_bitasset,
             })?;
         bitasset_data.apply_updates(bitasset_updates, filled_tx.txid(), height);
-        self.bitassets.put(rwtxn, updated_bitasset, &bitasset_data)?;
+        self.bitassets
+            .put(rwtxn, updated_bitasset, &bitasset_data)?;
         Ok(())
     }
 
@@ -930,7 +935,9 @@ impl State {
                     main_fee,
                     main_address,
                 },
-                OutputContent::BitAsset | OutputContent::BitAssetReservation => {
+                OutputContent::BitAsset
+                | OutputContent::BitAssetControl
+                | OutputContent::BitAssetReservation => {
                     return Err(Error::BadCoinbaseOutputContent);
                 }
             };

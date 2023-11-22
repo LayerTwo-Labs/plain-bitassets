@@ -139,7 +139,8 @@ impl TxCreator {
                 Ok(tx)
             }
             TxType::BitAssetReservation { plaintext_name } => {
-                let () = app.wallet.reserve_bitasset(&mut tx, plaintext_name)?;
+                let () =
+                    app.wallet.reserve_bitasset(&mut tx, plaintext_name)?;
                 Ok(tx)
             }
         }

@@ -44,6 +44,7 @@ pub enum InPoint {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Content {
     BitAsset,
+    BitAssetControl,
     BitAssetReservation,
     Value(u64),
     Withdrawal {
@@ -172,6 +173,7 @@ pub enum FilledContent {
         main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
     },
     BitAsset(Hash),
+    BitAssetControl(Hash),
     /// Reservation txid and commitment
     BitAssetReservation(Txid, Hash),
 }
@@ -243,8 +245,9 @@ impl GetValue for Content {
     #[inline(always)]
     fn get_value(&self) -> u64 {
         match self {
-            Self::BitAsset => 0,
-            Self::BitAssetReservation => 0,
+            Self::BitAsset
+            | Self::BitAssetControl
+            | Self::BitAssetReservation => 0,
             Self::Value(value) => *value,
             Self::Withdrawal { value, .. } => *value,
         }
@@ -403,7 +406,9 @@ impl Transaction {
     /// If the tx is a bitasset reservation, returns the reservation commitment
     pub fn reservation_commitment(&self) -> Option<Hash> {
         match self.data {
-            Some(TxData::BitAssetReservation { commitment }) => Some(commitment),
+            Some(TxData::BitAssetReservation { commitment }) => {
+                Some(commitment)
+            }
             _ => None,
         }
     }
@@ -419,7 +424,7 @@ impl Transaction {
 }
 
 impl FilledContent {
-    /// returns the BitAsset ID (name hash) if the filled output content
+    /// Returns the BitAsset ID (name hash) if the filled output content
     /// corresponds to a BitAsset output.
     pub fn bitasset(&self) -> Option<&Hash> {
         match self {
@@ -428,23 +433,28 @@ impl FilledContent {
         }
     }
 
-    /// true if the output content corresponds to a bitasset
+    /// True if the output content corresponds to a BitAsset
     pub fn is_bitasset(&self) -> bool {
         matches!(self, Self::BitAsset(_))
     }
 
-    /// true if the output content corresponds to a reservation
+    /// True if the output content corresponds to a BitAsset control coin
+    pub fn is_bitasset_control(&self) -> bool {
+        matches!(self, Self::BitAssetControl(_))
+    }
+
+    /// True if the output content corresponds to a reservation
     pub fn is_reservation(&self) -> bool {
         matches!(self, Self::BitAssetReservation { .. })
     }
 
-    /// true if the output content corresponds to a withdrawal
+    /// True if the output content corresponds to a withdrawal
     pub fn is_withdrawal(&self) -> bool {
         matches!(self, Self::BitcoinWithdrawal { .. })
     }
 
-    /// returns the reservation txid and commitment if the filled output
-    /// content corresponds to a BitAsset reservation output.
+    /** Returns the reservation txid and commitment if the filled output
+     * content corresponds to a BitAsset reservation output. */
     pub fn reservation_data(&self) -> Option<(&Txid, &Hash)> {
         match self {
             Self::BitAssetReservation(txid, commitment) => {
@@ -454,8 +464,8 @@ impl FilledContent {
         }
     }
 
-    /// returns the reservation commitment if the filled output content
-    /// corresponds to a BitAsset reservation output.
+    /** Returns the reservation commitment if the filled output content
+     *  corresponds to a BitAsset reservation output. */
     pub fn reservation_commitment(&self) -> Option<&Hash> {
         self.reservation_data().map(|(_, commitment)| commitment)
     }
@@ -475,6 +485,7 @@ impl From<FilledContent> for Content {
                 main_address,
             },
             FilledContent::BitAsset(_) => Content::BitAsset,
+            FilledContent::BitAssetControl(_) => Content::BitAssetControl,
             FilledContent::BitAssetReservation { .. } => {
                 Content::BitAssetReservation
             }
@@ -489,7 +500,7 @@ impl GetValue for FilledContent {
 }
 
 impl FilledOutput {
-    /// construct a new filled output
+    /// Construct a new filled output
     pub fn new(address: Address, content: FilledContent) -> Self {
         Self {
             address,
@@ -498,35 +509,40 @@ impl FilledOutput {
         }
     }
 
-    /// returns the BitAsset ID (name hash) if the filled output content
-    /// corresponds to a BitAsset output.
+    /** Returns the BitAsset ID (name hash) if the filled output content
+     * corresponds to a BitAsset output. */
     pub fn bitasset(&self) -> Option<&Hash> {
         self.content.bitasset()
     }
 
-    /// accessor for content
+    /// Accessor for content
     pub fn content(&self) -> &FilledContent {
         &self.content
     }
 
-    /// true if the output content corresponds to a bitasset
+    /// True if the output content corresponds to a BitAsset
     pub fn is_bitasset(&self) -> bool {
         self.content.is_bitasset()
     }
 
-    /// true if the output content corresponds to a reservation
+    /// True if the output content corresponds to a BitAsset control coin
+    pub fn is_bitasset_control(&self) -> bool {
+        self.content.is_bitasset_control()
+    }
+
+    /// True if the output content corresponds to a reservation
     pub fn is_reservation(&self) -> bool {
         self.content.is_reservation()
     }
 
-    /// returns the reservation txid and commitment if the filled output
-    /// content corresponds to a BitAsset reservation output.
+    /** Returns the reservation txid and commitment if the filled output
+     *  content corresponds to a BitAsset reservation output. */
     pub fn reservation_data(&self) -> Option<(&Txid, &Hash)> {
         self.content.reservation_data()
     }
 
-    /// returns the reservation commitment if the filled output content
-    /// corresponds to a BitAsset reservation output.
+    /** Returns the reservation commitment if the filled output content
+     *  corresponds to a BitAsset reservation output. */
     pub fn reservation_commitment(&self) -> Option<&Hash> {
         self.content.reservation_commitment()
     }
@@ -549,53 +565,53 @@ impl GetValue for FilledOutput {
 }
 
 impl FilledTransaction {
-    // return an iterator over BitAsset reservation outputs
+    // Return an iterator over BitAsset reservation outputs
     pub fn bitasset_outputs(&self) -> impl Iterator<Item = &Output> {
         self.transaction.bitasset_outputs()
     }
 
-    /// accessor for tx data
+    /// Accessor for tx data
     pub fn data(&self) -> &Option<TxData> {
         &self.transaction.data
     }
 
-    /// If the tx is a bitasset registration, returns the implied reservation
-    /// commitment
+    /** If the tx is a bitasset registration, returns the implied reservation
+     * commitment */
     pub fn implied_reservation_commitment(&self) -> Option<Hash> {
         self.transaction.implied_reservation_commitment()
     }
 
-    /// accessor for tx outputs
+    /// Accessor for tx outputs
     pub fn inputs(&self) -> &TxInputs {
         &self.transaction.inputs
     }
 
-    /// true if the tx data corresponds to a BitAsset registration
+    /// True if the tx data corresponds to a BitAsset registration
     pub fn is_registration(&self) -> bool {
         self.transaction.is_registration()
     }
 
-    /// true if the tx data corresponds to a regular tx
+    /// True if the tx data corresponds to a regular tx
     pub fn is_regular(&self) -> bool {
         self.transaction.is_regular()
     }
 
-    /// true if the tx data corresponds to a BitAsset reservation
+    /// True if the tx data corresponds to a BitAsset reservation
     pub fn is_reservation(&self) -> bool {
         self.transaction.is_reservation()
     }
 
-    /// true if the tx data corresponds to a BitAsset update
+    /// True if the tx data corresponds to a BitAsset update
     pub fn is_update(&self) -> bool {
         self.transaction.is_update()
     }
 
-    /// true if the tx data corresponds to a BitAsset batch icann registration
+    /// True if the tx data corresponds to a BitAsset batch icann registration
     pub fn is_batch_icann(&self) -> bool {
         self.transaction.is_batch_icann()
     }
 
-    /// accessor for tx outputs
+    /// Accessor for tx outputs
     pub fn outputs(&self) -> &TxOutputs {
         &self.transaction.outputs
     }
@@ -605,7 +621,7 @@ impl FilledTransaction {
         self.transaction.registration_name_hash()
     }
 
-    /// return an iterator over BitAsset reservation outputs
+    /// Return an iterator over BitAsset reservation outputs
     pub fn reservation_outputs(&self) -> impl Iterator<Item = &Output> {
         self.transaction.reservation_outputs()
     }
@@ -615,36 +631,36 @@ impl FilledTransaction {
         self.transaction.reservation_commitment()
     }
 
-    /// If the tx is a batch icann registration, returns the batch icann
-    /// registration data
+    /** If the tx is a batch icann registration, returns the batch icann
+     * registration data */
     pub fn batch_icann_data(&self) -> Option<&BatchIcannRegistrationData> {
         self.transaction.batch_icann_data()
     }
 
-    /// accessor for txid
+    /// Rccessor for txid
     pub fn txid(&self) -> Txid {
         self.transaction.txid()
     }
 
-    /// return an iterator over spent outpoints/outputs
+    /// Return an iterator over spent outpoints/outputs
     pub fn spent_inputs(
         &self,
     ) -> impl DoubleEndedIterator<Item = (&OutPoint, &FilledOutput)> {
         self.inputs().iter().zip(self.spent_utxos.iter())
     }
 
-    /// returns the total value spent
+    /// Returns the total value spent
     pub fn spent_value(&self) -> u64 {
         self.spent_utxos.iter().map(GetValue::get_value).sum()
     }
 
-    /// returns the total value in the outputs
+    /// Returns the total value in the outputs
     pub fn value_out(&self) -> u64 {
         self.outputs().iter().map(GetValue::get_value).sum()
     }
 
-    /// returns the difference between the value spent and value out, if it is
-    /// non-negative.
+    /** Returns the difference between the value spent and value out, if it is
+     * non-negative. */
     pub fn fee(&self) -> Option<u64> {
         let spent_value = self.spent_value();
         let value_out = self.value_out();
@@ -655,7 +671,7 @@ impl FilledTransaction {
         }
     }
 
-    /// return an iterator over spent reservations
+    /// Return an iterator over spent reservations
     pub fn spent_reservations(
         &self,
     ) -> impl Iterator<Item = (&OutPoint, &FilledOutput)> {
@@ -663,7 +679,7 @@ impl FilledTransaction {
             .filter(|(_, filled_output)| filled_output.is_reservation())
     }
 
-    /// return an iterator over spent bitassets
+    /// Return an iterator over spent bitassets
     pub fn spent_bitassets(
         &self,
     ) -> impl DoubleEndedIterator<Item = (&OutPoint, &FilledOutput)> {
@@ -671,7 +687,15 @@ impl FilledTransaction {
             .filter(|(_, filled_output)| filled_output.is_bitasset())
     }
 
-    /// compute the filled content for BitAsset outputs
+    /// Return an iterator over spent bitasset control coins
+    pub fn spent_bitasset_controls(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = (&OutPoint, &FilledOutput)> {
+        self.spent_inputs()
+            .filter(|(_, filled_output)| filled_output.is_bitasset_control())
+    }
+
+    /// Compute the filled content for BitAsset outputs
     fn filled_bitasset_output_content(
         &self,
     ) -> impl Iterator<Item = FilledContent> + '_ {
@@ -681,6 +705,26 @@ impl FilledTransaction {
         let new_bitasset_content: Option<FilledContent> =
             self.registration_name_hash().map(FilledContent::BitAsset);
         self.spent_bitassets()
+            .map(|(_, filled_output)| filled_output.content())
+            .cloned()
+            .chain(new_bitasset_content)
+    }
+
+    /** Compute the filled content for BitAsset reservation outputs.
+     *  WARNING: do not expose DoubleEndedIterator. */
+    fn filled_bitasset_control_output_content(
+        &self,
+    ) -> impl Iterator<Item = FilledContent> + '_ {
+        /* If this tx is a BitAsset registration, this is the content of the
+         * output corresponding to the newly created BitAsset control,
+         * which must be the second-to-last registration output.
+         * ie. If there are n outputs `0..(n-1)`, then output `(n-1)`
+         * is the BitAsset mint,
+         * and output `(n-2)` is the BitAsset control coin. */
+        let new_bitasset_content: Option<FilledContent> = self
+            .registration_name_hash()
+            .map(FilledContent::BitAssetControl);
+        self.spent_bitasset_controls()
             .map(|(_, filled_output)| filled_output.content())
             .cloned()
             .chain(new_bitasset_content)
@@ -704,7 +748,6 @@ impl FilledTransaction {
             self.implied_reservation_commitment();
         self.spent_reservations()
             .map(|(_, filled_output)| filled_output.content())
-            .cloned()
             // In the event of a registration, the first corresponding
             // reservation does not occur in the output
             .filter(move |content| {
@@ -723,6 +766,7 @@ impl FilledTransaction {
                     true
                 }
             })
+            .cloned()
             .chain(new_reservation_content)
     }
 
@@ -731,6 +775,8 @@ impl FilledTransaction {
     pub fn filled_outputs(&self) -> Option<Vec<FilledOutput>> {
         let mut filled_bitasset_output_content =
             self.filled_bitasset_output_content();
+        let mut filled_bitasset_control_output_content =
+            self.filled_bitasset_control_output_content();
         let mut filled_reservation_output_content =
             self.filled_reservation_output_content();
         self.outputs()
@@ -739,6 +785,9 @@ impl FilledTransaction {
                 let content = match output.content.clone() {
                     Content::BitAsset => {
                         filled_bitasset_output_content.next()?.clone()
+                    }
+                    Content::BitAssetControl => {
+                        filled_bitasset_control_output_content.next()?.clone()
                     }
                     Content::BitAssetReservation => {
                         filled_reservation_output_content.next()?.clone()

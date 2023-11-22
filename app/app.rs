@@ -180,7 +180,8 @@ impl App {
             let Some(bitasset) = output.bitasset() else {
                 continue;
             };
-            let bitasset_data = self.node.get_current_bitasset_data(bitasset)?;
+            let bitasset_data =
+                self.node.get_current_bitasset_data(bitasset)?;
             let height = outpoints_to_block_heights[&outpoint];
             let owned = Range {
                 start: height,

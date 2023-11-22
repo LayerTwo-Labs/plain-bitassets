@@ -101,7 +101,9 @@ impl MyBitassets {
                 .get_bitasset_plaintext(bitasset)
                 .expect("failed to retrieve bitasset data");
             match plain_bitasset {
-                Some(plain_bitasset) => Either::Left((*bitasset, plain_bitasset)),
+                Some(plain_bitasset) => {
+                    Either::Left((*bitasset, plain_bitasset))
+                }
                 None => Either::Right(*bitasset),
             }
         });
