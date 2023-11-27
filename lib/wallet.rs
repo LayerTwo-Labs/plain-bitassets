@@ -274,6 +274,7 @@ impl Wallet {
         tx: &mut Transaction,
         plain_name: &str,
         bitasset_data: Cow<BitAssetData>,
+        initial_supply: u64,
     ) -> Result<(), Error> {
         assert!(tx.is_regular(), "this function only accepts a regular tx");
         // address for the registration output
@@ -334,14 +335,22 @@ impl Wallet {
             .ok_or_else(|| Error::NoBitassetReservation {
                 plain_name: plain_name.to_owned(),
             })?;
-        let registration_output =
-            Output::new(registration_addr, OutputContent::BitAsset);
         tx.inputs.push(reservation_outpoint);
-        tx.outputs.push(registration_output);
+        if initial_supply != 0 {
+            let mint_output = Output::new(
+                registration_addr,
+                OutputContent::BitAsset(initial_supply),
+            );
+            tx.outputs.push(mint_output);
+        };
+        let control_coin_output =
+            Output::new(registration_addr, OutputContent::BitAssetControl);
+        tx.outputs.push(control_coin_output);
         tx.data = Some(TxData::BitAssetRegistration {
             name_hash,
             revealed_nonce: nonce,
             bitasset_data: Box::new(bitasset_data.into_owned()),
+            initial_supply,
         });
         Ok(())
     }

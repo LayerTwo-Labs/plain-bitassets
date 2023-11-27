@@ -1,9 +1,12 @@
 use std::{
+    cmp::Ordering,
+    collections::HashMap,
     hash::Hasher,
     net::{Ipv4Addr, Ipv6Addr},
 };
 
 use educe::Educe;
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
 use bip300301::bitcoin;
@@ -43,7 +46,7 @@ pub enum InPoint {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Content {
-    BitAsset,
+    BitAsset(u64),
     BitAssetControl,
     BitAssetReservation,
     Value(u64),
@@ -80,22 +83,22 @@ where
 )]
 #[educe(Hash)]
 pub struct BitAssetData {
-    /// commitment to arbitrary data
+    /// Commitment to arbitrary data
     pub commitment: Option<Hash>,
-    /// optional ipv4 addr
+    /// Optional ipv4 addr
     pub ipv4_addr: Option<Ipv4Addr>,
-    /// optional ipv6 addr
+    /// Optional ipv6 addr
     pub ipv6_addr: Option<Ipv6Addr>,
-    /// optional pubkey used for encryption
+    /// Optional pubkey used for encryption
     pub encryption_pubkey: Option<EncryptionPubKey>,
-    /// optional pubkey used for signing messages
+    /// Optional pubkey used for signing messages
     #[educe(Hash(method = "hash_option_public_key"))]
     pub signing_pubkey: Option<PublicKey>,
-    /// optional minimum paymail fee, in sats
+    /// Optional minimum paymail fee, in sats
     pub paymail_fee: Option<u64>,
 }
 
-/// delete, retain, or set a value
+/// Delete, retain, or set a value
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Update<T> {
     Delete,
@@ -103,29 +106,29 @@ pub enum Update<T> {
     Set(T),
 }
 
-/// updates to the data associated with a BitAsset
+/// Updates to the data associated with a BitAsset
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BitAssetDataUpdates {
-    /// commitment to arbitrary data
+    /// Commitment to arbitrary data
     pub commitment: Update<Hash>,
-    /// optional ipv4 addr
+    /// Optional ipv4 addr
     pub ipv4_addr: Update<Ipv4Addr>,
-    /// optional ipv6 addr
+    /// Optional ipv6 addr
     pub ipv6_addr: Update<Ipv6Addr>,
-    /// optional pubkey used for encryption
+    /// Optional pubkey used for encryption
     pub encryption_pubkey: Update<EncryptionPubKey>,
-    /// optional pubkey used for signing messages
+    /// Optional pubkey used for signing messages
     pub signing_pubkey: Update<PublicKey>,
-    /// optional minimum paymail fee, in sats
+    /// Optional minimum paymail fee, in sats
     pub paymail_fee: Update<u64>,
 }
 
-/// batch icann registration tx payload
+/// Batch icann registration tx payload
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BatchIcannRegistrationData {
-    /// plaintext names of the bitassets to be registered as ICANN domains
+    /// Plaintext names of the bitassets to be registered as ICANN domains
     pub plain_names: Vec<String>,
-    /// signature over the batch icann registration tx
+    /// Signature over the batch icann registration tx
     pub signature: Signature,
 }
 
@@ -133,19 +136,21 @@ pub struct BatchIcannRegistrationData {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum TransactionData {
     BitAssetReservation {
-        /// commitment to the BitAsset that will be registered
+        /// Commitment to the BitAsset that will be registered
         #[serde(with = "serde_hexstr_human_readable")]
         commitment: Hash,
     },
     BitAssetRegistration {
-        /// reveal of the name hash
+        /// Reveal of the name hash
         #[serde(with = "serde_hexstr_human_readable")]
         name_hash: Hash,
-        /// reveal of the nonce used for the BitAsset reservation commitment
+        /// Reveal of the nonce used for the BitAsset reservation commitment
         #[serde(with = "serde_hexstr_human_readable")]
         revealed_nonce: Hash,
-        /// initial BitAsset data
+        /// Initial BitAsset data
         bitasset_data: Box<BitAssetData>,
+        /// Amount to mint
+        initial_supply: u64,
     },
     BitAssetUpdate(Box<BitAssetDataUpdates>),
     BatchIcann(BatchIcannRegistrationData),
@@ -162,8 +167,8 @@ pub struct Transaction {
     pub data: Option<TransactionData>,
 }
 
-/// Representation of Output Content that includes asset type and/or
-/// reservation commitment
+/** Representation of Output Content that includes asset type and/or
+ *  reservation commitment */
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum FilledContent {
     Bitcoin(u64),
@@ -172,7 +177,8 @@ pub enum FilledContent {
         main_fee: u64,
         main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
     },
-    BitAsset(Hash),
+    /// BitAsset ID and coin value
+    BitAsset(Hash, u64),
     BitAssetControl(Hash),
     /// Reservation txid and commitment
     BitAssetReservation(Txid, Hash),
@@ -223,12 +229,17 @@ impl std::fmt::Display for OutPoint {
 }
 
 impl Content {
-    /// true if the output content corresponds to a BitAsset
+    /// `true` if the output content corresponds to a BitAsset
     pub fn is_bitasset(&self) -> bool {
-        matches!(self, Self::BitAsset)
+        matches!(self, Self::BitAsset(_))
     }
 
-    /// true if the output content corresponds to a reservation
+    /// `true` if the output content corresponds to a BitAsset control coin
+    pub fn is_bitasset_control(&self) -> bool {
+        matches!(self, Self::BitAssetControl)
+    }
+
+    /// `true`` if the output content corresponds to a reservation
     pub fn is_reservation(&self) -> bool {
         matches!(self, Self::BitAssetReservation)
     }
@@ -245,7 +256,7 @@ impl GetValue for Content {
     #[inline(always)]
     fn get_value(&self) -> u64 {
         match self {
-            Self::BitAsset
+            Self::BitAsset(_)
             | Self::BitAssetControl
             | Self::BitAssetReservation => 0,
             Self::Value(value) => *value,
@@ -263,12 +274,17 @@ impl Output {
         }
     }
 
-    /// true if the output content corresponds to a BitAsset
+    /// `true` if the output content corresponds to a BitAsset
     pub fn is_bitasset(&self) -> bool {
         self.content.is_bitasset()
     }
 
-    /// true if the output content corresponds to a reservation
+    /// `true` if the output content corresponds to a BitAsset control coin
+    pub fn is_bitasset_control(&self) -> bool {
+        self.content.is_bitasset_control()
+    }
+
+    /// `true` if the output content corresponds to a reservation
     pub fn is_reservation(&self) -> bool {
         self.content.is_reservation()
     }
@@ -313,7 +329,7 @@ impl Transaction {
         }
     }
 
-    /// return an iterator over value outputs with index
+    /// Return an iterator over value outputs with index
     pub fn indexed_value_outputs(
         &self,
     ) -> impl Iterator<Item = (usize, &Output)> {
@@ -323,12 +339,19 @@ impl Transaction {
             .filter(|(_, output)| output.get_value() != 0)
     }
 
-    /// return an iterator over bitasset outputs
+    /// Return an iterator over BitAsset outputs
     pub fn bitasset_outputs(&self) -> impl Iterator<Item = &Output> {
         self.outputs.iter().filter(|output| output.is_bitasset())
     }
 
-    /// true if the tx data corresponds to a bitasset registration
+    /// Return an iterator over BitAsset control outputs
+    pub fn bitasset_control_outputs(&self) -> impl Iterator<Item = &Output> {
+        self.outputs
+            .iter()
+            .filter(|output| output.is_bitasset_control())
+    }
+
+    /// True if the tx data corresponds to a BitAsset registration
     pub fn is_registration(&self) -> bool {
         match &self.data {
             Some(tx_data) => tx_data.is_registration(),
@@ -336,12 +359,12 @@ impl Transaction {
         }
     }
 
-    /// true if the tx data corresponds to a regular tx
+    /// True if the tx data corresponds to a regular tx
     pub fn is_regular(&self) -> bool {
         self.data.is_none()
     }
 
-    /// true if the tx data corresponds to a reservation
+    /// True if the tx data corresponds to a reservation
     pub fn is_reservation(&self) -> bool {
         match &self.data {
             Some(tx_data) => tx_data.is_reservation(),
@@ -349,7 +372,7 @@ impl Transaction {
         }
     }
 
-    /// true if the tx data corresponds to an update
+    /// True if the tx data corresponds to an update
     pub fn is_update(&self) -> bool {
         match &self.data {
             Some(tx_data) => tx_data.is_update(),
@@ -357,7 +380,7 @@ impl Transaction {
         }
     }
 
-    /// true if the tx data corresponds to a batch icann registration
+    /// True if the tx data corresponds to a batch icann registration
     pub fn is_batch_icann(&self) -> bool {
         match &self.data {
             Some(tx_data) => tx_data.is_batch_icann(),
@@ -424,18 +447,27 @@ impl Transaction {
 }
 
 impl FilledContent {
-    /// Returns the BitAsset ID (name hash) if the filled output content
-    /// corresponds to a BitAsset output.
+    /** Returns the BitAsset ID (name hash) and if the filled
+     * output content corresponds to a BitAsset output. */
     pub fn bitasset(&self) -> Option<&Hash> {
         match self {
-            Self::BitAsset(name_hash) => Some(name_hash),
+            Self::BitAsset(name_hash, _) => Some(name_hash),
+            _ => None,
+        }
+    }
+
+    /** Returns the BitAsset ID (name hash) and coin value if the filled
+     * output content corresponds to a BitAsset output. */
+    pub fn bitasset_value(&self) -> Option<(Hash, u64)> {
+        match self {
+            Self::BitAsset(name_hash, value) => Some((*name_hash, *value)),
             _ => None,
         }
     }
 
     /// True if the output content corresponds to a BitAsset
     pub fn is_bitasset(&self) -> bool {
-        matches!(self, Self::BitAsset(_))
+        matches!(self, Self::BitAsset(_, _))
     }
 
     /// True if the output content corresponds to a BitAsset control coin
@@ -484,7 +516,7 @@ impl From<FilledContent> for Content {
                 main_fee,
                 main_address,
             },
-            FilledContent::BitAsset(_) => Content::BitAsset,
+            FilledContent::BitAsset(_, value) => Content::BitAsset(value),
             FilledContent::BitAssetControl(_) => Content::BitAssetControl,
             FilledContent::BitAssetReservation { .. } => {
                 Content::BitAssetReservation
@@ -513,6 +545,12 @@ impl FilledOutput {
      * corresponds to a BitAsset output. */
     pub fn bitasset(&self) -> Option<&Hash> {
         self.content.bitasset()
+    }
+
+    /** Returns the BitAsset ID (name hash) and coin value
+     * if the filled output content corresponds to a BitAsset output. */
+    pub fn bitasset_value(&self) -> Option<(Hash, u64)> {
+        self.content.bitasset_value()
     }
 
     /// Accessor for content
@@ -565,9 +603,14 @@ impl GetValue for FilledOutput {
 }
 
 impl FilledTransaction {
-    // Return an iterator over BitAsset reservation outputs
+    // Return an iterator over BitAsset outputs
     pub fn bitasset_outputs(&self) -> impl Iterator<Item = &Output> {
         self.transaction.bitasset_outputs()
+    }
+
+    // Return an iterator over BitAsset control outputs
+    pub fn bitasset_control_outputs(&self) -> impl Iterator<Item = &Output> {
+        self.transaction.bitasset_control_outputs()
     }
 
     /// Accessor for tx data
@@ -679,7 +722,7 @@ impl FilledTransaction {
             .filter(|(_, filled_output)| filled_output.is_reservation())
     }
 
-    /// Return an iterator over spent bitassets
+    /// Return an iterator over spent BitAssets
     pub fn spent_bitassets(
         &self,
     ) -> impl DoubleEndedIterator<Item = (&OutPoint, &FilledOutput)> {
@@ -687,7 +730,29 @@ impl FilledTransaction {
             .filter(|(_, filled_output)| filled_output.is_bitasset())
     }
 
-    /// Return an iterator over spent bitasset control coins
+    /** Return a vector of pairs consisting of a BitAsset and the combined
+     *  input value for that BitAsset.
+     *  The vector is ordered such that BitAssets occur the same order
+     *  as they first occur in the inputs. */
+    pub fn unique_spent_bitassets(&self) -> Vec<(Hash, u64)> {
+        // FIXME
+        // Combined value for each BitAsset
+        let mut combined_value = HashMap::<Hash, u64>::new();
+        let spent_bitasset_values = || {
+            self.spent_bitassets()
+                .filter_map(|(_, output)| output.bitasset_value())
+        };
+        // Increment combined value for the BitAsset
+        spent_bitasset_values().for_each(|(bitasset, value)| {
+            *combined_value.entry(bitasset).or_default() += value;
+        });
+        spent_bitasset_values()
+            .unique_by(|(bitasset, _)| *bitasset)
+            .map(|(bitasset, _)| (bitasset, combined_value[&bitasset]))
+            .collect()
+    }
+
+    /// Return an iterator over spent BitAsset control coins
     pub fn spent_bitasset_controls(
         &self,
     ) -> impl DoubleEndedIterator<Item = (&OutPoint, &FilledOutput)> {
@@ -695,19 +760,31 @@ impl FilledTransaction {
             .filter(|(_, filled_output)| filled_output.is_bitasset_control())
     }
 
-    /// Compute the filled content for BitAsset outputs
-    fn filled_bitasset_output_content(
+    /** Returns an iterator over total value for each BitAsset that must
+     * appear in the outputs, in order */
+    fn output_bitasset_total_values(
         &self,
-    ) -> impl Iterator<Item = FilledContent> + '_ {
-        // If this tx is a BitAsset registration, this is the content of the
-        // output corresponding to the newly created BitAsset, which must be
-        // the final BitAsset output.
-        let new_bitasset_content: Option<FilledContent> =
-            self.registration_name_hash().map(FilledContent::BitAsset);
-        self.spent_bitassets()
-            .map(|(_, filled_output)| filled_output.content())
-            .cloned()
-            .chain(new_bitasset_content)
+    ) -> impl Iterator<Item = (Hash, u64)> + '_ {
+        /* If this tx is a BitAsset registration, this is the BitAsset ID and
+         * value of the output corresponding to the newly created BitAsset,
+         * which must be the second-to-last registration output.
+         * ie. If there are `n >= 2` outputs `0..(n-1)`,
+         * output `(n-1)` is the BitAsset control coin,
+         * and output `(n-2)` is the BitAsset mint.
+         * Note that there may be no BitAsset mint,
+         * in the case that the initial supply is zero. */
+        let new_bitasset_value: Option<(Hash, u64)> =
+            match self.transaction.data {
+                Some(TransactionData::BitAssetRegistration {
+                    name_hash,
+                    initial_supply,
+                    ..
+                }) if initial_supply != 0 => Some((name_hash, initial_supply)),
+                _ => None,
+            };
+        self.unique_spent_bitassets()
+            .into_iter()
+            .chain(new_bitasset_value)
     }
 
     /** Compute the filled content for BitAsset reservation outputs.
@@ -717,10 +794,9 @@ impl FilledTransaction {
     ) -> impl Iterator<Item = FilledContent> + '_ {
         /* If this tx is a BitAsset registration, this is the content of the
          * output corresponding to the newly created BitAsset control,
-         * which must be the second-to-last registration output.
-         * ie. If there are n outputs `0..(n-1)`, then output `(n-1)`
-         * is the BitAsset mint,
-         * and output `(n-2)` is the BitAsset control coin. */
+         * which must be the last registration output.
+         * ie. If there are `n` outputs `0..(n-1)`, then output `(n-1)`
+         * is the BitAsset control coin. */
         let new_bitasset_content: Option<FilledContent> = self
             .registration_name_hash()
             .map(FilledContent::BitAssetControl);
@@ -773,8 +849,8 @@ impl FilledTransaction {
     /// compute the filled outputs.
     /// returns None if the outputs cannot be filled because the tx is invalid
     pub fn filled_outputs(&self) -> Option<Vec<FilledOutput>> {
-        let mut filled_bitasset_output_content =
-            self.filled_bitasset_output_content();
+        let mut output_bitasset_total_values =
+            self.output_bitasset_total_values().peekable();
         let mut filled_bitasset_control_output_content =
             self.filled_bitasset_control_output_content();
         let mut filled_reservation_output_content =
@@ -783,8 +859,26 @@ impl FilledTransaction {
             .iter()
             .map(|output| {
                 let content = match output.content.clone() {
-                    Content::BitAsset => {
-                        filled_bitasset_output_content.next()?.clone()
+                    Content::BitAsset(value) => {
+                        let (bitasset, remaining_value) =
+                            output_bitasset_total_values.peek_mut()?;
+                        let filled_content =
+                            FilledContent::BitAsset(*bitasset, value);
+                        match value.cmp(remaining_value) {
+                            Ordering::Greater => {
+                                // Invalid tx, return `None`
+                                return None;
+                            }
+                            Ordering::Equal => {
+                                // Advance the iterator to the next BitAsset
+                                let _ = output_bitasset_total_values.next()?;
+                            }
+                            Ordering::Less => {
+                                // Decrement the remaining value for the current BitAsset
+                                *remaining_value -= value;
+                            }
+                        }
+                        filled_content
                     }
                     Content::BitAssetControl => {
                         filled_bitasset_control_output_content.next()?.clone()

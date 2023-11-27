@@ -5,6 +5,7 @@ use std::{
 
 use heed::types::*;
 use heed::{Database, RoTxn, RwTxn};
+use itertools::Itertools;
 use nonempty::{nonempty, NonEmpty};
 use serde::{Deserialize, Serialize};
 
@@ -34,20 +35,22 @@ struct RollBack<T>(NonEmpty<TxidStamped<T>>);
 /// The most recent datum is the element at the back of the vector.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BitAssetData {
-    /// commitment to arbitrary data
+    /// Commitment to arbitrary data
     commitment: RollBack<Option<Hash>>,
-    /// set if the plain bitasset is known to be an ICANN domain
+    /// Set if the plain bitasset is known to be an ICANN domain
     is_icann: bool,
-    /// optional ipv4 addr
+    /// Optional ipv4 addr
     ipv4_addr: RollBack<Option<Ipv4Addr>>,
-    /// optional ipv6 addr
+    /// Optional ipv6 addr
     ipv6_addr: RollBack<Option<Ipv6Addr>>,
-    /// optional pubkey used for encryption
+    /// Optional pubkey used for encryption
     encryption_pubkey: RollBack<Option<EncryptionPubKey>>,
-    /// optional pubkey used for signing messages
+    /// Optional pubkey used for signing messages
     signing_pubkey: RollBack<Option<PublicKey>>,
-    /// optional minimum paymail fee, in sats
+    /// Optional minimum paymail fee, in sats
     paymail_fee: RollBack<Option<u64>>,
+    /// Total supply
+    total_supply: RollBack<u64>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -88,11 +91,20 @@ pub enum Error {
     NoUtxo { outpoint: OutPoint },
     #[error(transparent)]
     SignatureError(#[from] ed25519_dalek::SignatureError),
-    #[error("Too few BitAsset outputs")]
-    TooFewBitAssetOutputs,
-    #[error("unbalanced BitAssets: {n_bitasset_inputs} BitAsset inputs, {n_bitasset_outputs} BitAsset outputs")]
+    #[error("Too few BitAsset control coin outputs")]
+    TooFewBitAssetControlOutputs,
+    #[error(
+        "unbalanced BitAsset control coins: \
+         {n_bitasset_control_inputs} BitAsset control coin inputs, \
+         {n_bitasset_control_outputs} BitAsset control coin outputs"
+    )]
+    UnbalancedBitAssetControls {
+        n_bitasset_control_inputs: usize,
+        n_bitasset_control_outputs: usize,
+    },
+    #[error("unbalanced BitAssets: {n_unique_bitasset_inputs} unique BitAsset inputs, {n_bitasset_outputs} BitAsset outputs")]
     UnbalancedBitAssets {
-        n_bitasset_inputs: usize,
+        n_unique_bitasset_inputs: usize,
         n_bitasset_outputs: usize,
     },
     #[error("unbalanced reservations: {n_reservation_inputs} reservation inputs, {n_reservation_outputs} reservation outputs")]
@@ -162,6 +174,7 @@ impl BitAssetData {
     // initialize from BitAsset data provided during a registration
     fn init(
         bitasset_data: types::BitAssetData,
+        initial_supply: u64,
         txid: Txid,
         height: u32,
     ) -> Self {
@@ -181,6 +194,7 @@ impl BitAssetData {
                 height,
             ),
             paymail_fee: RollBack::new(bitasset_data.paymail_fee, txid, height),
+            total_supply: RollBack::new(initial_supply, txid, height),
         }
     }
 
@@ -199,6 +213,7 @@ impl BitAssetData {
             ref mut encryption_pubkey,
             ref mut signing_pubkey,
             ref mut paymail_fee,
+            total_supply: _,
         } = self;
 
         // apply an update to a single data field
@@ -587,46 +602,99 @@ impl State {
         })
     }
 
-    /// Check that
-    /// * If the tx is a BitAsset registration, then the number of bitassets
-    /// in the outputs is exactly one more than the number of bitassets in the
-    /// inputs. Otherwise, the number of bitassets in the outputs is equal to
-    /// the number of bitassets in the inputs.
-    /// * If the tx is a BitAsset registration, then the newly registered
-    /// BitAsset must be unregistered.
-    /// * If the tx is a BitAsset update, then there must be at least one
-    /// BitAsset input and output
-    /// * If the tx is a Batch Icann registration, then there must be at least
-    /// as many bitasset outputs as there are registered names.
+    /** Check that
+     *  * If the tx is a BitAsset registration, then
+     *    * The number of BitAsset control coins in the outputs is exactly
+     *      one more than the number of BitAsset control coins in the
+     *      inputs
+     *    * The number of BitAsset outputs is at least
+     *      * The number of unique BitAsset inputs, if the initial supply is zero
+     *      * One more than the number of unique BitAsset inputs,
+     *        if the initial supply is nonzero.
+     *    Otherwise,
+     *    * The number of BitAsset control coin outputs is exactly the number
+     *      of BitAsset control coin inputs
+     *    * The number of BitAsset outputs is at least
+     *      the number of unique BitAssets in the inputs.
+     *  * If the tx is a BitAsset registration, then the newly registered
+     *    BitAsset must have been unregistered prior to the registration tx.
+     *  * If the tx is a BitAsset update, then there must be at least one
+     *    BitAsset control coin input and output
+     *  * FIXME: REMOVE
+     *    If the tx is a Batch Icann registration, then there must be at least
+     *    as many bitasset control outputs as there are registered names. */
     pub fn validate_bitassets(
         &self,
         rotxn: &RoTxn,
         tx: &FilledTransaction,
     ) -> Result<(), Error> {
-        let n_bitasset_inputs: usize = tx.spent_bitassets().count();
+        // number of unique bitassets in the inputs
+        let n_unique_bitasset_inputs: usize = tx
+            .spent_bitassets()
+            .filter_map(|(_, output)| output.bitasset())
+            .unique()
+            .count();
+        let n_bitasset_control_inputs: usize =
+            tx.spent_bitasset_controls().count();
         let n_bitasset_outputs: usize = tx.bitasset_outputs().count();
-        if tx.is_update() && (n_bitasset_inputs < 1 || n_bitasset_outputs < 1) {
+        let n_bitasset_control_outputs: usize =
+            tx.bitasset_control_outputs().count();
+        if tx.is_update()
+            && (n_bitasset_control_inputs < 1 || n_bitasset_control_outputs < 1)
+        {
             return Err(Error::NoBitAssetsToUpdate);
         };
         if let Some(batch_icann_data) = tx.batch_icann_data() {
-            if n_bitasset_outputs < batch_icann_data.plain_names.len() {
-                return Err(Error::TooFewBitAssetOutputs);
+            if n_bitasset_control_outputs < batch_icann_data.plain_names.len() {
+                return Err(Error::TooFewBitAssetControlOutputs);
             }
         }
-        if let Some(name_hash) = tx.registration_name_hash() {
-            if self.bitassets.get(rotxn, &name_hash)?.is_some() {
-                return Err(Error::BitAssetAlreadyRegistered { name_hash });
-            }
-            if n_bitasset_outputs == n_bitasset_inputs + 1 {
-                return Ok(());
+        if let Some(TxData::BitAssetRegistration {
+            name_hash,
+            initial_supply,
+            ..
+        }) = tx.data()
+        {
+            if n_bitasset_control_outputs != n_bitasset_control_inputs + 1 {
+                return Err(Error::UnbalancedBitAssetControls {
+                    n_bitasset_control_inputs,
+                    n_bitasset_control_outputs,
+                });
             };
-        } else if n_bitasset_outputs == n_bitasset_inputs {
-            return Ok(());
-        };
-        Err(Error::UnbalancedBitAssets {
-            n_bitasset_inputs,
-            n_bitasset_outputs,
-        })
+            if *initial_supply == 0 {
+                if n_bitasset_outputs < n_unique_bitasset_inputs {
+                    return Err(Error::UnbalancedBitAssets {
+                        n_unique_bitasset_inputs,
+                        n_bitasset_outputs,
+                    });
+                }
+            } else if n_bitasset_outputs < n_unique_bitasset_inputs + 1 {
+                return Err(Error::UnbalancedBitAssets {
+                    n_unique_bitasset_inputs,
+                    n_bitasset_outputs,
+                });
+            }
+            if self.bitassets.get(rotxn, name_hash)?.is_some() {
+                return Err(Error::BitAssetAlreadyRegistered {
+                    name_hash: *name_hash,
+                });
+            };
+            Ok(())
+        } else {
+            if n_bitasset_control_outputs != n_bitasset_control_inputs {
+                return Err(Error::UnbalancedBitAssetControls {
+                    n_bitasset_control_inputs,
+                    n_bitasset_control_outputs,
+                });
+            };
+            if n_bitasset_outputs < n_unique_bitasset_inputs {
+                return Err(Error::UnbalancedBitAssets {
+                    n_unique_bitasset_inputs,
+                    n_bitasset_outputs,
+                });
+            }
+            Ok(())
+        }
     }
 
     /// If the tx is a batch icann registration, check that
@@ -812,6 +880,7 @@ impl State {
         filled_tx: &FilledTransaction,
         name_hash: Hash,
         bitasset_data: &types::BitAssetData,
+        initial_supply: u64,
         height: u32,
     ) -> Result<(), Error> {
         // Find the reservation to burn
@@ -837,13 +906,17 @@ impl State {
                 txid: *burned_reservation_txid,
             });
         }
-        let bitasset_data =
-            BitAssetData::init(bitasset_data.clone(), filled_tx.txid(), height);
+        let bitasset_data = BitAssetData::init(
+            bitasset_data.clone(),
+            initial_supply,
+            filled_tx.txid(),
+            height,
+        );
         self.bitassets.put(rwtxn, &name_hash, &bitasset_data)?;
         Ok(())
     }
 
-    // apply bitasset updates
+    // Apply bitasset updates
     fn apply_bitasset_updates(
         &self,
         rwtxn: &mut RwTxn,
@@ -851,9 +924,9 @@ impl State {
         bitasset_updates: BitAssetDataUpdates,
         height: u32,
     ) -> Result<(), Error> {
-        // the updated bitasset is the BitAsset that corresponds to the last
-        // bitasset output, or equivalently, the BitAsset corresponding to the
-        // last bitasset input
+        /* The updated BitAsset is the BitAsset that corresponds to the last
+         * bitasset output, or equivalently, the BitAsset corresponding to the
+         * last BitAsset input */
         let updated_bitasset = filled_tx
             .spent_bitassets()
             .next_back()
@@ -873,7 +946,7 @@ impl State {
         Ok(())
     }
 
-    // apply batch icann registration
+    // Apply batch icann registration
     fn apply_batch_icann(
         &self,
         rwtxn: &mut RwTxn,
@@ -886,8 +959,8 @@ impl State {
             .map(|name| Hash::from(blake3::hash(name.as_bytes())));
         let mut spent_bitassets = filled_tx.spent_bitassets();
         for name_hash in name_hashes {
-            // search for the bitasset to be registered as an ICANN domain
-            // exists in the inputs
+            /* Search for the bitasset to be registered as an ICANN domain
+             * exists in the inputs */
             let found_bitasset = spent_bitassets.any(|(_, outpoint)| {
                 let bitasset = outpoint.bitasset()
                     .expect("spent bitasset input should correspond to a known name hash");
@@ -935,7 +1008,7 @@ impl State {
                     main_fee,
                     main_address,
                 },
-                OutputContent::BitAsset
+                OutputContent::BitAsset(_)
                 | OutputContent::BitAssetControl
                 | OutputContent::BitAssetReservation => {
                     return Err(Error::BadCoinbaseOutputContent);
@@ -985,12 +1058,14 @@ impl State {
                     name_hash,
                     revealed_nonce: _,
                     bitasset_data,
+                    initial_supply,
                 }) => {
                     let () = self.apply_bitasset_registration(
                         txn,
                         &filled_tx,
                         *name_hash,
                         bitasset_data,
+                        *initial_supply,
                         height,
                     )?;
                 }

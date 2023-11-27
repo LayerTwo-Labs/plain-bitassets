@@ -44,6 +44,7 @@ pub enum TxType {
     BitAssetRegistration {
         plaintext_name: String,
         bitasset_data: Box<TrySetBitAssetData>,
+        initial_supply: String,
     },
     BitAssetReservation {
         plaintext_name: String,
@@ -126,15 +127,21 @@ impl TxCreator {
             TxType::BitAssetRegistration {
                 plaintext_name,
                 bitasset_data,
+                initial_supply,
             } => {
                 let bitasset_data: BitAssetData = (bitasset_data.as_ref())
                     .clone()
                     .try_into()
                     .map_err(|err| anyhow::anyhow!("{err}"))?;
+                let initial_supply =
+                    u64::from_str(initial_supply).map_err(|err| {
+                        anyhow::anyhow!("Failed to parse initial supply: {err}")
+                    })?;
                 let () = app.wallet.register_bitasset(
                     &mut tx,
                     plaintext_name,
                     Cow::Borrowed(&bitasset_data),
+                    initial_supply,
                 )?;
                 Ok(tx)
             }
@@ -317,6 +324,7 @@ impl TxCreator {
                         TxType::BitAssetRegistration {
                             plaintext_name: String::new(),
                             bitasset_data: Box::default(),
+                            initial_supply: String::new(),
                         },
                         "register bitasset",
                     ) | ui.selectable_value(
@@ -334,6 +342,7 @@ impl TxCreator {
             TxType::BitAssetRegistration {
                 plaintext_name,
                 bitasset_data,
+                initial_supply,
             } => {
                 let plaintext_name_resp = ui.horizontal(|ui| {
                     ui.monospace("Plaintext Name:       ")
@@ -341,7 +350,13 @@ impl TxCreator {
                 });
                 let bitasset_options_resp =
                     Self::show_bitasset_options(ui, bitasset_data.as_mut());
-                let resp = plaintext_name_resp.join() | bitasset_options_resp;
+                let initial_supply_resp = ui.horizontal(|ui| {
+                    ui.monospace("Initial Supply:       ")
+                        | ui.add(egui::TextEdit::singleline(initial_supply))
+                });
+                let resp = plaintext_name_resp.join()
+                    | bitasset_options_resp
+                    | initial_supply_resp.join();
                 Some(resp)
             }
             TxType::BitAssetReservation { plaintext_name } => {
