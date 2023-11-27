@@ -15,7 +15,7 @@ use super::{
     address::Address,
     hashes::{self, Hash, MerkleRoot, Txid},
     serde_display_fromstr_human_readable, serde_hexstr_human_readable,
-    EncryptionPubKey, GetValue,
+    EncryptionPubKey, GetBitcoinValue,
 };
 use crate::authorization::{Authorization, PublicKey, Signature};
 
@@ -244,7 +244,7 @@ impl Content {
         matches!(self, Self::BitAssetReservation)
     }
 
-    pub fn is_value(&self) -> bool {
+    pub fn is_bitcoin(&self) -> bool {
         matches!(self, Self::Value(_))
     }
     pub fn is_withdrawal(&self) -> bool {
@@ -252,9 +252,9 @@ impl Content {
     }
 }
 
-impl GetValue for Content {
+impl GetBitcoinValue for Content {
     #[inline(always)]
-    fn get_value(&self) -> u64 {
+    fn get_bitcoin_value(&self) -> u64 {
         match self {
             Self::BitAsset(_)
             | Self::BitAssetControl
@@ -290,10 +290,10 @@ impl Output {
     }
 }
 
-impl GetValue for Output {
+impl GetBitcoinValue for Output {
     #[inline(always)]
-    fn get_value(&self) -> u64 {
-        self.content.get_value()
+    fn get_bitcoin_value(&self) -> u64 {
+        self.content.get_bitcoin_value()
     }
 }
 
@@ -329,14 +329,14 @@ impl Transaction {
         }
     }
 
-    /// Return an iterator over value outputs with index
-    pub fn indexed_value_outputs(
+    /// Return an iterator over Bitcoin outputs with index
+    pub fn indexed_bitcoin_value_outputs(
         &self,
     ) -> impl Iterator<Item = (usize, &Output)> {
         self.outputs
             .iter()
             .enumerate()
-            .filter(|(_, output)| output.get_value() != 0)
+            .filter(|(_, output)| output.get_bitcoin_value() != 0)
     }
 
     /// Return an iterator over BitAsset outputs
@@ -475,6 +475,11 @@ impl FilledContent {
         matches!(self, Self::BitAssetControl(_))
     }
 
+    /// True if the output content corresponds to a Bitcoin
+    pub fn is_bitcoin(&self) -> bool {
+        matches!(self, Self::Bitcoin(_))
+    }
+
     /// True if the output content corresponds to a reservation
     pub fn is_reservation(&self) -> bool {
         matches!(self, Self::BitAssetReservation { .. })
@@ -525,9 +530,9 @@ impl From<FilledContent> for Content {
     }
 }
 
-impl GetValue for FilledContent {
-    fn get_value(&self) -> u64 {
-        Content::from(self.clone()).get_value()
+impl GetBitcoinValue for FilledContent {
+    fn get_bitcoin_value(&self) -> u64 {
+        Content::from(self.clone()).get_bitcoin_value()
     }
 }
 
@@ -568,6 +573,11 @@ impl FilledOutput {
         self.content.is_bitasset_control()
     }
 
+    /// True if the output content corresponds to a Bitcoin
+    pub fn is_bitcoin(&self) -> bool {
+        self.content.is_bitcoin()
+    }
+
     /// True if the output content corresponds to a reservation
     pub fn is_reservation(&self) -> bool {
         self.content.is_reservation()
@@ -596,9 +606,9 @@ impl From<FilledOutput> for Output {
     }
 }
 
-impl GetValue for FilledOutput {
-    fn get_value(&self) -> u64 {
-        self.content.get_value()
+impl GetBitcoinValue for FilledOutput {
+    fn get_bitcoin_value(&self) -> u64 {
+        self.content.get_bitcoin_value()
     }
 }
 
@@ -692,21 +702,27 @@ impl FilledTransaction {
         self.inputs().iter().zip(self.spent_utxos.iter())
     }
 
-    /// Returns the total value spent
-    pub fn spent_value(&self) -> u64 {
-        self.spent_utxos.iter().map(GetValue::get_value).sum()
+    /// Returns the total Bitcoin value spent
+    pub fn spent_bitcoin_value(&self) -> u64 {
+        self.spent_utxos
+            .iter()
+            .map(GetBitcoinValue::get_bitcoin_value)
+            .sum()
     }
 
-    /// Returns the total value in the outputs
-    pub fn value_out(&self) -> u64 {
-        self.outputs().iter().map(GetValue::get_value).sum()
+    /// Returns the total Bitcoin value in the outputs
+    pub fn bitcoin_value_out(&self) -> u64 {
+        self.outputs()
+            .iter()
+            .map(GetBitcoinValue::get_bitcoin_value)
+            .sum()
     }
 
     /** Returns the difference between the value spent and value out, if it is
      * non-negative. */
-    pub fn fee(&self) -> Option<u64> {
-        let spent_value = self.spent_value();
-        let value_out = self.value_out();
+    pub fn bitcoin_fee(&self) -> Option<u64> {
+        let spent_value = self.spent_bitcoin_value();
+        let value_out = self.bitcoin_value_out();
         if spent_value < value_out {
             None
         } else {

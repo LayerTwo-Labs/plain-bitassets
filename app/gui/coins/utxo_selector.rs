@@ -4,7 +4,7 @@ use eframe::egui;
 
 use plain_bitassets::{
     bip300301::bitcoin,
-    types::{FilledOutput, GetValue, OutPoint, Transaction},
+    types::{FilledOutput, GetBitcoinValue, OutPoint, Transaction},
 };
 
 use crate::app::App;
@@ -22,15 +22,18 @@ impl UtxoSelector {
         ui.heading("Spend UTXO");
         let selected: HashSet<_> = tx.inputs.iter().cloned().collect();
         let utxos = app.utxos.read();
-        let total: u64 = utxos
+        let total_sats: u64 = utxos
             .iter()
             .filter(|(outpoint, _)| !selected.contains(outpoint))
-            .map(|(_, output)| output.get_value())
+            .map(|(_, output)| output.get_bitcoin_value())
             .sum();
         let mut utxos: Vec<_> = utxos.iter().collect();
         utxos.sort_by_key(|(outpoint, _)| format!("{outpoint}"));
         ui.separator();
-        ui.monospace(format!("Total: {}", bitcoin::Amount::from_sat(total)));
+        ui.monospace(format!(
+            "Total: ₿{}",
+            bitcoin::Amount::from_sat(total_sats)
+        ));
         ui.separator();
         egui::Grid::new("utxos").striped(true).show(ui, |ui| {
             ui.monospace("kind");
@@ -76,10 +79,10 @@ pub fn show_utxo(
         }
     };
     let hash = &hash[0..8];
-    let value = bitcoin::Amount::from_sat(output.get_value());
+    let bitcoin_value = bitcoin::Amount::from_sat(output.get_bitcoin_value());
     ui.monospace(kind.to_string());
     ui.monospace(format!("{hash}:{vout}",));
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Max), |ui| {
-        ui.monospace(format!("{value}"));
+        ui.monospace(format!("₿{bitcoin_value}"));
     });
 }

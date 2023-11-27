@@ -91,14 +91,9 @@ pub trait GetAddress {
     fn get_address(&self) -> Address;
 }
 
-pub trait GetValue {
-    fn get_value(&self) -> u64;
-}
-
-impl GetValue for () {
-    fn get_value(&self) -> u64 {
-        0
-    }
+pub trait GetBitcoinValue {
+    /// Bitcoin value in sats
+    fn get_bitcoin_value(&self) -> u64;
 }
 
 pub trait Verify {
@@ -296,7 +291,10 @@ impl Body {
     }
 
     pub fn get_coinbase_value(&self) -> u64 {
-        self.coinbase.iter().map(|output| output.get_value()).sum()
+        self.coinbase
+            .iter()
+            .map(|output| output.get_bitcoin_value())
+            .sum()
     }
 }
 

@@ -1,7 +1,7 @@
 use eframe::egui;
 use human_size::{Byte, Kibibyte, Mebibyte, SpecificSize};
 
-use plain_bitassets::{bip300301::bitcoin, types::GetValue};
+use plain_bitassets::{bip300301::bitcoin, types::GetBitcoinValue};
 
 use crate::app::App;
 
@@ -39,8 +39,11 @@ impl BlockExplorer {
                 let prev_main_hash = &format!("{}", header.prev_main_hash);
                 let body_size =
                     bincode::serialize(&body).unwrap_or(vec![]).len();
-                let coinbase_value: u64 =
-                    body.coinbase.iter().map(GetValue::get_value).sum();
+                let coinbase_value: u64 = body
+                    .coinbase
+                    .iter()
+                    .map(GetBitcoinValue::get_bitcoin_value)
+                    .sum();
                 let coinbase_value = bitcoin::Amount::from_sat(coinbase_value);
                 let num_transactions = body.transactions.len();
                 let body_size = if let Ok(body_size) =

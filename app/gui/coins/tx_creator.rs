@@ -53,8 +53,8 @@ pub enum TxType {
 
 #[derive(Debug, Default)]
 pub struct TxCreator {
-    pub value_in: u64,
-    pub value_out: u64,
+    pub bitcoin_value_in: u64,
+    pub bitcoin_value_out: u64,
     pub tx_type: TxType,
     // if the base tx has changed, need to recompute final tx
     base_txid: Txid,
@@ -394,8 +394,8 @@ impl TxCreator {
         };
         let txid = &format!("{}", final_tx.txid())[0..8];
         ui.monospace(format!("txid: {txid}"));
-        if self.value_in >= self.value_out {
-            let fee = self.value_in - self.value_out;
+        if self.bitcoin_value_in >= self.bitcoin_value_out {
+            let fee = self.bitcoin_value_in - self.bitcoin_value_out;
             let fee = bitcoin::Amount::from_sat(fee);
             ui.monospace(format!("fee:  {fee}"));
             if ui.button("sign and send").clicked() {

@@ -71,6 +71,10 @@ pub enum Error {
     Heed(#[from] heed::Error),
     #[error("invalid ICANN name: {plain_name}")]
     IcannNameInvalid { plain_name: String },
+    #[error(
+        "The last output in a BitAsset registration tx must be a control coin"
+    )]
+    LastOutputNotControlCoin,
     #[error("missing BitAsset {name_hash:?}")]
     MissingBitAsset { name_hash: Hash },
     #[error(
@@ -89,6 +93,12 @@ pub enum Error {
     NotEnoughValueIn,
     #[error("utxo {outpoint} doesn't exist")]
     NoUtxo { outpoint: OutPoint },
+    #[error(
+        "The second-last output in a BitAsset registration tx \
+             must be the BitAsset mint, \
+             if the initial supply is nonzero"
+    )]
+    SecondLastOutputNotBitAsset,
     #[error(transparent)]
     SignatureError(#[from] ed25519_dalek::SignatureError),
     #[error("Too few BitAsset control coin outputs")]
@@ -120,9 +130,9 @@ pub enum Error {
 
 #[derive(Clone)]
 pub struct State {
-    /// associates tx hashes with bitasset reservation commitments
+    /// Associates tx hashes with BitAsset reservation commitments
     pub bitasset_reservations: Database<SerdeBincode<Txid>, SerdeBincode<Hash>>,
-    /// associates bitasset IDs (name hashes) with bitasset data
+    /// Associates BitAsset IDs (name hashes) with bitasset data
     pub bitassets: Database<SerdeBincode<Hash>, SerdeBincode<BitAssetData>>,
     pub utxos: Database<SerdeBincode<OutPoint>, SerdeBincode<FilledOutput>>,
     pub stxos: Database<SerdeBincode<OutPoint>, SerdeBincode<SpentOutput>>,
@@ -608,16 +618,20 @@ impl State {
      *      one more than the number of BitAsset control coins in the
      *      inputs
      *    * The number of BitAsset outputs is at least
-     *      * The number of unique BitAsset inputs, if the initial supply is zero
+     *      * The number of unique BitAsset inputs,
+     *        if the initial supply is zero
      *      * One more than the number of unique BitAsset inputs,
      *        if the initial supply is nonzero.
+     *    * The newly registered BitAsset must have been unregistered,
+     *      prior to the registration tx.
+     *    * The last output must be a BitAsset control coin
+     *    * If the initial supply is nonzero,
+     *      the second-to-last output must be a BitAsset outputj
      *    Otherwise,
      *    * The number of BitAsset control coin outputs is exactly the number
      *      of BitAsset control coin inputs
      *    * The number of BitAsset outputs is at least
      *      the number of unique BitAssets in the inputs.
-     *  * If the tx is a BitAsset registration, then the newly registered
-     *    BitAsset must have been unregistered prior to the registration tx.
      *  * If the tx is a BitAsset update, then there must be at least one
      *    BitAsset control coin input and output
      *  * FIXME: REMOVE
@@ -661,6 +675,13 @@ impl State {
                     n_bitasset_control_outputs,
                 });
             };
+            if !tx
+                .outputs()
+                .last()
+                .is_some_and(|last_output| last_output.is_bitasset_control())
+            {
+                return Err(Error::LastOutputNotControlCoin);
+            }
             if *initial_supply == 0 {
                 if n_bitasset_outputs < n_unique_bitasset_inputs {
                     return Err(Error::UnbalancedBitAssets {
@@ -668,11 +689,20 @@ impl State {
                         n_bitasset_outputs,
                     });
                 }
-            } else if n_bitasset_outputs < n_unique_bitasset_inputs + 1 {
-                return Err(Error::UnbalancedBitAssets {
-                    n_unique_bitasset_inputs,
-                    n_bitasset_outputs,
-                });
+            } else {
+                if n_bitasset_outputs < n_unique_bitasset_inputs + 1 {
+                    return Err(Error::UnbalancedBitAssets {
+                        n_unique_bitasset_inputs,
+                        n_bitasset_outputs,
+                    });
+                }
+                let outputs = tx.outputs();
+                let second_to_last_output = outputs.get(outputs.len() - 2);
+                if !second_to_last_output
+                    .is_some_and(|s2l_output| s2l_output.is_bitasset())
+                {
+                    return Err(Error::SecondLastOutputNotBitAsset);
+                }
             }
             if self.bitassets.get(rotxn, name_hash)?.is_some() {
                 return Err(Error::BitAssetAlreadyRegistered {
@@ -746,7 +776,7 @@ impl State {
         let () = self.validate_reservations(tx)?;
         let () = self.validate_bitassets(rotxn, tx)?;
         let () = self.validate_batch_icann(tx)?;
-        tx.fee().ok_or(Error::NotEnoughValueIn)
+        tx.bitcoin_fee().ok_or(Error::NotEnoughValueIn)
     }
 
     pub fn validate_body(
@@ -756,7 +786,7 @@ impl State {
     ) -> Result<u64, Error> {
         let mut coinbase_value: u64 = 0;
         for output in &body.coinbase {
-            coinbase_value += output.get_value();
+            coinbase_value += output.get_bitcoin_value();
         }
         let mut total_fees: u64 = 0;
         let mut spent_utxos = HashSet::new();

@@ -4,7 +4,7 @@ use eframe::egui;
 
 use plain_bitassets::{
     bip300301::bitcoin,
-    types::{GetValue, Transaction},
+    types::{GetBitcoinValue, Transaction},
 };
 
 use super::{
@@ -33,14 +33,17 @@ impl TxBuilder {
             .iter()
             .filter(|(outpoint, _)| selected.contains(outpoint))
             .collect();
-        let value_in: u64 = spent_utxos
+        let bitcoin_value_in: u64 = spent_utxos
             .iter()
-            .map(|(_, output)| output.get_value())
+            .map(|(_, output)| output.get_bitcoin_value())
             .sum();
-        self.tx_creator.value_in = value_in;
+        self.tx_creator.bitcoin_value_in = bitcoin_value_in;
         spent_utxos.sort_by_key(|(outpoint, _)| format!("{outpoint}"));
         ui.separator();
-        ui.monospace(format!("Total: {}", bitcoin::Amount::from_sat(value_in)));
+        ui.monospace(format!(
+            "Total: {}",
+            bitcoin::Amount::from_sat(bitcoin_value_in)
+        ));
         ui.separator();
         egui::Grid::new("utxos").striped(true).show(ui, |ui| {
             ui.monospace("kind");
@@ -50,7 +53,7 @@ impl TxBuilder {
             let mut remove = None;
             for (vout, outpoint) in self.base_tx.inputs.iter().enumerate() {
                 let output = &utxos_read[outpoint];
-                if output.get_value() != 0 {
+                if output.get_bitcoin_value() != 0 {
                     show_utxo(ui, outpoint, output);
                     if ui.button("remove").clicked() {
                         remove = Some(vout);
@@ -67,12 +70,16 @@ impl TxBuilder {
     pub fn show_value_out(&mut self, ui: &mut egui::Ui) {
         ui.heading("Value Out");
         ui.separator();
-        let value_out: u64 =
-            self.base_tx.outputs.iter().map(GetValue::get_value).sum();
-        self.tx_creator.value_out = value_out;
+        let bitcoin_value_out: u64 = self
+            .base_tx
+            .outputs
+            .iter()
+            .map(GetBitcoinValue::get_bitcoin_value)
+            .sum();
+        self.tx_creator.bitcoin_value_out = bitcoin_value_out;
         ui.monospace(format!(
             "Total: {}",
-            bitcoin::Amount::from_sat(value_out)
+            bitcoin::Amount::from_sat(bitcoin_value_out)
         ));
         ui.separator();
         egui::Grid::new("outputs").striped(true).show(ui, |ui| {
@@ -81,15 +88,16 @@ impl TxBuilder {
             ui.monospace("address");
             ui.monospace("value");
             ui.end_row();
-            for (vout, output) in self.base_tx.indexed_value_outputs() {
+            for (vout, output) in self.base_tx.indexed_bitcoin_value_outputs() {
                 let address = &format!("{}", output.address)[0..8];
-                let value = bitcoin::Amount::from_sat(output.get_value());
+                let value =
+                    bitcoin::Amount::from_sat(output.get_bitcoin_value());
                 ui.monospace(format!("{vout}"));
                 ui.monospace(address.to_string());
                 ui.with_layout(
                     egui::Layout::right_to_left(egui::Align::Max),
                     |ui| {
-                        ui.monospace(format!("{value}"));
+                        ui.monospace(format!("₿{value}"));
                     },
                 );
                 if ui.button("remove").clicked() {

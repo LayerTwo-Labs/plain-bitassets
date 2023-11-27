@@ -12,9 +12,9 @@ use heed::{types::*, Database, RoTxn};
 use crate::{
     authorization::{get_address, Authorization},
     types::{
-        Address, AuthorizedTransaction, BitAssetData, FilledOutput, GetValue,
-        Hash, InPoint, OutPoint, Output, OutputContent, SpentOutput,
-        Transaction, TxData,
+        Address, AuthorizedTransaction, BitAssetData, FilledOutput,
+        GetBitcoinValue, Hash, InPoint, OutPoint, Output, OutputContent,
+        SpentOutput, Transaction, TxData,
     },
 };
 
@@ -51,9 +51,9 @@ pub struct Wallet {
     pub index_to_address: Database<OwnedType<[u8; 4]>, SerdeBincode<Address>>,
     pub utxos: Database<SerdeBincode<OutPoint>, SerdeBincode<FilledOutput>>,
     pub stxos: Database<SerdeBincode<OutPoint>, SerdeBincode<SpentOutput>>,
-    /// associates reservation commitments with plaintext bitassets
+    /// Associates reservation commitments with plaintext BitAsset names
     pub bitasset_reservations: Database<OwnedType<[u8; 32]>, Str>,
-    /// associates bitassets with plaintext names
+    /// Associates BitAssets with plaintext names
     pub known_bitassets: Database<OwnedType<[u8; 32]>, Str>,
 }
 
@@ -162,7 +162,7 @@ impl Wallet {
         main_fee: u64,
         fee: u64,
     ) -> Result<Transaction, Error> {
-        let (total, coins) = self.select_coins(value + fee + main_fee)?;
+        let (total, coins) = self.select_bitcoins(value + fee + main_fee)?;
         let change = total - value - fee;
         let inputs = coins.into_keys().collect();
         let outputs = vec![
@@ -182,17 +182,17 @@ impl Wallet {
     pub fn create_regular_transaction(
         &self,
         address: Address,
-        value: u64,
+        bitcoin_value: u64,
         fee: u64,
         memo: Option<Vec<u8>>,
     ) -> Result<Transaction, Error> {
-        let (total, coins) = self.select_coins(value + fee)?;
-        let change = total - value - fee;
+        let (total, coins) = self.select_bitcoins(bitcoin_value + fee)?;
+        let change = total - bitcoin_value - fee;
         let inputs = coins.into_keys().collect();
         let outputs = vec![
             Output {
                 address,
-                content: OutputContent::Value(value),
+                content: OutputContent::Value(bitcoin_value),
                 memo: memo.unwrap_or_default(),
             },
             Output::new(self.get_new_address()?, OutputContent::Value(change)),
@@ -355,33 +355,37 @@ impl Wallet {
         Ok(())
     }
 
-    pub fn select_coins(
+    pub fn select_bitcoins(
         &self,
         value: u64,
     ) -> Result<(u64, HashMap<OutPoint, FilledOutput>), Error> {
         let txn = self.env.read_txn()?;
-        let mut utxos = vec![];
+        let mut bitcoin_utxos = vec![];
         for item in self.utxos.iter(&txn)? {
-            utxos.push(item?);
+            let (outpoint, output) = item?;
+            if output.is_bitcoin() {
+                bitcoin_utxos.push((outpoint, output));
+            }
         }
-        utxos.sort_unstable_by_key(|(_, output)| output.get_value());
+        bitcoin_utxos
+            .sort_unstable_by_key(|(_, output)| output.get_bitcoin_value());
 
         let mut selected = HashMap::new();
-        let mut total: u64 = 0;
-        for (outpoint, output) in &utxos {
+        let mut total_sats: u64 = 0;
+        for (outpoint, output) in &bitcoin_utxos {
             if output.content.is_withdrawal() {
                 continue;
             }
-            if total > value {
+            if total_sats > value {
                 break;
             }
-            total += output.get_value();
+            total_sats += output.get_bitcoin_value();
             selected.insert(*outpoint, output.clone());
         }
-        if total < value {
+        if total_sats < value {
             return Err(Error::NotEnoughFunds);
         }
-        Ok((total, selected))
+        Ok((total_sats, selected))
     }
 
     pub fn spend_utxos(
@@ -416,12 +420,12 @@ impl Wallet {
         Ok(())
     }
 
-    pub fn get_balance(&self) -> Result<u64, Error> {
+    pub fn get_bitcoin_balance(&self) -> Result<u64, Error> {
         let mut balance: u64 = 0;
         let txn = self.env.read_txn()?;
         for item in self.utxos.iter(&txn)? {
             let (_, utxo) = item?;
-            balance += utxo.get_value();
+            balance += utxo.get_bitcoin_value();
         }
         Ok(balance)
     }

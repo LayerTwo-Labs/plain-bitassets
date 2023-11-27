@@ -294,18 +294,18 @@ impl Node {
             let filled_transaction = self
                 .state
                 .fill_transaction(&txn, &transaction.transaction)?;
-            let value_in: u64 = filled_transaction
+            let bitcoin_value_in: u64 = filled_transaction
                 .spent_utxos
                 .iter()
-                .map(GetValue::get_value)
+                .map(GetBitcoinValue::get_bitcoin_value)
                 .sum();
-            let value_out: u64 = filled_transaction
+            let bitcoin_value_out: u64 = filled_transaction
                 .transaction
                 .outputs
                 .iter()
-                .map(GetValue::get_value)
+                .map(GetBitcoinValue::get_bitcoin_value)
                 .sum();
-            fee += value_in - value_out;
+            fee += bitcoin_value_in - bitcoin_value_out;
             returned_transactions.push(transaction.clone());
             spent_utxos.extend(transaction.transaction.inputs.clone());
         }

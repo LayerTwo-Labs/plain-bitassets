@@ -3,7 +3,7 @@ use human_size::{Byte, Kibibyte, Mebibyte, SpecificSize};
 
 use plain_bitassets::{
     bip300301::bitcoin,
-    types::{GetValue, OutPoint},
+    types::{GetBitcoinValue, OutPoint},
 };
 
 use crate::app::App;
@@ -32,26 +32,28 @@ impl MemPoolExplorer {
                         for (index, transaction) in
                             transactions.iter().enumerate()
                         {
-                            let value_out: u64 = transaction
+                            let bitcoin_value_out: u64 = transaction
                                 .transaction
                                 .outputs
                                 .iter()
-                                .map(GetValue::get_value)
+                                .map(GetBitcoinValue::get_bitcoin_value)
                                 .sum();
-                            let value_in: u64 = transaction
+                            let bitcoin_value_in: u64 = transaction
                                 .transaction
                                 .inputs
                                 .iter()
                                 .map(|input| {
-                                    utxos.get(input).map(GetValue::get_value)
+                                    utxos
+                                        .get(input)
+                                        .map(GetBitcoinValue::get_bitcoin_value)
                                 })
                                 .sum::<Option<u64>>()
                                 .unwrap_or(0);
                             let txid =
                                 &format!("{}", transaction.transaction.txid())
                                     [0..8];
-                            if value_in >= value_out {
-                                let fee = value_in - value_out;
+                            if bitcoin_value_in >= bitcoin_value_out {
+                                let fee = bitcoin_value_in - bitcoin_value_out;
                                 ui.selectable_value(
                                     &mut self.current,
                                     index,
@@ -64,7 +66,7 @@ impl MemPoolExplorer {
                                     |ui| {
                                         let value_out =
                                             bitcoin::Amount::from_sat(
-                                                value_out,
+                                                bitcoin_value_out,
                                             );
                                         ui.monospace(format!("{value_out}"));
                                     },
@@ -121,11 +123,12 @@ impl MemPoolExplorer {
                             };
                             let output = &utxos[input];
                             let hash = &hash[0..8];
-                            let value =
-                                bitcoin::Amount::from_sat(output.get_value());
+                            let bitcoin_value = bitcoin::Amount::from_sat(
+                                output.get_bitcoin_value(),
+                            );
                             ui.monospace(kind.to_string());
                             ui.monospace(format!("{hash}:{vout}",));
-                            ui.monospace(format!("{value}",));
+                            ui.monospace(format!("₿{bitcoin_value}",));
                             ui.end_row();
                         }
                     });
@@ -144,11 +147,12 @@ impl MemPoolExplorer {
                             transaction.transaction.outputs.iter().enumerate()
                         {
                             let address = &format!("{}", output.address)[0..8];
-                            let value =
-                                bitcoin::Amount::from_sat(output.get_value());
+                            let bitcoin_value = bitcoin::Amount::from_sat(
+                                output.get_bitcoin_value(),
+                            );
                             ui.monospace(format!("{vout}"));
                             ui.monospace(address.to_string());
-                            ui.monospace(format!("{value}"));
+                            ui.monospace(format!("₿{bitcoin_value}"));
                             ui.end_row();
                         }
                     });

@@ -13,7 +13,8 @@ use plain_bitassets::{
     miner::{self, Miner},
     node::{self, Node, THIS_SIDECHAIN},
     types::{
-        self, FilledOutput, GetValue, Hash, InPoint, OutPoint, Transaction,
+        self, FilledOutput, GetBitcoinValue, Hash, InPoint, OutPoint,
+        Transaction,
     },
     wallet::{self, Wallet},
 };
@@ -211,7 +212,7 @@ impl App {
                 .or_default()
                 .insert((bitasset_data, owned));
         }
-        // retain if memo exists, and output value >= paymail fee
+        // Retain if memo exists, and output Bitcoin value >= paymail fee
         utxos.retain(|outpoint, output| {
             if output.memo.is_empty() {
                 return false;
@@ -234,7 +235,7 @@ impl App {
             let Some(min_fee) = min_fee else {
                 return false;
             };
-            output.get_value() >= min_fee
+            output.get_bitcoin_value() >= min_fee
         });
         Ok(utxos)
     }
