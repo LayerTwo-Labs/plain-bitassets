@@ -152,6 +152,8 @@ pub enum TransactionData {
         /// Amount to mint
         initial_supply: u64,
     },
+    /// Mint more of a BitAsset
+    BitAssetMint(u64),
     BitAssetUpdate(Box<BitAssetDataUpdates>),
     BatchIcann(BatchIcannRegistrationData),
 }
@@ -448,10 +450,21 @@ impl Transaction {
 
 impl FilledContent {
     /** Returns the BitAsset ID (name hash) and if the filled
-     * output content corresponds to a BitAsset output. */
+     * output content corresponds to a BitAsset. */
     pub fn bitasset(&self) -> Option<&Hash> {
         match self {
             Self::BitAsset(name_hash, _) => Some(name_hash),
+            _ => None,
+        }
+    }
+
+    /** Returns the BitAsset ID (name hash) and if the filled
+     * output content corresponds to a BitAsset or BitAsset control coin. */
+    pub fn get_bitasset(&self) -> Option<Hash> {
+        match self {
+            Self::BitAsset(name_hash, _) | Self::BitAssetControl(name_hash) => {
+                Some(*name_hash)
+            }
             _ => None,
         }
     }
@@ -547,9 +560,15 @@ impl FilledOutput {
     }
 
     /** Returns the BitAsset ID (name hash) if the filled output content
-     * corresponds to a BitAsset output. */
+     * corresponds to a BitAsset */
     pub fn bitasset(&self) -> Option<&Hash> {
         self.content.bitasset()
+    }
+
+    /** Returns the BitAsset ID (name hash) if the filled output content
+     * corresponds to a BitAsset or BitAsset control coin. */
+    pub fn get_bitasset(&self) -> Option<Hash> {
+        self.content.get_bitasset()
     }
 
     /** Returns the BitAsset ID (name hash) and coin value
@@ -679,9 +698,22 @@ impl FilledTransaction {
         self.transaction.reservation_outputs()
     }
 
-    /// If the tx is a bitasset reservation, returns the reservation commitment
+    /// If the tx is a BitAsset reservation, returns the reservation commitment
     pub fn reservation_commitment(&self) -> Option<Hash> {
         self.transaction.reservation_commitment()
+    }
+
+    /// If the tx is a valid BitAsset mint, returns the BitAsset ID and mint amount
+    pub fn mint(&self) -> Option<(Hash, u64)> {
+        match self.transaction.data {
+            Some(TransactionData::BitAssetMint(amount)) => {
+                let (_, control_output) =
+                    self.spent_bitasset_controls().next_back()?;
+                let bitasset = control_output.get_bitasset()?;
+                Some((bitasset, amount))
+            }
+            _ => None,
+        }
     }
 
     /** If the tx is a batch icann registration, returns the batch icann
@@ -777,10 +809,13 @@ impl FilledTransaction {
     }
 
     /** Returns an iterator over total value for each BitAsset that must
-     * appear in the outputs, in order */
+     *  appear in the outputs, in order.
+     *  The total output value can possibly overflow in a mint transaction,
+     *  so the total output values are [`Option<u64>`],
+     *  where `None` indicates overflow. */
     fn output_bitasset_total_values(
         &self,
-    ) -> impl Iterator<Item = (Hash, u64)> + '_ {
+    ) -> impl Iterator<Item = (Hash, Option<u64>)> + '_ {
         /* If this tx is a BitAsset registration, this is the BitAsset ID and
          * value of the output corresponding to the newly created BitAsset,
          * which must be the second-to-last registration output.
@@ -798,9 +833,25 @@ impl FilledTransaction {
                 }) if initial_supply != 0 => Some((name_hash, initial_supply)),
                 _ => None,
             };
+        let mint = self.mint();
         self.unique_spent_bitassets()
             .into_iter()
-            .chain(new_bitasset_value)
+            .map(move |(bitasset, total_value)| {
+                let total_value = match mint {
+                    Some((mint_bitasset, mint_amount))
+                        if mint_bitasset == bitasset =>
+                    {
+                        total_value.checked_add(mint_amount)
+                    }
+                    _ => Some(total_value),
+                };
+                (bitasset, total_value)
+            })
+            .chain(
+                new_bitasset_value.map(|(bitasset, total_value)| {
+                    (bitasset, Some(total_value))
+                }),
+            )
     }
 
     /** Compute the filled content for BitAsset reservation outputs.
@@ -813,13 +864,13 @@ impl FilledTransaction {
          * which must be the last registration output.
          * ie. If there are `n` outputs `0..(n-1)`, then output `(n-1)`
          * is the BitAsset control coin. */
-        let new_bitasset_content: Option<FilledContent> = self
+        let new_bitasset_control_content: Option<FilledContent> = self
             .registration_name_hash()
             .map(FilledContent::BitAssetControl);
         self.spent_bitasset_controls()
             .map(|(_, filled_output)| filled_output.content())
             .cloned()
-            .chain(new_bitasset_content)
+            .chain(new_bitasset_control_content)
     }
 
     /// compute the filled content for BitAsset reservation outputs
@@ -878,6 +929,7 @@ impl FilledTransaction {
                     Content::BitAsset(value) => {
                         let (bitasset, remaining_value) =
                             output_bitasset_total_values.peek_mut()?;
+                        let remaining_value = remaining_value.as_mut()?;
                         let filled_content =
                             FilledContent::BitAsset(*bitasset, value);
                         match value.cmp(remaining_value) {

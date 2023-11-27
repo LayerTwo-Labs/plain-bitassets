@@ -85,6 +85,8 @@ pub enum Error {
     MissingBitAssetInput { name_hash: Hash },
     #[error("missing BitAsset reservation {txid}")]
     MissingReservation { txid: Txid },
+    #[error("no BitAssets to mint")]
+    NoBitAssetsToMint,
     #[error("no BitAssets to update")]
     NoBitAssetsToUpdate,
     #[error("total fees less than coinbase value")]
@@ -103,6 +105,8 @@ pub enum Error {
     SignatureError(#[from] ed25519_dalek::SignatureError),
     #[error("Too few BitAsset control coin outputs")]
     TooFewBitAssetControlOutputs,
+    #[error("Mint would cause total supply to overflow")]
+    TotalSupplyOverflow,
     #[error(
         "unbalanced BitAsset control coins: \
          {n_bitasset_control_inputs} BitAsset control coin inputs, \
@@ -903,7 +907,7 @@ impl State {
         Ok(())
     }
 
-    // apply bitasset registration
+    // Apply BitAsset registration
     fn apply_bitasset_registration(
         &self,
         rwtxn: &mut RwTxn,
@@ -946,7 +950,48 @@ impl State {
         Ok(())
     }
 
-    // Apply bitasset updates
+    // Apply BitAsset mint
+    fn apply_bitasset_mint(
+        &self,
+        rwtxn: &mut RwTxn,
+        filled_tx: &FilledTransaction,
+        mint_amount: u64,
+        height: u32,
+    ) -> Result<(), Error> {
+        /* The updated BitAsset is the BitAsset that corresponds to the last
+         * BitAsset control coin output, or equivalently, the BitAsset corresponding to the
+         * last BitAsset control coin input */
+        let minted_bitasset = filled_tx
+            .spent_bitasset_controls()
+            .next_back()
+            .ok_or(Error::NoBitAssetsToMint)?
+            .1
+            .get_bitasset()
+            .expect("should only contain BitAsset outputs");
+        let mut bitasset_data = self
+            .bitassets
+            .get(rwtxn, &minted_bitasset)?
+            .ok_or(Error::MissingBitAsset {
+                name_hash: minted_bitasset,
+            })?;
+        let new_total_supply = bitasset_data
+            .total_supply
+            .0
+            .first()
+            .data
+            .checked_add(mint_amount)
+            .ok_or(Error::TotalSupplyOverflow)?;
+        bitasset_data.total_supply.push(
+            new_total_supply,
+            filled_tx.txid(),
+            height,
+        );
+        self.bitassets
+            .put(rwtxn, &minted_bitasset, &bitasset_data)?;
+        Ok(())
+    }
+
+    // Apply BitAsset updates
     fn apply_bitasset_updates(
         &self,
         rwtxn: &mut RwTxn,
@@ -1096,6 +1141,14 @@ impl State {
                         *name_hash,
                         bitasset_data,
                         *initial_supply,
+                        height,
+                    )?;
+                }
+                Some(TxData::BitAssetMint(mint_amount)) => {
+                    let () = self.apply_bitasset_mint(
+                        txn,
+                        &filled_tx,
+                        *mint_amount,
                         height,
                     )?;
                 }
