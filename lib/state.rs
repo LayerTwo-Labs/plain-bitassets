@@ -136,7 +136,11 @@ pub enum Error {
 pub struct State {
     /// Associates tx hashes with BitAsset reservation commitments
     pub bitasset_reservations: Database<SerdeBincode<Txid>, SerdeBincode<Hash>>,
-    /// Associates BitAsset IDs (name hashes) with bitasset data
+    /// Associates BitAsset sequence numbers with BitAsset IDs (name hashes)
+    pub bitasset_seq_to_bitasset: Database<OwnedType<u32>, SerdeBincode<Hash>>,
+    /// Associates BitAsset IDs (name hashes) with BitAsset sequence numbers
+    pub bitasset_to_bitasset_seq: Database<SerdeBincode<Hash>, OwnedType<u32>>,
+    /// Associates BitAsset IDs (name hashes) with BitAsset data
     pub bitassets: Database<SerdeBincode<Hash>, SerdeBincode<BitAssetData>>,
     pub utxos: Database<SerdeBincode<OutPoint>, SerdeBincode<FilledOutput>>,
     pub stxos: Database<SerdeBincode<OutPoint>, SerdeBincode<SpentOutput>>,
@@ -296,12 +300,16 @@ impl BitAssetData {
 }
 
 impl State {
-    pub const NUM_DBS: u32 = 7;
+    pub const NUM_DBS: u32 = 9;
     pub const WITHDRAWAL_BUNDLE_FAILURE_GAP: u32 = 5;
 
     pub fn new(env: &heed::Env) -> Result<Self, Error> {
         let bitasset_reservations =
             env.create_database(Some("bitasset_reservations"))?;
+        let bitasset_seq_to_bitasset =
+            env.create_database(Some("bitasset_seq_to_bitasset"))?;
+        let bitasset_to_bitasset_seq =
+            env.create_database(Some("bitasset_to_bitasset_seq"))?;
         let bitassets = env.create_database(Some("bitassets"))?;
         let utxos = env.create_database(Some("utxos"))?;
         let stxos = env.create_database(Some("stxos"))?;
@@ -313,6 +321,8 @@ impl State {
             env.create_database(Some("last_deposit_block"))?;
         Ok(Self {
             bitasset_reservations,
+            bitasset_seq_to_bitasset,
+            bitasset_to_bitasset_seq,
             bitassets,
             utxos,
             stxos,
@@ -320,6 +330,23 @@ impl State {
             last_withdrawal_bundle_failure_height,
             last_deposit_block,
         })
+    }
+
+    /** The sequence number of the last registered BitAsset.
+     * Returns `None` if no BitAssets have been registered. */
+    pub fn last_bitasset_seq(&self, txn: &RoTxn) -> Result<Option<u32>, Error> {
+        match self.bitasset_seq_to_bitasset.last(txn)? {
+            Some((seq, _)) => Ok(Some(seq)),
+            None => Ok(None),
+        }
+    }
+
+    /// The sequence number that the next registered BitAsset will take.
+    pub fn next_bitasset_seq(&self, txn: &RoTxn) -> Result<u32, Error> {
+        match self.last_bitasset_seq(txn)? {
+            Some(seq) => Ok(seq + 1),
+            None => Ok(0),
+        }
     }
 
     /// Return the Bitasset data. Returns an error if it does not exist.
@@ -939,6 +966,12 @@ impl State {
             return Err(Error::MissingReservation {
                 txid: *burned_reservation_txid,
             });
+        }
+        // Assign a sequence number
+        {
+            let seq = self.next_bitasset_seq(rwtxn)?;
+            self.bitasset_seq_to_bitasset.put(rwtxn, &seq, &name_hash)?;
+            self.bitasset_to_bitasset_seq.put(rwtxn, &name_hash, &seq)?;
         }
         let bitasset_data = BitAssetData::init(
             bitasset_data.clone(),
