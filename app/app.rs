@@ -1,8 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    ops::Range,
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use parking_lot::RwLock;
 use tokio::sync::RwLock as TokioRwLock;
@@ -12,10 +8,7 @@ use plain_bitassets::{
     format_deposit_address,
     miner::{self, Miner},
     node::{self, Node, THIS_SIDECHAIN},
-    types::{
-        self, FilledOutput, GetBitcoinValue, Hash, InPoint, OutPoint,
-        Transaction,
-    },
+    types::{self, FilledOutput, OutPoint, Transaction},
     wallet::{self, Wallet},
 };
 
@@ -121,123 +114,6 @@ impl App {
         let address: bitcoin::Address<bitcoin::address::NetworkChecked> =
             address.require_network(bitcoin::Network::Regtest).unwrap();
         Ok(address)
-    }
-
-    /** Get all paymail.
-     *  If `inbox_whitelist` is `Some`,
-     * only the specified bitassets will be used as inboxes. */
-    pub fn get_paymail(
-        &self,
-        inbox_whitelist: Option<&HashSet<Hash>>,
-    ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
-        let mut utxos = self.wallet.get_utxos()?;
-        let mut bitasset_utxos = self.wallet.get_bitassets()?;
-        let mut bitasset_stxos = self.wallet.get_spent_bitassets()?;
-        if let Some(inbox_whitelist) = inbox_whitelist {
-            bitasset_utxos.retain(|_, output| {
-                let Some(bitasset) = output.bitasset() else {
-                    return false;
-                };
-                inbox_whitelist.contains(bitasset)
-            });
-            bitasset_stxos.retain(|_, output| {
-                let Some(bitasset) = output.output.bitasset() else {
-                    return false;
-                };
-                inbox_whitelist.contains(bitasset)
-            })
-        };
-        let outpoints_to_block_heights: HashMap<_, _> = utxos
-            .iter()
-            .map(|(&outpoint, _)| outpoint)
-            .chain(bitasset_stxos.iter().map(|(&outpoint, _)| outpoint))
-            .filter_map(|outpoint| match outpoint {
-                OutPoint::Regular { txid, vout: _ } => Some((outpoint, txid)),
-                _ => None,
-            })
-            .map(|(outpoint, txid)| {
-                let height = self.node.get_tx_height(txid)?;
-                Ok((outpoint, height))
-            })
-            .collect::<Result<_, node::Error>>()?;
-        let inpoints_to_block_heights: HashMap<_, _> =
-            bitasset_stxos.values()
-                .map(|spent_output| {
-                let txid = match spent_output.inpoint {
-                    InPoint::Regular { txid, vin:_ } => txid,
-                    _ => panic!(
-                        "Impossible: bitasset inpoint can only refer to regular tx"
-                    )
-                };
-                let height = self.node.get_tx_height(txid)?;
-                Ok((spent_output.inpoint, height))
-            }).collect::<Result<_, node::Error>>()?;
-        /* associate to each address, a set of pairs of bitasset data and
-        ownership period for the bitasset. */
-        let mut addrs_to_bitassets_ownership: HashMap<_, HashSet<_>> =
-            HashMap::new();
-        // populate with owned bitassets
-        for (outpoint, output) in bitasset_utxos {
-            let Some(bitasset) = output.bitasset() else {
-                continue;
-            };
-            let bitasset_data =
-                self.node.get_current_bitasset_data(bitasset)?;
-            let height = outpoints_to_block_heights[&outpoint];
-            let owned = Range {
-                start: height,
-                end: u32::MAX,
-            };
-            addrs_to_bitassets_ownership
-                .entry(output.address)
-                .or_default()
-                .insert((bitasset_data, owned));
-        }
-        // populate with spent bitassets
-        for (outpoint, output) in bitasset_stxos {
-            let Some(bitasset) = output.output.bitasset() else {
-                continue;
-            };
-            let acquired_height = outpoints_to_block_heights[&outpoint];
-            let spent_height = inpoints_to_block_heights[&output.inpoint];
-            let bitasset_data = self
-                .node
-                .get_bitasset_data_at_block_height(bitasset, acquired_height)?;
-            let owned = Range {
-                start: acquired_height,
-                end: spent_height,
-            };
-            addrs_to_bitassets_ownership
-                .entry(output.output.address)
-                .or_default()
-                .insert((bitasset_data, owned));
-        }
-        // Retain if memo exists, and output Bitcoin value >= paymail fee
-        utxos.retain(|outpoint, output| {
-            if output.memo.is_empty() {
-                return false;
-            }
-            let Some(bitasset_data_ownership) =
-                addrs_to_bitassets_ownership.get(&output.address)
-            else {
-                return false;
-            };
-            let height = outpoints_to_block_heights[outpoint];
-            let min_fee = bitasset_data_ownership
-                .iter()
-                .filter_map(|(bitasset_data, ownership)| {
-                    if !ownership.contains(&height) {
-                        return None;
-                    };
-                    bitasset_data.paymail_fee
-                })
-                .min();
-            let Some(min_fee) = min_fee else {
-                return false;
-            };
-            output.get_bitcoin_value() >= min_fee
-        });
-        Ok(utxos)
     }
 
     const EMPTY_BLOCK_BMM_BRIBE: u64 = 1000;

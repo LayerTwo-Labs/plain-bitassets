@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, net::SocketAddr};
+use std::{borrow::Cow, net::SocketAddr};
 
 use jsonrpsee::{
     core::{async_trait, RpcResult},
@@ -9,7 +9,7 @@ use jsonrpsee::{
 
 use plain_bitassets::{
     node,
-    types::{Address, Block, BlockHash, FilledOutput, OutPoint, Transaction},
+    types::{Address, Block, BlockHash, Transaction},
     wallet,
 };
 
@@ -49,9 +49,6 @@ pub trait Rpc {
         fee: u64,
         memo: Option<String>,
     ) -> RpcResult<()>;
-
-    #[method(name = "get_paymail")]
-    async fn get_paymail(&self) -> RpcResult<HashMap<OutPoint, FilledOutput>>;
 
     #[method(name = "reserve_bitasset")]
     async fn reserve_bitasset(
@@ -172,10 +169,6 @@ impl RpcServer for RpcServerImpl {
             .submit_transaction(&authorized_tx)
             .await
             .map_err(convert_node_err)
-    }
-
-    async fn get_paymail(&self) -> RpcResult<HashMap<OutPoint, FilledOutput>> {
-        self.app.get_paymail(None).map_err(convert_app_err)
     }
 
     async fn reserve_bitasset(

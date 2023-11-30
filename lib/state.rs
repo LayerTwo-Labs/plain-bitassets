@@ -37,8 +37,6 @@ struct RollBack<T>(NonEmpty<TxidStamped<T>>);
 pub struct BitAssetData {
     /// Commitment to arbitrary data
     commitment: RollBack<Option<Hash>>,
-    /// Set if the plain bitasset is known to be an ICANN domain
-    is_icann: bool,
     /// Optional ipv4 addr
     ipv4_addr: RollBack<Option<Ipv4Addr>>,
     /// Optional ipv6 addr
@@ -47,8 +45,6 @@ pub struct BitAssetData {
     encryption_pubkey: RollBack<Option<EncryptionPubKey>>,
     /// Optional pubkey used for signing messages
     signing_pubkey: RollBack<Option<PublicKey>>,
-    /// Optional minimum paymail fee, in sats
-    paymail_fee: RollBack<Option<u64>>,
     /// Total supply
     total_supply: RollBack<u64>,
 }
@@ -61,16 +57,12 @@ pub enum Error {
     BadCoinbaseOutputContent,
     #[error("bitasset {name_hash:?} already registered")]
     BitAssetAlreadyRegistered { name_hash: Hash },
-    #[error("bitasset {name_hash:?} already registered as an ICANN name")]
-    BitAssetAlreadyIcann { name_hash: Hash },
     #[error("bundle too heavy {weight} > {max_weight}")]
     BundleTooHeavy { weight: u64, max_weight: u64 },
     #[error("failed to fill tx output contents: invalid transaction")]
     FillTxOutputContentsFailed,
     #[error("heed error")]
     Heed(#[from] heed::Error),
-    #[error("invalid ICANN name: {plain_name}")]
-    IcannNameInvalid { plain_name: String },
     #[error(
         "The last output in a BitAsset registration tx must be a control coin"
     )]
@@ -198,7 +190,6 @@ impl BitAssetData {
     ) -> Self {
         Self {
             commitment: RollBack::new(bitasset_data.commitment, txid, height),
-            is_icann: false,
             ipv4_addr: RollBack::new(bitasset_data.ipv4_addr, txid, height),
             ipv6_addr: RollBack::new(bitasset_data.ipv6_addr, txid, height),
             encryption_pubkey: RollBack::new(
@@ -211,7 +202,6 @@ impl BitAssetData {
                 txid,
                 height,
             ),
-            paymail_fee: RollBack::new(bitasset_data.paymail_fee, txid, height),
             total_supply: RollBack::new(initial_supply, txid, height),
         }
     }
@@ -225,12 +215,10 @@ impl BitAssetData {
     ) {
         let Self {
             ref mut commitment,
-            is_icann: _,
             ref mut ipv4_addr,
             ref mut ipv6_addr,
             ref mut encryption_pubkey,
             ref mut signing_pubkey,
-            ref mut paymail_fee,
             total_supply: _,
         } = self;
 
@@ -264,7 +252,6 @@ impl BitAssetData {
             txid,
             height,
         );
-        apply_field_update(paymail_fee, updates.paymail_fee, txid, height);
     }
 
     /** Returns the Bitasset data as it was, at the specified block height.
@@ -282,7 +269,6 @@ impl BitAssetData {
                 .at_block_height(height)?
                 .data,
             signing_pubkey: self.signing_pubkey.at_block_height(height)?.data,
-            paymail_fee: self.paymail_fee.at_block_height(height)?.data,
         })
     }
 
@@ -294,7 +280,6 @@ impl BitAssetData {
             ipv6_addr: self.ipv6_addr.latest().data,
             encryption_pubkey: self.encryption_pubkey.latest().data,
             signing_pubkey: self.signing_pubkey.latest().data,
-            paymail_fee: self.paymail_fee.latest().data,
         }
     }
 }
@@ -664,10 +649,7 @@ impl State {
      *    * The number of BitAsset outputs is at least
      *      the number of unique BitAssets in the inputs.
      *  * If the tx is a BitAsset update, then there must be at least one
-     *    BitAsset control coin input and output
-     *  * FIXME: REMOVE
-     *    If the tx is a Batch Icann registration, then there must be at least
-     *    as many bitasset control outputs as there are registered names. */
+     *    BitAsset control coin input and output. */
     pub fn validate_bitassets(
         &self,
         rotxn: &RoTxn,
@@ -689,11 +671,6 @@ impl State {
         {
             return Err(Error::NoBitAssetsToUpdate);
         };
-        if let Some(batch_icann_data) = tx.batch_icann_data() {
-            if n_bitasset_control_outputs < batch_icann_data.plain_names.len() {
-                return Err(Error::TooFewBitAssetControlOutputs);
-            }
-        }
         if let Some(TxData::BitAssetRegistration {
             name_hash,
             initial_supply,
@@ -758,46 +735,6 @@ impl State {
         }
     }
 
-    /// If the tx is a batch icann registration, check that
-    /// * The signature is valid over the tx
-    /// * Each of the declared plain names is a valid ICANN domain name
-    pub fn validate_batch_icann(
-        &self,
-        tx: &FilledTransaction,
-    ) -> Result<(), Error> {
-        if let Some(batch_icann_data) = tx.batch_icann_data() {
-            // validate plain names
-            for plain_name in batch_icann_data.plain_names.iter() {
-                // check ascii
-                if !plain_name.is_ascii() {
-                    return Err(Error::IcannNameInvalid {
-                        plain_name: plain_name.clone(),
-                    });
-                }
-                // at most one seperator
-                if plain_name.chars().filter(|char| *char == '.').count() > 1 {
-                    return Err(Error::IcannNameInvalid {
-                        plain_name: plain_name.clone(),
-                    });
-                }
-                if addr::parse_domain_name(plain_name).is_err() {
-                    return Err(Error::IcannNameInvalid {
-                        plain_name: plain_name.clone(),
-                    });
-                }
-            }
-            // validate signature
-            let msg_hash = hashes::hash(&(
-                &tx.transaction.inputs,
-                &tx.transaction.outputs,
-                &batch_icann_data.plain_names,
-            ));
-            constants::BATCH_ICANN_PUBKEY
-                .verify_strict(&msg_hash, &batch_icann_data.signature)?;
-        }
-        Ok(())
-    }
-
     /// Validates a filled transaction, and returns the fee
     pub fn validate_filled_transaction(
         &self,
@@ -806,7 +743,6 @@ impl State {
     ) -> Result<u64, Error> {
         let () = self.validate_reservations(tx)?;
         let () = self.validate_bitassets(rotxn, tx)?;
-        let () = self.validate_batch_icann(tx)?;
         tx.bitcoin_fee().ok_or(Error::NotEnoughValueIn)
     }
 
@@ -841,7 +777,7 @@ impl State {
         }
         let spent_utxos = filled_transactions
             .iter()
-            .flat_map(|t| t.spent_utxos_requiring_auth().into_iter());
+            .flat_map(|t| t.spent_utxos.iter());
         for (authorization, spent_utxo) in
             body.authorizations.iter().zip(spent_utxos)
         {
@@ -1054,43 +990,6 @@ impl State {
         Ok(())
     }
 
-    // Apply batch icann registration
-    fn apply_batch_icann(
-        &self,
-        rwtxn: &mut RwTxn,
-        filled_tx: &FilledTransaction,
-        batch_icann_data: &BatchIcannRegistrationData,
-    ) -> Result<(), Error> {
-        let name_hashes = batch_icann_data
-            .plain_names
-            .iter()
-            .map(|name| Hash::from(blake3::hash(name.as_bytes())));
-        let mut spent_bitassets = filled_tx.spent_bitassets();
-        for name_hash in name_hashes {
-            /* Search for the bitasset to be registered as an ICANN domain
-             * exists in the inputs */
-            let found_bitasset = spent_bitassets.any(|(_, outpoint)| {
-                let bitasset = outpoint.bitasset()
-                    .expect("spent bitasset input should correspond to a known name hash");
-                *bitasset == name_hash
-            });
-            if found_bitasset {
-                let mut bitasset_data = self
-                    .bitassets
-                    .get(rwtxn, &name_hash)?
-                    .ok_or(Error::MissingBitAsset { name_hash })?;
-                if bitasset_data.is_icann {
-                    return Err(Error::BitAssetAlreadyIcann { name_hash });
-                }
-                bitasset_data.is_icann = true;
-                self.bitassets.put(rwtxn, &name_hash, &bitasset_data)?;
-            } else {
-                return Err(Error::MissingBitAssetInput { name_hash });
-            }
-        }
-        Ok(())
-    }
-
     pub fn connect_body(
         &self,
         txn: &mut RwTxn,
@@ -1191,13 +1090,6 @@ impl State {
                         &filled_tx,
                         (**bitasset_updates).clone(),
                         height,
-                    )?;
-                }
-                Some(TxData::BatchIcann(batch_icann_data)) => {
-                    let () = self.apply_batch_icann(
-                        txn,
-                        &filled_tx,
-                        batch_icann_data,
                     )?;
                 }
             }

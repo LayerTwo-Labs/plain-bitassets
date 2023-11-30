@@ -26,7 +26,6 @@ impl BitassetExplorer {
             ipv6_addr,
             encryption_pubkey,
             signing_pubkey,
-            paymail_fee,
         } = bitasset_data;
         let commitment = commitment.map_or("Not set".to_owned(), hex::encode);
         let ipv4_addr = ipv4_addr
@@ -37,10 +36,6 @@ impl BitassetExplorer {
             .map_or("Not set".to_owned(), |epk| hex::encode(epk.0.as_bytes()));
         let signing_pubkey = signing_pubkey
             .map_or("Not set".to_owned(), |pk| hex::encode(pk.as_bytes()));
-        let paymail_fee = paymail_fee
-            .map_or("Not set".to_owned(), |paymail_fee| {
-                paymail_fee.to_string()
-            });
         ui.horizontal(|ui| {
             ui.monospace_selectable_singleline(format!(
                 "Commitment: {commitment}"
@@ -68,12 +63,6 @@ impl BitassetExplorer {
             | ui.horizontal(|ui| {
                 ui.monospace_selectable_singleline(format!(
                     "Signing Pubkey: {signing_pubkey}"
-                ))
-            })
-            .join()
-            | ui.horizontal(|ui| {
-                ui.monospace_selectable_singleline(format!(
-                    "Paymail fee: {paymail_fee}"
                 ))
             })
             .join()

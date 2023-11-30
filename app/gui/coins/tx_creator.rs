@@ -33,8 +33,6 @@ pub struct TrySetBitAssetData {
     pub encryption_pubkey: TrySetOption<EncryptionPubKey>,
     /// optional pubkey used for signing messages
     pub signing_pubkey: TrySetOption<PublicKey>,
-    /// optional pubkey used for signing messages
-    pub paymail_fee: TrySetOption<u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -90,17 +88,12 @@ impl TryFrom<TrySetBitAssetData> for BitAssetData {
             .signing_pubkey
             .0
             .map_err(|err| format!("Cannot parse signing pubkey: \"{err}\""))?;
-        let paymail_fee = try_set
-            .paymail_fee
-            .0
-            .map_err(|err| format!("Cannot parse paymail fee: \"{err}\""))?;
         Ok(BitAssetData {
             commitment,
             ipv4_addr,
             ipv6_addr,
             encryption_pubkey,
             signing_pubkey,
-            paymail_fee,
         })
     }
 }
@@ -286,23 +279,11 @@ impl TxCreator {
                     |pk| hex::encode(pk.to_bytes()),
                 )
         });
-        let paymail_fee_resp = ui.horizontal(|ui| {
-            ui.monospace("Paymail fee:       ")
-                | Self::show_option_field_default(
-                    ui,
-                    "bitasset_data_paymail_fee",
-                    100,
-                    &mut bitasset_data.paymail_fee,
-                    |s| u64::from_str(&s),
-                    u64::to_string,
-                )
-        });
         commitment_resp.join()
             | ipv4_resp.join()
             | ipv6_resp.join()
             | encryption_pubkey_resp.join()
             | signing_pubkey_resp.join()
-            | paymail_fee_resp.join()
     }
 
     pub fn show(
