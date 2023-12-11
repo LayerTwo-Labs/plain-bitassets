@@ -16,6 +16,7 @@ bytes = "1.4.0"
 ed25519-dalek = { version = "1.0.1", features = ["batch", "serde"] }
 ed25519-dalek-bip32 = "0.2.0"
 educe = { version = "0.4.23", features = ["Hash"] }
+fraction = "0.14.0"
 heed = { git = "https://github.com/meilisearch/heed", tag = "v0.12.4", version = "0.12.4" }
 hex = { version = "0.4.3", features = ["serde"] }
 hex-literal = "0.4.1"

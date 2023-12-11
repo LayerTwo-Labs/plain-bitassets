@@ -1,6 +1,3 @@
-#[cfg(not(target_os = "windows"))]
-use async_zmq::SinkExt;
-use heed::RoTxn;
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
@@ -8,6 +5,11 @@ use std::{
     path::Path,
     sync::Arc,
 };
+
+#[cfg(not(target_os = "windows"))]
+use async_zmq::SinkExt;
+use fraction::Fraction;
+use heed::RoTxn;
 use tokio::sync::RwLock;
 #[cfg(not(target_os = "windows"))]
 use tokio::{sync::mpsc, task::JoinHandle};
@@ -131,6 +133,24 @@ impl Node {
     pub fn get_height(&self) -> Result<u32, Error> {
         let txn = self.env.read_txn()?;
         Ok(self.archive.get_height(&txn)?)
+    }
+
+    pub fn try_get_amm_price(
+        &self,
+        base: Hash,
+        quote: Hash,
+    ) -> Result<Option<Fraction>, Error> {
+        let txn = self.env.read_txn()?;
+        match self.state.amm_pools.get(&txn, &(base, quote))? {
+            None | Some((0, _)) | Some((_, 0)) => Ok(None),
+            Some((reserve0, reserve1)) => {
+                if base < quote {
+                    Ok(Some(Fraction::new(reserve1, reserve0)))
+                } else {
+                    Ok(Some(Fraction::new(reserve0, reserve1)))
+                }
+            }
+        }
     }
 
     pub fn get_best_hash(&self) -> Result<BlockHash, Error> {

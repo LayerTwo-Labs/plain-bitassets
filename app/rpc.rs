@@ -1,5 +1,6 @@
 use std::{borrow::Cow, net::SocketAddr};
 
+use fraction::Fraction;
 use jsonrpsee::{
     core::{async_trait, RpcResult},
     proc_macros::rpc,
@@ -9,7 +10,7 @@ use jsonrpsee::{
 
 use plain_bitassets::{
     node,
-    types::{Address, Block, BlockHash, Transaction},
+    types::{Address, Block, BlockHash, Hash, Transaction},
     wallet,
 };
 
@@ -22,6 +23,13 @@ pub trait Rpc {
 
     #[method(name = "getblockcount")]
     async fn getblockcount(&self) -> u32;
+
+    #[method(name = "get_amm_price")]
+    async fn get_amm_price(
+        &self,
+        base: Hash,
+        quote: Hash,
+    ) -> RpcResult<Option<Fraction>>;
 
     #[method(name = "get_block_hash")]
     async fn get_block_hash(&self, height: u32) -> RpcResult<BlockHash>;
@@ -85,6 +93,17 @@ impl RpcServer for RpcServerImpl {
 
     async fn getblockcount(&self) -> u32 {
         self.app.node.get_height().unwrap_or(0)
+    }
+
+    async fn get_amm_price(
+        &self,
+        base: Hash,
+        quote: Hash,
+    ) -> RpcResult<Option<Fraction>> {
+        self.app
+            .node
+            .try_get_amm_price(base, quote)
+            .map_err(convert_node_err)
     }
 
     async fn get_block_hash(&self, height: u32) -> RpcResult<BlockHash> {

@@ -53,6 +53,8 @@ pub struct BitAssetData {
 pub enum Error {
     #[error("failed to verify authorization")]
     AuthorizationError,
+    #[error("AMM pool invariant")]
+    AmmPoolInvariant,
     #[error("bad coinbase output content")]
     BadCoinbaseOutputContent,
     #[error("bitasset {name_hash:?} already registered")]
@@ -63,6 +65,12 @@ pub enum Error {
     FillTxOutputContentsFailed,
     #[error("heed error")]
     Heed(#[from] heed::Error),
+    #[error("Insufficient liquidity")]
+    InsufficientLiquidity,
+    #[error("Invalid AMM mint")]
+    InvalidAmmMint,
+    #[error("Invalid AMM swap")]
+    InvalidAmmSwap,
     #[error(
         "The last output in a BitAsset registration tx must be a control coin"
     )]
@@ -124,8 +132,13 @@ pub enum Error {
     WrongPubKeyForAddress,
 }
 
+// Should be an ordered pair
+type AmmPair = (Hash, Hash);
+
 #[derive(Clone)]
 pub struct State {
+    /// Associates ordered pairs of BitAssets to their AMM pool reserves
+    pub amm_pools: Database<SerdeBincode<AmmPair>, SerdeBincode<(u64, u64)>>,
     /// Associates tx hashes with BitAsset reservation commitments
     pub bitasset_reservations: Database<SerdeBincode<Txid>, SerdeBincode<Hash>>,
     /// Associates BitAsset sequence numbers with BitAsset IDs (name hashes)
@@ -285,10 +298,11 @@ impl BitAssetData {
 }
 
 impl State {
-    pub const NUM_DBS: u32 = 9;
+    pub const NUM_DBS: u32 = 10;
     pub const WITHDRAWAL_BUNDLE_FAILURE_GAP: u32 = 5;
 
     pub fn new(env: &heed::Env) -> Result<Self, Error> {
+        let amm_pools = env.create_database(Some("amm_pools"))?;
         let bitasset_reservations =
             env.create_database(Some("bitasset_reservations"))?;
         let bitasset_seq_to_bitasset =
@@ -305,6 +319,7 @@ impl State {
         let last_deposit_block =
             env.create_database(Some("last_deposit_block"))?;
         Ok(Self {
+            amm_pools,
             bitasset_reservations,
             bitasset_seq_to_bitasset,
             bitasset_to_bitasset_seq,
@@ -870,6 +885,57 @@ impl State {
         Ok(())
     }
 
+    // Apply AMM mint
+    fn apply_amm_mint(
+        &self,
+        rwtxn: &mut RwTxn,
+        filled_tx: &FilledTransaction,
+    ) -> Result<(), Error> {
+        let (asset0, amount0, asset1, amount1) =
+            filled_tx.amm_mint().ok_or(Error::InvalidAmmMint)?;
+        let pair = (asset0, asset1);
+        let (reserve0, reserve1) =
+            self.amm_pools.get(rwtxn, &pair)?.unwrap_or((0, 0));
+        let new_reserves = (reserve0 + amount0, reserve1 + amount1);
+        self.amm_pools.put(rwtxn, &pair, &new_reserves)?;
+        Ok(())
+    }
+
+    // Apply AMM swap
+    fn apply_amm_swap(
+        &self,
+        rwtxn: &mut RwTxn,
+        filled_tx: &FilledTransaction,
+    ) -> Result<(), Error> {
+        let (offered_asset, offered_amount, receive_asset, receive_amount) =
+            filled_tx.amm_swap().ok_or(Error::InvalidAmmSwap)?;
+        let pair = if offered_asset < receive_asset {
+            (offered_asset, receive_asset)
+        } else {
+            (receive_asset, offered_asset)
+        };
+        let (reserve0, reserve1) =
+            self.amm_pools.get(rwtxn, &pair)?.unwrap_or((0, 0));
+        let product: u128 = reserve0 as u128 * reserve1 as u128;
+        let new_reserves = if offered_asset == pair.0 {
+            let new_reserve1 = reserve1
+                .checked_sub(receive_amount)
+                .ok_or(Error::InsufficientLiquidity)?;
+            (reserve0 + offered_amount, new_reserve1)
+        } else {
+            let new_reserve0 = reserve0
+                .checked_sub(receive_amount)
+                .ok_or(Error::InsufficientLiquidity)?;
+            (new_reserve0, reserve1 + offered_amount)
+        };
+        let new_product: u128 = new_reserves.0 as u128 * new_reserves.1 as u128;
+        if new_product != product {
+            return Err(Error::AmmPoolInvariant);
+        };
+        self.amm_pools.put(rwtxn, &pair, &new_reserves)?;
+        Ok(())
+    }
+
     // Apply BitAsset registration
     fn apply_bitasset_registration(
         &self,
@@ -1015,7 +1081,8 @@ impl State {
                     main_fee,
                     main_address,
                 },
-                OutputContent::BitAsset(_)
+                OutputContent::AmmLpToken(_)
+                | OutputContent::BitAsset(_)
                 | OutputContent::BitAssetControl
                 | OutputContent::BitAssetReservation => {
                     return Err(Error::BadCoinbaseOutputContent);
@@ -1058,6 +1125,12 @@ impl State {
             }
             match &transaction.data {
                 None => (),
+                Some(TxData::AmmMint { .. }) => {
+                    self.apply_amm_mint(txn, &filled_tx)?;
+                }
+                Some(TxData::AmmSwap { .. }) => {
+                    self.apply_amm_swap(txn, &filled_tx)?;
+                }
                 Some(TxData::BitAssetReservation { commitment }) => {
                     self.bitasset_reservations.put(txn, &txid, commitment)?;
                 }
