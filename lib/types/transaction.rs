@@ -123,6 +123,11 @@ pub struct BitAssetDataUpdates {
 #[allow(clippy::enum_variant_names)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum TransactionData {
+    /// Burn an AMM position
+    AmmBurn {
+        /// Amount of the LP token to burn
+        amount: u64,
+    },
     /// Mint an AMM position
     AmmMint {
         /// Amount of the lexicographically ordered first BitAsset to deposit
@@ -452,11 +457,24 @@ impl FilledContent {
         }
     }
 
-    /** Returns the BitAsset ID (name hash) and coin value if the filled
-     * output content corresponds to a BitAsset output. */
+    /** Returns the BitAsset ID (name hash) and coin value, if the filled
+     *  output content corresponds to a BitAsset output. */
     pub fn bitasset_value(&self) -> Option<(Hash, u64)> {
         match self {
             Self::BitAsset(name_hash, value) => Some((*name_hash, *value)),
+            _ => None,
+        }
+    }
+
+    /** Returns the LP token's corresponding asset pair and amount,
+     *  if the filled output content corresponds to an LP token output. */
+    pub fn lp_token_amount(&self) -> Option<(Hash, Hash, u64)> {
+        match self {
+            Self::AmmLpToken {
+                asset0,
+                asset1,
+                amount,
+            } => Some((*asset0, *asset1, *amount)),
             _ => None,
         }
     }
@@ -474,6 +492,11 @@ impl FilledContent {
     /// True if the output content corresponds to a Bitcoin
     pub fn is_bitcoin(&self) -> bool {
         matches!(self, Self::Bitcoin(_))
+    }
+
+    /// `true` if the output content corresponds to an LP token
+    pub fn is_lp_token(&self) -> bool {
+        matches!(self, Self::AmmLpToken { .. })
     }
 
     /// True if the output content corresponds to a reservation
@@ -565,6 +588,12 @@ impl FilledOutput {
         self.content.bitasset_value()
     }
 
+    /** Returns the LP token's corresponding asset pair and amount,
+     *  if the filled output content corresponds to an LP token output. */
+    pub fn lp_token_amount(&self) -> Option<(Hash, Hash, u64)> {
+        self.content.lp_token_amount()
+    }
+
     /// Accessor for content
     pub fn content(&self) -> &FilledContent {
         &self.content
@@ -583,6 +612,11 @@ impl FilledOutput {
     /// True if the output content corresponds to a Bitcoin
     pub fn is_bitcoin(&self) -> bool {
         self.content.is_bitcoin()
+    }
+
+    /// `true` if the output content corresponds to an LP token
+    pub fn is_lp_token(&self) -> bool {
+        self.content.is_lp_token()
     }
 
     /// True if the output content corresponds to a reservation
@@ -669,6 +703,19 @@ impl FilledTransaction {
     /// Accessor for tx outputs
     pub fn outputs(&self) -> &TxOutputs {
         &self.transaction.outputs
+    }
+
+    /** If the tx is an AMM burn, returns the LP token's corresponding assets
+     * and burn amount. */
+    pub fn amm_burn(&self) -> Option<(Hash, Hash, u64)> {
+        match self.transaction.data {
+            Some(TransactionData::AmmBurn { amount }) => {
+                let unique_spent_lp_tokens = self.unique_spent_lp_tokens();
+                let (asset0, asset1, _) = unique_spent_lp_tokens.first()?;
+                Some((*asset0, *asset1, amount))
+            }
+            _ => None,
+        }
     }
 
     /// If the tx is an AMM mint, returns the pair assets and deposit amounts
@@ -824,10 +871,9 @@ impl FilledTransaction {
 
     /** Return a vector of pairs consisting of a BitAsset and the combined
      *  input value for that BitAsset.
-     *  The vector is ordered such that BitAssets occur the same order
+     *  The vector is ordered such that BitAssets occur in the same order
      *  as they first occur in the inputs. */
     pub fn unique_spent_bitassets(&self) -> Vec<(Hash, u64)> {
-        // FIXME
         // Combined value for each BitAsset
         let mut combined_value = HashMap::<Hash, u64>::new();
         let spent_bitasset_values = || {
@@ -850,6 +896,37 @@ impl FilledTransaction {
     ) -> impl DoubleEndedIterator<Item = (&OutPoint, &FilledOutput)> {
         self.spent_inputs()
             .filter(|(_, filled_output)| filled_output.is_bitasset_control())
+    }
+
+    /// Return an iterator over spent AMM LP tokens
+    pub fn spent_lp_tokens(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = (&OutPoint, &FilledOutput)> {
+        self.spent_inputs()
+            .filter(|(_, filled_output)| filled_output.is_lp_token())
+    }
+
+    /** Return a vector of pairs consisting of an LP token's corresponding
+     *  asset pair and the combined input amount for that LP token.
+     *  The vector is ordered such that LP tokens occur in the same order
+     *  as they first occur in the inputs. */
+    pub fn unique_spent_lp_tokens(&self) -> Vec<(Hash, Hash, u64)> {
+        // Combined amount for each LP token
+        let mut combined_amounts = HashMap::<(Hash, Hash), u64>::new();
+        let spent_lp_token_amounts = || {
+            self.spent_lp_tokens()
+                .filter_map(|(_, output)| output.lp_token_amount())
+        };
+        // Increment combined amount for the BitAsset
+        spent_lp_token_amounts().for_each(|(asset0, asset1, amount)| {
+            *combined_amounts.entry((asset0, asset1)).or_default() += amount;
+        });
+        spent_lp_token_amounts()
+            .unique_by(|(asset0, asset1, _)| (*asset0, *asset1))
+            .map(|(asset0, asset1, _)| {
+                (asset0, asset1, combined_amounts[&(asset0, asset1)])
+            })
+            .collect()
     }
 
     /** Returns an iterator over total value for each BitAsset that must

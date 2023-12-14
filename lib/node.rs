@@ -17,6 +17,7 @@ use tokio::{sync::mpsc, task::JoinHandle};
 use crate::{
     authorization::Authorization,
     net::{PeerState, Request, Response},
+    state::AmmPoolState,
     types::*,
 };
 
@@ -141,15 +142,22 @@ impl Node {
         quote: Hash,
     ) -> Result<Option<Fraction>, Error> {
         let txn = self.env.read_txn()?;
-        match self.state.amm_pools.get(&txn, &(base, quote))? {
-            None | Some((0, _)) | Some((_, 0)) => Ok(None),
-            Some((reserve0, reserve1)) => {
-                if base < quote {
-                    Ok(Some(Fraction::new(reserve1, reserve0)))
-                } else {
-                    Ok(Some(Fraction::new(reserve0, reserve1)))
-                }
-            }
+        let AmmPoolState {
+            reserve0,
+            reserve1,
+            outstanding_lp_tokens: _,
+        } = self
+            .state
+            .amm_pools
+            .get(&txn, &(base, quote))?
+            .unwrap_or_default();
+        if reserve0 == 0 || reserve1 == 0 {
+            return Ok(None);
+        }
+        if base < quote {
+            Ok(Some(Fraction::new(reserve1, reserve0)))
+        } else {
+            Ok(Some(Fraction::new(reserve0, reserve1)))
         }
     }
 

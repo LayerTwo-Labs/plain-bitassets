@@ -3334,6 +3334,7 @@ dependencies = [
  "itertools 0.12.0",
  "lazy_static",
  "nonempty",
+ "num",
  "quinn",
  "rayon",
  "rcgen",

@@ -53,6 +53,12 @@ pub struct BitAssetData {
 pub enum Error {
     #[error("failed to verify authorization")]
     AuthorizationError,
+    #[error("AMM burn overflow")]
+    AmmBurnOverflow,
+    #[error("AMM burn underflow")]
+    AmmBurnUnderflow,
+    #[error("AMM LP token overflow")]
+    AmmLpTokenOverflow,
     #[error("AMM pool invariant")]
     AmmPoolInvariant,
     #[error("bad coinbase output content")]
@@ -67,6 +73,8 @@ pub enum Error {
     Heed(#[from] heed::Error),
     #[error("Insufficient liquidity")]
     InsufficientLiquidity,
+    #[error("Invalid AMM burn")]
+    InvalidAmmBurn,
     #[error("Invalid AMM mint")]
     InvalidAmmMint,
     #[error("Invalid AMM swap")]
@@ -135,10 +143,21 @@ pub enum Error {
 // Should be an ordered pair
 type AmmPair = (Hash, Hash);
 
+/// Current state of an AMM pool
+#[derive(Debug, Default, Deserialize, Serialize)]
+pub struct AmmPoolState {
+    /// Reserve of the first asset
+    pub reserve0: u64,
+    /// Reserve of the second asset
+    pub reserve1: u64,
+    /// Total amount of outstanding LP tokens
+    pub outstanding_lp_tokens: u64,
+}
+
 #[derive(Clone)]
 pub struct State {
-    /// Associates ordered pairs of BitAssets to their AMM pool reserves
-    pub amm_pools: Database<SerdeBincode<AmmPair>, SerdeBincode<(u64, u64)>>,
+    /// Associates ordered pairs of BitAssets to their AMM pool states
+    pub amm_pools: Database<SerdeBincode<AmmPair>, SerdeBincode<AmmPoolState>>,
     /// Associates tx hashes with BitAsset reservation commitments
     pub bitasset_reservations: Database<SerdeBincode<Txid>, SerdeBincode<Hash>>,
     /// Associates BitAsset sequence numbers with BitAsset IDs (name hashes)
@@ -885,6 +904,50 @@ impl State {
         Ok(())
     }
 
+    // Apply AMM burn
+    fn apply_amm_burn(
+        &self,
+        rwtxn: &mut RwTxn,
+        filled_tx: &FilledTransaction,
+    ) -> Result<(), Error> {
+        let (asset0, asset1, lp_token_burn) =
+            filled_tx.amm_burn().ok_or(Error::InvalidAmmBurn)?;
+        let pair = (asset0, asset1);
+        let AmmPoolState {
+            reserve0,
+            reserve1,
+            outstanding_lp_tokens,
+        } = self.amm_pools.get(rwtxn, &pair)?.unwrap_or_default();
+        assert_ne!(0, outstanding_lp_tokens);
+        // payout in asset 0
+        let payout_0: u128 = (lp_token_burn as u128 * reserve0 as u128)
+            / outstanding_lp_tokens as u128;
+        let payout_0: u64 =
+            payout_0.try_into().map_err(|_| Error::AmmBurnOverflow)?;
+        // payout in asset 1
+        let payout_1: u128 = (lp_token_burn as u128 * reserve1 as u128)
+            / outstanding_lp_tokens as u128;
+        let payout_1: u64 =
+            payout_1.try_into().map_err(|_| Error::AmmBurnOverflow)?;
+
+        let new_reserve0 = reserve0
+            .checked_sub(payout_0)
+            .ok_or(Error::AmmBurnUnderflow)?;
+        let new_reserve1 = reserve1
+            .checked_sub(payout_1)
+            .ok_or(Error::AmmBurnUnderflow)?;
+        let new_outstanding_lp_tokens = outstanding_lp_tokens
+            .checked_sub(lp_token_burn)
+            .ok_or(Error::AmmBurnUnderflow)?;
+        let new_amm_pool_state = AmmPoolState {
+            reserve0: new_reserve0,
+            reserve1: new_reserve1,
+            outstanding_lp_tokens: new_outstanding_lp_tokens,
+        };
+        self.amm_pools.put(rwtxn, &pair, &new_amm_pool_state)?;
+        Ok(())
+    }
+
     // Apply AMM mint
     fn apply_amm_mint(
         &self,
@@ -894,10 +957,57 @@ impl State {
         let (asset0, amount0, asset1, amount1) =
             filled_tx.amm_mint().ok_or(Error::InvalidAmmMint)?;
         let pair = (asset0, asset1);
-        let (reserve0, reserve1) =
-            self.amm_pools.get(rwtxn, &pair)?.unwrap_or((0, 0));
-        let new_reserves = (reserve0 + amount0, reserve1 + amount1);
-        self.amm_pools.put(rwtxn, &pair, &new_reserves)?;
+        let AmmPoolState {
+            reserve0,
+            reserve1,
+            outstanding_lp_tokens,
+        } = self.amm_pools.get(rwtxn, &pair)?.unwrap_or_default();
+        let new_amm_pool_state =
+            if reserve0 == 0 || reserve1 == 0 || outstanding_lp_tokens == 0 {
+                let new_reserve0 = reserve0 + amount0;
+                let new_reserve1 = reserve1 + amount1;
+                let geometric_mean: u128 = num::integer::sqrt(
+                    new_reserve0 as u128 * new_reserve1 as u128,
+                );
+                let geometric_mean: u64 =
+                // u64 truncation of u128 square root is always safe
+                geometric_mean as u64;
+                let lp_tokens_minted = geometric_mean;
+                let new_outstanding_lp_tokens =
+                    outstanding_lp_tokens + lp_tokens_minted;
+                AmmPoolState {
+                    reserve0: new_reserve0,
+                    reserve1: new_reserve1,
+                    outstanding_lp_tokens: new_outstanding_lp_tokens,
+                }
+            } else {
+                let new_reserve0 = reserve0 + amount0;
+                let new_reserve1 = reserve1 + amount1;
+                assert_ne!(0, reserve0);
+                assert_ne!(0, reserve1);
+                // LP tokens minted based on asset 0
+                let lp_tokens_minted_0: u128 = (outstanding_lp_tokens as u128
+                    * amount0 as u128)
+                    / reserve0 as u128;
+                // LP tokens minted based on asset 1
+                let lp_tokens_minted_1: u128 = (outstanding_lp_tokens as u128
+                    * amount1 as u128)
+                    / reserve1 as u128;
+                // LP tokens minted is the minimum of the two calculations
+                let lp_tokens_minted: u64 =
+                    u128::min(lp_tokens_minted_0, lp_tokens_minted_1)
+                        .try_into()
+                        .map_err(|_| Error::AmmLpTokenOverflow)?;
+                let new_outstanding_lp_tokens = outstanding_lp_tokens
+                    .checked_add(lp_tokens_minted)
+                    .ok_or(Error::AmmLpTokenOverflow)?;
+                AmmPoolState {
+                    reserve0: new_reserve0,
+                    reserve1: new_reserve1,
+                    outstanding_lp_tokens: new_outstanding_lp_tokens,
+                }
+            };
+        self.amm_pools.put(rwtxn, &pair, &new_amm_pool_state)?;
         Ok(())
     }
 
@@ -914,10 +1024,13 @@ impl State {
         } else {
             (receive_asset, offered_asset)
         };
-        let (reserve0, reserve1) =
-            self.amm_pools.get(rwtxn, &pair)?.unwrap_or((0, 0));
+        let AmmPoolState {
+            reserve0,
+            reserve1,
+            outstanding_lp_tokens,
+        } = self.amm_pools.get(rwtxn, &pair)?.unwrap_or_default();
         let product: u128 = reserve0 as u128 * reserve1 as u128;
-        let new_reserves = if offered_asset == pair.0 {
+        let (new_reserve0, new_reserve1) = if offered_asset == pair.0 {
             let new_reserve1 = reserve1
                 .checked_sub(receive_amount)
                 .ok_or(Error::InsufficientLiquidity)?;
@@ -928,11 +1041,16 @@ impl State {
                 .ok_or(Error::InsufficientLiquidity)?;
             (new_reserve0, reserve1 + offered_amount)
         };
-        let new_product: u128 = new_reserves.0 as u128 * new_reserves.1 as u128;
+        let new_product: u128 = new_reserve0 as u128 * new_reserve1 as u128;
         if new_product != product {
             return Err(Error::AmmPoolInvariant);
         };
-        self.amm_pools.put(rwtxn, &pair, &new_reserves)?;
+        let new_amm_pool_state = AmmPoolState {
+            reserve0: new_reserve0,
+            reserve1: new_reserve1,
+            outstanding_lp_tokens,
+        };
+        self.amm_pools.put(rwtxn, &pair, &new_amm_pool_state)?;
         Ok(())
     }
 
@@ -1125,6 +1243,9 @@ impl State {
             }
             match &transaction.data {
                 None => (),
+                Some(TxData::AmmBurn { .. }) => {
+                    self.apply_amm_burn(txn, &filled_tx)?;
+                }
                 Some(TxData::AmmMint { .. }) => {
                     self.apply_amm_mint(txn, &filled_tx)?;
                 }
