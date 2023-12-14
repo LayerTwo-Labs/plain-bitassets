@@ -1,4 +1,5 @@
 use std::{
+    cmp::Ordering,
     collections::{HashMap, HashSet},
     net::{Ipv4Addr, Ipv6Addr},
 };
@@ -111,6 +112,8 @@ pub enum Error {
     SecondLastOutputNotBitAsset,
     #[error(transparent)]
     SignatureError(#[from] ed25519_dalek::SignatureError),
+    #[error("Too few BitAssets to mint an AMM position")]
+    TooFewBitAssetsToAmmMint,
     #[error("Too few BitAsset control coin outputs")]
     TooFewBitAssetControlOutputs,
     #[error("Mint would cause total supply to overflow")]
@@ -683,7 +686,24 @@ impl State {
      *    * The number of BitAsset outputs is at least
      *      the number of unique BitAssets in the inputs.
      *  * If the tx is a BitAsset update, then there must be at least one
-     *    BitAsset control coin input and output. */
+     *    BitAsset control coin input and output.
+     *  * If the tx is an AMM Burn, then
+     *    * There must be at least two unique BitAsset outputs
+     *    * The number of unique BitAsset outputs must be at most two more than
+     *      the number of unique BitAsset inputs
+     *    * The number of unique BitAsset inputs must be at most equal to the
+     *      number of unique BitAsset outputs
+     *  * If the tx is an AMM Mint, then
+     *    * There must be at least two BitAsset inputs
+     *    * The number of unique BitAsset outputs must be at most equal to the
+     *      number of unique BitAsset inputs
+     *    * The number of unique BitAsset inputs must be at most two more than
+     *      the number of unique BitAsset outputs.
+     *  * If the tx is an AMM Swap, then
+     *    * There must be at least one BitAsset input
+     *    * The number of unique BitAsset outputs must be one less than,
+     *      one greater than, or equal to, the number of unique BitAsset inputs.
+     * */
     pub fn validate_bitassets(
         &self,
         rotxn: &RoTxn,
@@ -698,12 +718,41 @@ impl State {
         let n_bitasset_control_inputs: usize =
             tx.spent_bitasset_controls().count();
         let n_bitasset_outputs: usize = tx.bitasset_outputs().count();
+        let n_unique_bitasset_outputs: usize =
+            tx.unique_spent_bitassets().len();
         let n_bitasset_control_outputs: usize =
             tx.bitasset_control_outputs().count();
         if tx.is_update()
             && (n_bitasset_control_inputs < 1 || n_bitasset_control_outputs < 1)
         {
             return Err(Error::NoBitAssetsToUpdate);
+        };
+        if tx.is_amm_burn()
+            && (n_unique_bitasset_outputs < 2
+                || n_unique_bitasset_inputs > n_unique_bitasset_outputs
+                || n_unique_bitasset_outputs > n_unique_bitasset_inputs + 2)
+        {
+            return Err(Error::InvalidAmmBurn);
+        };
+        if tx.is_amm_mint()
+            && (n_unique_bitasset_inputs < 2
+                || n_unique_bitasset_outputs > n_unique_bitasset_inputs
+                || n_unique_bitasset_inputs > n_unique_bitasset_outputs + 2)
+        {
+            return Err(Error::TooFewBitAssetsToAmmMint);
+        };
+        if tx.is_amm_swap()
+            && (n_unique_bitasset_inputs < 1
+                || !{
+                    let min_unique_bitasset_outputs =
+                        n_unique_bitasset_inputs.saturating_sub(1);
+                    let max_unique_bitasset_outputs =
+                        n_unique_bitasset_inputs + 1;
+                    (min_unique_bitasset_outputs..=max_unique_bitasset_outputs)
+                        .contains(&n_unique_bitasset_outputs)
+                })
+        {
+            return Err(Error::InvalidAmmSwap);
         };
         if let Some(TxData::BitAssetRegistration {
             name_hash,
@@ -910,8 +959,13 @@ impl State {
         rwtxn: &mut RwTxn,
         filled_tx: &FilledTransaction,
     ) -> Result<(), Error> {
-        let (asset0, asset1, lp_token_burn) =
-            filled_tx.amm_burn().ok_or(Error::InvalidAmmBurn)?;
+        let AmmBurn {
+            asset0,
+            asset1,
+            lp_token_burn,
+            amount0,
+            amount1,
+        } = filled_tx.amm_burn().ok_or(Error::InvalidAmmBurn)?;
         let pair = (asset0, asset1);
         let AmmPoolState {
             reserve0,
@@ -924,12 +978,17 @@ impl State {
             / outstanding_lp_tokens as u128;
         let payout_0: u64 =
             payout_0.try_into().map_err(|_| Error::AmmBurnOverflow)?;
+        if payout_0 != amount0 {
+            return Err(Error::InvalidAmmBurn);
+        }
         // payout in asset 1
         let payout_1: u128 = (lp_token_burn as u128 * reserve1 as u128)
             / outstanding_lp_tokens as u128;
         let payout_1: u64 =
             payout_1.try_into().map_err(|_| Error::AmmBurnOverflow)?;
-
+        if payout_1 != amount1 {
+            return Err(Error::InvalidAmmBurn);
+        }
         let new_reserve0 = reserve0
             .checked_sub(payout_0)
             .ok_or(Error::AmmBurnUnderflow)?;
@@ -954,8 +1013,16 @@ impl State {
         rwtxn: &mut RwTxn,
         filled_tx: &FilledTransaction,
     ) -> Result<(), Error> {
-        let (asset0, amount0, asset1, amount1) =
-            filled_tx.amm_mint().ok_or(Error::InvalidAmmMint)?;
+        let AmmMint {
+            asset0,
+            asset1,
+            amount0,
+            amount1,
+            lp_token_mint,
+        } = filled_tx.amm_mint().ok_or(Error::InvalidAmmMint)?;
+        if asset0 == asset1 {
+            return Err(Error::InvalidAmmMint);
+        }
         let pair = (asset0, asset1);
         let AmmPoolState {
             reserve0,
@@ -973,6 +1040,9 @@ impl State {
                 // u64 truncation of u128 square root is always safe
                 geometric_mean as u64;
                 let lp_tokens_minted = geometric_mean;
+                if lp_tokens_minted != lp_token_mint {
+                    return Err(Error::InvalidAmmMint);
+                }
                 let new_outstanding_lp_tokens =
                     outstanding_lp_tokens + lp_tokens_minted;
                 AmmPoolState {
@@ -998,6 +1068,9 @@ impl State {
                     u128::min(lp_tokens_minted_0, lp_tokens_minted_1)
                         .try_into()
                         .map_err(|_| Error::AmmLpTokenOverflow)?;
+                if lp_tokens_minted != lp_token_mint {
+                    return Err(Error::InvalidAmmMint);
+                }
                 let new_outstanding_lp_tokens = outstanding_lp_tokens
                     .checked_add(lp_tokens_minted)
                     .ok_or(Error::AmmLpTokenOverflow)?;
@@ -1017,12 +1090,16 @@ impl State {
         rwtxn: &mut RwTxn,
         filled_tx: &FilledTransaction,
     ) -> Result<(), Error> {
-        let (offered_asset, offered_amount, receive_asset, receive_amount) =
-            filled_tx.amm_swap().ok_or(Error::InvalidAmmSwap)?;
-        let pair = if offered_asset < receive_asset {
-            (offered_asset, receive_asset)
-        } else {
-            (receive_asset, offered_asset)
+        let AmmSwap {
+            asset_spend,
+            asset_receive,
+            amount_spend,
+            amount_receive,
+        } = filled_tx.amm_swap().ok_or(Error::InvalidAmmSwap)?;
+        let pair = match asset_spend.cmp(&asset_receive) {
+            Ordering::Less => (asset_spend, asset_receive),
+            Ordering::Equal => return Err(Error::InvalidAmmSwap),
+            Ordering::Greater => (asset_receive, asset_spend),
         };
         let AmmPoolState {
             reserve0,
@@ -1030,16 +1107,16 @@ impl State {
             outstanding_lp_tokens,
         } = self.amm_pools.get(rwtxn, &pair)?.unwrap_or_default();
         let product: u128 = reserve0 as u128 * reserve1 as u128;
-        let (new_reserve0, new_reserve1) = if offered_asset == pair.0 {
+        let (new_reserve0, new_reserve1) = if asset_spend == pair.0 {
             let new_reserve1 = reserve1
-                .checked_sub(receive_amount)
+                .checked_sub(amount_receive)
                 .ok_or(Error::InsufficientLiquidity)?;
-            (reserve0 + offered_amount, new_reserve1)
+            (reserve0 + amount_spend, new_reserve1)
         } else {
             let new_reserve0 = reserve0
-                .checked_sub(receive_amount)
+                .checked_sub(amount_receive)
                 .ok_or(Error::InsufficientLiquidity)?;
-            (new_reserve0, reserve1 + offered_amount)
+            (new_reserve0, reserve1 + amount_spend)
         };
         let new_product: u128 = new_reserve0 as u128 * new_reserve1 as u128;
         if new_product != product {

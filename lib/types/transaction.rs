@@ -125,8 +125,12 @@ pub struct BitAssetDataUpdates {
 pub enum TransactionData {
     /// Burn an AMM position
     AmmBurn {
+        /// Amount of the lexicographically ordered first BitAsset to receive
+        amount0: u64,
+        /// Amount of the lexicographically ordered second BitAsset to receive
+        amount1: u64,
         /// Amount of the LP token to burn
-        amount: u64,
+        lp_token_burn: u64,
     },
     /// Mint an AMM position
     AmmMint {
@@ -134,9 +138,15 @@ pub enum TransactionData {
         amount0: u64,
         /// Amount of the lexicographically ordered second BitAsset to deposit
         amount1: u64,
+        /// Amount of the LP token to receive
+        lp_token_mint: u64,
     },
     /// AMM swap
     AmmSwap {
+        /// Amount to spend
+        amount_spent: u64,
+        /// Amount to receive
+        amount_receive: u64,
         /// Pair asset to swap for
         pair_asset: Hash,
     },
@@ -216,6 +226,43 @@ pub struct SpentOutput {
 pub struct FilledTransaction {
     pub transaction: Transaction,
     pub spent_utxos: Vec<FilledOutput>,
+}
+
+/// Struct describing an AMM burn
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AmmBurn {
+    pub asset0: Hash,
+    pub asset1: Hash,
+    /// Amount of asset 0 received
+    pub amount0: u64,
+    /// Amount of asset 1 received
+    pub amount1: u64,
+    /// Amount of LP token burned
+    pub lp_token_burn: u64,
+}
+
+/// Struct describing an AMM mint
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AmmMint {
+    pub asset0: Hash,
+    pub asset1: Hash,
+    /// Amount of asset 0 deposited
+    pub amount0: u64,
+    /// Amount of asset 1 deposited
+    pub amount1: u64,
+    /// Amount of LP token received
+    pub lp_token_mint: u64,
+}
+
+/// Struct describing an AMM swap
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AmmSwap {
+    pub asset_spend: Hash,
+    pub asset_receive: Hash,
+    /// Amount of spend asset spent
+    pub amount_spend: u64,
+    //// Amount of receive asset received
+    pub amount_receive: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -310,6 +357,21 @@ impl GetBitcoinValue for Output {
 }
 
 impl TxData {
+    /// `true` if the tx data corresponds to an AMM burn
+    pub fn is_amm_burn(&self) -> bool {
+        matches!(self, Self::AmmBurn { .. })
+    }
+
+    /// `true` if the tx data corresponds to an AMM mint
+    pub fn is_amm_mint(&self) -> bool {
+        matches!(self, Self::AmmMint { .. })
+    }
+
+    /// `true` if the tx data corresponds to an AMM swap
+    pub fn is_amm_swap(&self) -> bool {
+        matches!(self, Self::AmmSwap { .. })
+    }
+
     /// `true` if the tx data corresponds to a reservation
     pub fn is_registration(&self) -> bool {
         matches!(self, Self::BitAssetRegistration { .. })
@@ -356,6 +418,30 @@ impl Transaction {
         self.outputs
             .iter()
             .filter(|output| output.is_bitasset_control())
+    }
+
+    /// `true` if the tx data corresponds to an AMM burn
+    pub fn is_amm_burn(&self) -> bool {
+        match &self.data {
+            Some(tx_data) => tx_data.is_amm_burn(),
+            None => false,
+        }
+    }
+
+    /// `true` if the tx data corresponds to an AMM mint
+    pub fn is_amm_mint(&self) -> bool {
+        match &self.data {
+            Some(tx_data) => tx_data.is_amm_mint(),
+            None => false,
+        }
+    }
+
+    /// `true` if the tx data corresponds to an AMM swap
+    pub fn is_amm_swap(&self) -> bool {
+        match &self.data {
+            Some(tx_data) => tx_data.is_amm_swap(),
+            None => false,
+        }
     }
 
     /// `true` if the tx data corresponds to a BitAsset registration
@@ -680,6 +766,21 @@ impl FilledTransaction {
         &self.transaction.inputs
     }
 
+    /// `true` if the tx data corresponds to an AMM burn
+    pub fn is_amm_burn(&self) -> bool {
+        self.transaction.is_amm_burn()
+    }
+
+    /// `true` if the tx data corresponds to an AMM mint
+    pub fn is_amm_mint(&self) -> bool {
+        self.transaction.is_amm_mint()
+    }
+
+    /// `true` if the tx data corresponds to an AMM swap
+    pub fn is_amm_swap(&self) -> bool {
+        self.transaction.is_amm_swap()
+    }
+
     /// True if the tx data corresponds to a BitAsset registration
     pub fn is_registration(&self) -> bool {
         self.transaction.is_registration()
@@ -705,81 +806,71 @@ impl FilledTransaction {
         &self.transaction.outputs
     }
 
-    /** If the tx is an AMM burn, returns the LP token's corresponding assets
-     * and burn amount. */
-    pub fn amm_burn(&self) -> Option<(Hash, Hash, u64)> {
+    /** If the tx is an AMM burn, returns the LP token's
+     *  corresponding [`AmmBurn`]. */
+    pub fn amm_burn(&self) -> Option<AmmBurn> {
         match self.transaction.data {
-            Some(TransactionData::AmmBurn { amount }) => {
+            Some(TransactionData::AmmBurn {
+                amount0,
+                amount1,
+                lp_token_burn,
+            }) => {
                 let unique_spent_lp_tokens = self.unique_spent_lp_tokens();
                 let (asset0, asset1, _) = unique_spent_lp_tokens.first()?;
-                Some((*asset0, *asset1, amount))
+                Some(AmmBurn {
+                    asset0: *asset0,
+                    asset1: *asset1,
+                    amount0,
+                    amount1,
+                    lp_token_burn,
+                })
             }
             _ => None,
         }
     }
 
-    /// If the tx is an AMM mint, returns the pair assets and deposit amounts
-    pub fn amm_mint(&self) -> Option<(Hash, u64, Hash, u64)> {
+    /// If the tx is an AMM mint, returns the corresponding [`AmmMint`].
+    pub fn amm_mint(&self) -> Option<AmmMint> {
         match self.transaction.data {
-            Some(TransactionData::AmmMint { amount0, amount1 }) => {
-                match self.unique_spent_bitassets().get(0..=1) {
-                    Some([(first_asset, _), (second_asset, _)]) => {
-                        let mut assets = [first_asset, second_asset];
-                        assets.sort();
-                        let [asset0, asset1] = assets;
-                        Some((*asset0, amount0, *asset1, amount1))
-                    }
-                    _ => None,
+            Some(TransactionData::AmmMint {
+                amount0,
+                amount1,
+                lp_token_mint,
+            }) => match self.unique_spent_bitassets().get(0..=1) {
+                Some([(first_asset, _), (second_asset, _)]) => {
+                    let mut assets = [first_asset, second_asset];
+                    assets.sort();
+                    let [asset0, asset1] = assets;
+                    Some(AmmMint {
+                        asset0: *asset0,
+                        asset1: *asset1,
+                        amount0,
+                        amount1,
+                        lp_token_mint,
+                    })
                 }
-            }
+                _ => None,
+            },
             _ => None,
         }
     }
 
-    /** If the tx is an AMM swap, returns the pair assets and trade amounts.
-     *  The first asset is spent in the tx.
-     *  The second asset is purchased from the AMM pool. */
-    pub fn amm_swap(&self) -> Option<(Hash, u64, Hash, u64)> {
+    /// If the tx is an AMM swap, returns the corresponding [`AmmSwap`].
+    pub fn amm_swap(&self) -> Option<AmmSwap> {
         match self.transaction.data {
-            Some(TransactionData::AmmSwap { pair_asset }) => {
-                let (spent_bitasset, spent_bitasset_input_value) =
+            Some(TransactionData::AmmSwap {
+                amount_spent,
+                amount_receive,
+                pair_asset,
+            }) => {
+                let (spent_bitasset, _) =
                     *self.unique_spent_bitassets().first()?;
-                let output_bitasset_total_values =
-                    self.output_bitasset_total_values().take(2).collect_vec();
-                let first_two_output_bitasset_values =
-                    output_bitasset_total_values.get(0..=1);
-                match first_two_output_bitasset_values {
-                    Some(
-                        [(asset0, Some(amount0)), (asset1, Some(amount1))],
-                    ) => {
-                        if *asset0 == pair_asset && *asset1 == spent_bitasset {
-                            // Amount of spent BitAsset used for swap
-                            let swap_amount = spent_bitasset_input_value
-                                .checked_sub(*amount1)?;
-                            Some((
-                                spent_bitasset,
-                                swap_amount,
-                                pair_asset,
-                                *amount0,
-                            ))
-                        } else if *asset1 == pair_asset
-                            && *asset0 == spent_bitasset
-                        {
-                            // Amount of spent BitAsset used for swap
-                            let swap_amount = spent_bitasset_input_value
-                                .checked_sub(*amount0)?;
-                            Some((
-                                spent_bitasset,
-                                swap_amount,
-                                pair_asset,
-                                *amount1,
-                            ))
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                }
+                Some(AmmSwap {
+                    asset_spend: spent_bitasset,
+                    asset_receive: pair_asset,
+                    amount_spend: amount_spent,
+                    amount_receive,
+                })
             }
             _ => None,
         }
@@ -801,7 +892,7 @@ impl FilledTransaction {
     }
 
     /// If the tx is a valid BitAsset mint, returns the BitAsset ID and mint amount
-    pub fn mint(&self) -> Option<(Hash, u64)> {
+    pub fn bitasset_mint(&self) -> Option<(Hash, u64)> {
         match self.transaction.data {
             Some(TransactionData::BitAssetMint(amount)) => {
                 let (_, control_output) =
@@ -931,9 +1022,9 @@ impl FilledTransaction {
 
     /** Returns an iterator over total value for each BitAsset that must
      *  appear in the outputs, in order.
-     *  The total output value can possibly overflow in a mint transaction,
+     *  The total output value can possibly over/underflow in a transaction,
      *  so the total output values are [`Option<u64>`],
-     *  where `None` indicates overflow. */
+     *  where `None` indicates over/underflow. */
     fn output_bitasset_total_values(
         &self,
     ) -> impl Iterator<Item = (Hash, Option<u64>)> + '_ {
@@ -954,25 +1045,171 @@ impl FilledTransaction {
                 }) if initial_supply != 0 => Some((name_hash, initial_supply)),
                 _ => None,
             };
-        let mint = self.mint();
+        let bitasset_mint = self.bitasset_mint();
+        let (mut amm_burn0, mut amm_burn1) = match self.amm_burn() {
+            Some(AmmBurn {
+                asset0,
+                asset1,
+                amount0,
+                amount1,
+                lp_token_burn: _,
+            }) => (Some((asset0, amount0)), Some((asset1, amount1))),
+            None => (None, None),
+        };
+        let (mut amm_mint0, mut amm_mint1) = match self.amm_mint() {
+            Some(AmmMint {
+                asset0,
+                asset1,
+                amount0,
+                amount1,
+                lp_token_mint: _,
+            }) => (Some((asset0, amount0)), Some((asset1, amount1))),
+            None => (None, None),
+        };
+        // FIXME
+        let (mut amm_swap_spend, mut amm_swap_receive) = match self.amm_swap() {
+            Some(AmmSwap {
+                asset_spend,
+                asset_receive,
+                amount_spend,
+                amount_receive,
+            }) => (
+                Some((asset_spend, amount_spend)),
+                Some((asset_receive, amount_receive)),
+            ),
+            None => (None, None),
+        };
         self.unique_spent_bitassets()
             .into_iter()
             .map(move |(bitasset, total_value)| {
-                let total_value = match mint {
-                    Some((mint_bitasset, mint_amount))
-                        if mint_bitasset == bitasset =>
-                    {
-                        total_value.checked_add(mint_amount)
-                    }
-                    _ => Some(total_value),
+                let total_value = if let Some((mint_bitasset, mint_amount)) =
+                    bitasset_mint
+                    && mint_bitasset == bitasset
+                {
+                    total_value.checked_add(mint_amount)
+                } else if let Some((burn_asset, burn_amount)) = amm_burn0
+                    && burn_asset == bitasset
+                {
+                    amm_burn0 = None;
+                    total_value.checked_add(burn_amount)
+                } else if let Some((burn_asset, burn_amount)) = amm_burn1
+                    && burn_asset == bitasset
+                {
+                    amm_burn1 = None;
+                    total_value.checked_add(burn_amount)
+                } else if let Some((mint_asset, mint_amount)) = amm_mint0
+                    && mint_asset == bitasset
+                {
+                    amm_mint0 = None;
+                    total_value.checked_sub(mint_amount)
+                } else if let Some((mint_asset, mint_amount)) = amm_mint1
+                    && mint_asset == bitasset
+                {
+                    amm_mint1 = None;
+                    total_value.checked_sub(mint_amount)
+                } else if let Some((swap_spend_asset, swap_spend_amount)) =
+                    amm_swap_spend
+                    && swap_spend_asset == bitasset
+                {
+                    amm_swap_spend = None;
+                    total_value.checked_sub(swap_spend_amount)
+                } else if let Some((swap_receive_asset, swap_receive_amount)) =
+                    amm_swap_receive
+                    && swap_receive_asset == bitasset
+                {
+                    amm_swap_receive = None;
+                    total_value.checked_add(swap_receive_amount)
+                } else {
+                    Some(total_value)
                 };
                 (bitasset, total_value)
             })
+            .chain(amm_burn0.map(|(burn_asset, burn_amount)| {
+                (burn_asset, Some(burn_amount))
+            }))
+            .chain(amm_burn1.map(|(burn_asset, burn_amount)| {
+                (burn_asset, Some(burn_amount))
+            }))
+            .chain(amm_mint0.map(|(mint_asset, _)|
+                    /* If the BitAssets are not already accounted for,
+                    * indicate an underflow */
+                    (mint_asset, None)))
+            .chain(amm_mint1.map(|(mint_asset, _)|
+                    /* If the BitAssets are not already accounted for,
+                    * indicate an underflow */
+                    (mint_asset, None)))
+            .chain(amm_swap_spend.map(|(spend_asset, _)|
+                    /* If the BitAssets are not already accounted for,
+                    * indicate an underflow */
+                    (spend_asset, None)))
+            .chain(amm_swap_receive.map(|(receive_asset, receive_amount)| {
+                (receive_asset, Some(receive_amount))
+            }))
             .chain(
                 new_bitasset_value.map(|(bitasset, total_value)| {
                     (bitasset, Some(total_value))
                 }),
             )
+    }
+
+    /** Returns an iterator over total amount for each LP token that must
+     *  appear in the outputs, in order.
+     *  The total output value can possibly over/underflow,
+     *  so the total output values are [`Option<u64>`],
+     *  where `None` indicates over/underflow. */
+    fn output_lp_token_total_amounts(
+        &self,
+    ) -> impl Iterator<Item = (Hash, Hash, Option<u64>)> + '_ {
+        /* If this tx is an AMM burn, this is the corresponding BitAsset IDs
+        and token amount of the output corresponding to the newly created
+        AMM LP position. */
+        let mut amm_burn: Option<AmmBurn> = self.amm_burn();
+        /* If this tx is an AMM mint, this is the corresponding BitAsset IDs
+        and token amount of the output corresponding to the newly created
+        AMM LP position. */
+        let mut amm_mint: Option<AmmMint> = self.amm_mint();
+        self.unique_spent_lp_tokens()
+            .into_iter()
+            .map(move |(asset0, asset1, total_amount)| {
+                let total_value = if let Some(AmmBurn {
+                    asset0: burn_asset0,
+                    asset1: burn_asset1,
+                    amount0: _,
+                    amount1: _,
+                    lp_token_burn,
+                }) = amm_burn
+                    && (burn_asset0, burn_asset1) == (asset0, asset1)
+                {
+                    amm_burn = None;
+                    total_amount.checked_sub(lp_token_burn)
+                } else if let Some(AmmMint {
+                    asset0: mint_asset0,
+                    asset1: mint_asset1,
+                    amount0: _,
+                    amount1: _,
+                    lp_token_mint,
+                }) = amm_mint
+                    && (mint_asset0, mint_asset1) == (asset0, asset1)
+                {
+                    amm_mint = None;
+                    total_amount.checked_add(lp_token_mint)
+                } else {
+                    Some(total_amount)
+                };
+                (asset0, asset1, total_value)
+            })
+            .chain(amm_burn.map(|amm_burn| {
+                /* If the LP tokens are not already accounted for,
+                 * indicate an underflow */
+                (amm_burn.asset0, amm_burn.asset1, None)
+            }))
+            .chain(amm_mint.map(|amm_mint| {
+                (
+                    amm_mint.asset0,
+                    amm_mint.asset1,
+                    Some(amm_mint.lp_token_mint),
+                )
+            }))
     }
 
     /** Compute the filled content for BitAsset reservation outputs.
@@ -1039,6 +1276,8 @@ impl FilledTransaction {
     pub fn filled_outputs(&self) -> Option<Vec<FilledOutput>> {
         let mut output_bitasset_total_values =
             self.output_bitasset_total_values().peekable();
+        let mut output_lp_token_total_amounts =
+            self.output_lp_token_total_amounts().peekable();
         let mut filled_bitasset_control_output_content =
             self.filled_bitasset_control_output_content();
         let mut filled_reservation_output_content =
@@ -1048,15 +1287,29 @@ impl FilledTransaction {
             .map(|output| {
                 let content = match output.content.clone() {
                     Content::AmmLpToken(amount) => {
-                        if let Some((asset0, _, asset1, _)) = self.amm_mint() {
-                            FilledContent::AmmLpToken {
-                                asset0,
-                                asset1,
-                                amount,
+                        let (asset0, asset1, remaining_amount) =
+                            output_lp_token_total_amounts.peek_mut()?;
+                        let remaining_amount = remaining_amount.as_mut()?;
+                        let filled_content = FilledContent::AmmLpToken {
+                            asset0: *asset0,
+                            asset1: *asset1,
+                            amount,
+                        };
+                        match amount.cmp(remaining_amount) {
+                            Ordering::Greater => {
+                                // Invalid tx, return `None`
+                                return None;
                             }
-                        } else {
-                            return None;
+                            Ordering::Equal => {
+                                // Advance the iterator to the next LP token
+                                let _ = output_lp_token_total_amounts.next()?;
+                            }
+                            Ordering::Less => {
+                                // Decrement the remaining value for the current LP token
+                                *remaining_amount -= amount;
+                            }
                         }
+                        filled_content
                     }
                     Content::BitAsset(value) => {
                         let (bitasset, remaining_value) =
