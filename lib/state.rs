@@ -1107,6 +1107,37 @@ impl State {
             outstanding_lp_tokens,
         } = self.amm_pools.get(rwtxn, &pair)?.unwrap_or_default();
         let product: u128 = reserve0 as u128 * reserve1 as u128;
+
+        let spend_after_fee = ((amount_spend as u128 * 997) / 1000) as u64;
+        let _spend_fee = amount_spend
+            .checked_sub(spend_after_fee)
+            .ok_or(Error::InvalidAmmSwap)?;
+
+        let (spend_asset_reserve, receive_asset_reserve) =
+            if asset_spend == pair.0 {
+                (reserve0, reserve1)
+            } else {
+                (reserve1, reserve0)
+            };
+        // used for computing product for swap price
+        let effective_spend_asset_reserve =
+            spend_asset_reserve + spend_after_fee;
+        let new_receive_asset_reserve_before_fee: u64 = product
+            .div_ceil(effective_spend_asset_reserve as u128)
+            .try_into()
+            .map_err(|_| Error::InvalidAmmSwap)?;
+        let amount_receive_before_fee: u64 = receive_asset_reserve
+            .checked_sub(new_receive_asset_reserve_before_fee)
+            .ok_or(Error::InvalidAmmSwap)?;
+        let amount_receive_after_fee =
+            ((amount_receive_before_fee as u128 * 997) / 1000) as u64;
+        let _receive_fee = amount_receive_before_fee
+            .checked_sub(amount_receive_before_fee)
+            .ok_or(Error::InvalidAmmSwap)?;
+        if amount_receive != amount_receive_after_fee {
+            return Err(Error::InvalidAmmSwap);
+        }
+
         let (new_reserve0, new_reserve1) = if asset_spend == pair.0 {
             let new_reserve1 = reserve1
                 .checked_sub(amount_receive)
@@ -1117,10 +1148,6 @@ impl State {
                 .checked_sub(amount_receive)
                 .ok_or(Error::InsufficientLiquidity)?;
             (new_reserve0, reserve1 + amount_spend)
-        };
-        let new_product: u128 = new_reserve0 as u128 * new_reserve1 as u128;
-        if new_product != product {
-            return Err(Error::AmmPoolInvariant);
         };
         let new_amm_pool_state = AmmPoolState {
             reserve0: new_reserve0,
