@@ -192,6 +192,15 @@ pub enum TransactionData {
     BitAssetMint(u64),
     BitAssetUpdate(Box<BitAssetDataUpdates>),
     DutchAuctionCreate(DutchAuctionParams),
+    DutchAuctionBid {
+        auction_id: DutchAuctionId,
+        /// Asset to receive in the auction
+        receive_asset: Hash,
+        /// Quantity to purchase in the auction
+        quantity: u64,
+        /// Total bid size, in terms of the quote asset
+        bid_size: u64,
+    },
 }
 
 pub type TxData = TransactionData;
@@ -285,6 +294,18 @@ pub struct AmmMint {
 /// Struct describing an AMM swap
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AmmSwap {
+    pub asset_spend: Hash,
+    pub asset_receive: Hash,
+    /// Amount of spend asset spent
+    pub amount_spend: u64,
+    //// Amount of receive asset received
+    pub amount_receive: u64,
+}
+
+/// Struct describing a Dutch auction bid
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DutchAuctionBid {
+    pub auction_id: DutchAuctionId,
     pub asset_spend: Hash,
     pub asset_receive: Hash,
     /// Amount of spend asset spent
@@ -950,6 +971,30 @@ impl FilledTransaction {
         }
     }
 
+    /** If the tx is a Dutch auction bid,
+     *  returns the corresponding [`DutchAuctionBid`]. */
+    pub fn dutch_auction_bid(&self) -> Option<DutchAuctionBid> {
+        match self.transaction.data {
+            Some(TransactionData::DutchAuctionBid {
+                auction_id,
+                receive_asset,
+                quantity,
+                bid_size,
+            }) => {
+                let unique_spent_bitassets = self.unique_spent_bitassets();
+                let (asset_spend, _) = unique_spent_bitassets.first()?;
+                Some(DutchAuctionBid {
+                    auction_id,
+                    asset_spend: *asset_spend,
+                    asset_receive: receive_asset,
+                    amount_spend: bid_size,
+                    amount_receive: quantity,
+                })
+            }
+            _ => None,
+        }
+    }
+
     /** If the tx is a Dutch auction creation,
      *  returns the corresponding [`DutchAuctionParams`]. */
     pub fn dutch_auction_create(&self) -> Option<DutchAuctionParams> {
@@ -1158,6 +1203,20 @@ impl FilledTransaction {
             ),
             None => (None, None),
         };
+        let (mut dutch_auction_bid_spend, mut dutch_auction_bid_receive) =
+            match self.dutch_auction_bid() {
+                Some(DutchAuctionBid {
+                    auction_id: _,
+                    asset_spend,
+                    asset_receive,
+                    amount_spend,
+                    amount_receive,
+                }) => (
+                    Some((asset_spend, amount_spend)),
+                    Some((asset_receive, amount_receive)),
+                ),
+                None => (None, None),
+            };
         let mut dutch_auction_create_spend =
             self.dutch_auction_create().map(|auction_params| {
                 (auction_params.base_asset, auction_params.base_amount)
@@ -1202,6 +1261,18 @@ impl FilledTransaction {
                 {
                     amm_swap_receive = None;
                     total_value.checked_add(swap_receive_amount)
+                } else if let Some((receive_asset, receive_amount)) =
+                    dutch_auction_bid_receive
+                    && receive_asset == bitasset
+                {
+                    dutch_auction_bid_receive = None;
+                    total_value.checked_add(receive_amount)
+                } else if let Some((spend_asset, spend_amount)) =
+                    dutch_auction_bid_spend
+                    && spend_asset == bitasset
+                {
+                    dutch_auction_bid_spend = None;
+                    total_value.checked_sub(spend_amount)
                 } else if let Some((spend_asset, spend_amount)) =
                     dutch_auction_create_spend
                     && spend_asset == bitasset
@@ -1234,6 +1305,15 @@ impl FilledTransaction {
             .chain(amm_swap_receive.map(|(receive_asset, receive_amount)| {
                 (receive_asset, Some(receive_amount))
             }))
+            .chain(dutch_auction_bid_receive.map(
+                |(receive_asset, receive_amount)| {
+                    (receive_asset, Some(receive_amount))
+                },
+            ))
+            .chain(dutch_auction_bid_spend.map(|(spend_asset, _)|
+                    /* If the BitAssets are not already accounted for,
+                    * indicate an underflow */
+                    (spend_asset, None)))
             .chain(dutch_auction_create_spend.map(|(spend_asset, _)|
                     /* If the BitAssets are not already accounted for,
                     * indicate an underflow */

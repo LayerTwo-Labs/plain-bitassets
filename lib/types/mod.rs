@@ -17,10 +17,10 @@ pub use address::*;
 pub use hashes::{BlockHash, Hash, MerkleRoot, Txid};
 pub use transaction::{
     AmmBurn, AmmMint, AmmSwap, AuthorizedTransaction, BitAssetData,
-    BitAssetDataUpdates, Content as OutputContent, DutchAuctionId,
-    DutchAuctionParams, FilledContent as FilledOutputContent, FilledOutput,
-    FilledTransaction, InPoint, OutPoint, Output, SpentOutput, Transaction,
-    TxData, Update,
+    BitAssetDataUpdates, Content as OutputContent, DutchAuctionBid,
+    DutchAuctionId, DutchAuctionParams, FilledContent as FilledOutputContent,
+    FilledOutput, FilledTransaction, InPoint, OutPoint, Output, SpentOutput,
+    Transaction, TxData, Update,
 };
 
 /// (de)serialize as Display/FromStr for human-readable forms like json,

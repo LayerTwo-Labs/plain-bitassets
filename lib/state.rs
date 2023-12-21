@@ -50,6 +50,27 @@ pub struct BitAssetData {
     total_supply: RollBack<u64>,
 }
 
+/// Errors when bidding on a Dutch auction
+#[derive(Debug, thiserror::Error)]
+pub enum DutchAuctionBidError {
+    #[error("Auction has already ended")]
+    AuctionEnded,
+    #[error("Auction has not started yet")]
+    AuctionNotStarted,
+    #[error("Incorrect receive asset specified")]
+    IncorrectReceiveAsset,
+    #[error("Incorrect spend asset")]
+    IncorrectSpendAsset,
+    #[error("Tx can only be applied at the specified price")]
+    InvalidPrice,
+    #[error("Invalid TxData")]
+    InvalidTxData,
+    #[error("Auction not found")]
+    MissingAuction,
+    #[error("Bid quantity is more than is offered in the auction")]
+    QuantityTooLarge,
+}
+
 /// Errors when creating a Dutch auction
 #[derive(Debug, thiserror::Error)]
 pub enum DutchAuctionCreateError {
@@ -57,6 +78,11 @@ pub enum DutchAuctionCreateError {
     Expired,
     #[error("Invalid tx; Final price cannot be greater than initial price")]
     FinalPrice,
+    #[error(
+        "Invalid tx; For a single-block auction, 
+             final price must be exactly equal to initial price"
+    )]
+    PriceMismatch,
     #[error("Invalid tx; Auction duration cannot be `0` blocks")]
     ZeroDuration,
 }
@@ -79,6 +105,8 @@ pub enum Error {
     BitAssetAlreadyRegistered { name_hash: Hash },
     #[error("bundle too heavy {weight} > {max_weight}")]
     BundleTooHeavy { weight: u64, max_weight: u64 },
+    #[error(transparent)]
+    DutchAuctionBid(#[from] DutchAuctionBidError),
     #[error(transparent)]
     DutchAuctionCreate(#[from] DutchAuctionCreateError),
     #[error("failed to fill tx output contents: invalid transaction")]
@@ -1298,7 +1326,99 @@ impl State {
         Ok(())
     }
 
-    // Apply dutch auction create
+    // Apply Dutch auction bid
+    fn apply_dutch_auction_bid(
+        &self,
+        rwtxn: &mut RwTxn,
+        filled_tx: &FilledTransaction,
+        height: u32,
+    ) -> Result<(), Error> {
+        let DutchAuctionBid {
+            auction_id,
+            asset_spend,
+            asset_receive,
+            amount_spend,
+            amount_receive,
+        } = filled_tx
+            .dutch_auction_bid()
+            .ok_or(DutchAuctionBidError::InvalidTxData)?;
+        let mut auction_params = self
+            .dutch_auctions
+            .get(rwtxn, &auction_id)?
+            .ok_or(DutchAuctionBidError::MissingAuction)?;
+        let DutchAuctionParams {
+            start_block,
+            duration,
+            base_asset,
+            base_amount,
+            quote_asset,
+            initial_price,
+            final_price,
+        } = &mut auction_params;
+        if asset_receive != *base_asset {
+            do yeet DutchAuctionBidError::IncorrectReceiveAsset
+        }
+        if asset_spend != *quote_asset {
+            do yeet DutchAuctionBidError::IncorrectSpendAsset
+        }
+        if height < *start_block {
+            do yeet DutchAuctionBidError::AuctionNotStarted
+        };
+        // Blocks elapsed since start of the auction
+        let elapsed_blocks = height - *start_block;
+        let end_block = start_block.saturating_add(*duration - 1);
+        if height > end_block {
+            do yeet DutchAuctionBidError::AuctionEnded
+        };
+        if amount_receive > *base_amount {
+            do yeet DutchAuctionBidError::QuantityTooLarge
+        };
+        // Calculate current price
+        let price = if *duration == 1 {
+            *initial_price
+        } else {
+            let price_decrease: u128 = {
+                /* ((initial - final) / (duration - 1)) * elapsed
+                == ((initial - final) * elapsed) / (duration - 1) */
+                let max_price_decrease =
+                    (*initial_price - *final_price) as u128;
+                (max_price_decrease * elapsed_blocks as u128)
+                    / (*duration - 1) as u128
+            };
+            // This is safe, as `(elapsed_blocks / (duration - 1)) < 1`
+            let price_decrease = {
+                assert!(elapsed_blocks / (*duration - 1) < 1);
+                price_decrease as u64
+            };
+            *initial_price - price_decrease
+        };
+        // Calculate size for this bid
+        let size = {
+            /* Truncation to `u64` here is safe as
+            `(amount_receive / base_amount) < 1` */
+            (price as u128 * amount_receive as u128)
+                .div_ceil(*base_amount as u128) as u64
+        };
+        if size != amount_spend {
+            do yeet DutchAuctionBidError::InvalidPrice
+        };
+        let new_base_amount = *base_amount - amount_receive;
+        *final_price = {
+            /* Truncation to `u64` here is safe as
+            `(new_base_amount / base_amount) < 1` */
+            (*final_price as u128 * new_base_amount as u128)
+                .div_ceil(*base_amount as u128) as u64
+        };
+        *base_amount = new_base_amount;
+        *initial_price = price - size;
+        *start_block = height;
+        *duration -= elapsed_blocks;
+        self.dutch_auctions
+            .put(rwtxn, &auction_id, &auction_params)?;
+        Ok(())
+    }
+
+    // Apply Dutch auction create
     fn apply_dutch_auction_create(
         &self,
         rwtxn: &mut RwTxn,
@@ -1316,12 +1436,18 @@ impl State {
         if height >= start_block {
             do yeet DutchAuctionCreateError::Expired;
         };
-        if duration == 0 {
-            do yeet DutchAuctionCreateError::ZeroDuration;
-        };
         if final_price > initial_price {
             do yeet DutchAuctionCreateError::FinalPrice;
-        }
+        };
+        match duration {
+            0 => do yeet DutchAuctionCreateError::ZeroDuration,
+            1 => {
+                if final_price != initial_price {
+                    do yeet DutchAuctionCreateError::PriceMismatch
+                }
+            }
+            _ => (),
+        };
         let dutch_auction_id = DutchAuctionId(filled_tx.txid());
         self.dutch_auctions.put(
             rwtxn,
@@ -1443,6 +1569,10 @@ impl State {
                         (**bitasset_updates).clone(),
                         height,
                     )?;
+                }
+                Some(TxData::DutchAuctionBid { .. }) => {
+                    let () =
+                        self.apply_dutch_auction_bid(txn, &filled_tx, height)?;
                 }
                 Some(TxData::DutchAuctionCreate(dutch_auction_params)) => {
                     let () = self.apply_dutch_auction_create(
