@@ -87,6 +87,29 @@ pub enum DutchAuctionCreateError {
     ZeroDuration,
 }
 
+/// Errors when collecting the proceeds from a Dutch auction
+#[derive(Debug, thiserror::Error)]
+pub enum DutchAuctionCollectError {
+    #[error("Auction has not ended yet")]
+    AuctionNotFinished,
+    #[error("Incorrect offered asset")]
+    IncorrectOfferedAsset,
+    #[error(
+        "Offered asset amount must be exactly equal to the amount remaining"
+    )]
+    IncorrectOfferedAssetAmount,
+    #[error("Incorrect receive asset specified")]
+    IncorrectReceiveAsset,
+    #[error(
+        "Receive asset amount must be exactly equal to the amount received"
+    )]
+    IncorrectReceiveAssetAmount,
+    #[error("Invalid TxData")]
+    InvalidTxData,
+    #[error("Auction not found")]
+    MissingAuction,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("failed to verify authorization")]
@@ -109,6 +132,8 @@ pub enum Error {
     DutchAuctionBid(#[from] DutchAuctionBidError),
     #[error(transparent)]
     DutchAuctionCreate(#[from] DutchAuctionCreateError),
+    #[error(transparent)]
+    DutchAuctionCollect(#[from] DutchAuctionCollectError),
     #[error("failed to fill tx output contents: invalid transaction")]
     FillTxOutputContentsFailed,
     #[error("heed error")]
@@ -121,6 +146,10 @@ pub enum Error {
     InvalidAmmMint,
     #[error("Invalid AMM swap")]
     InvalidAmmSwap,
+    #[error("Invalid Dutch auction bid")]
+    InvalidDutchAuctionBid,
+    #[error("Invalid Dutch auction collect")]
+    InvalidDutchAuctionCollect,
     #[error(
         "The last output in a BitAsset registration tx must be a control coin"
     )]
@@ -155,6 +184,8 @@ pub enum Error {
     SignatureError(#[from] ed25519_dalek::SignatureError),
     #[error("Too few BitAssets to mint an AMM position")]
     TooFewBitAssetsToAmmMint,
+    #[error("Too few BitAssets to create a Dutch auction")]
+    TooFewBitAssetsToDutchAuctionCreate,
     #[error("Too few BitAsset control coin outputs")]
     TooFewBitAssetControlOutputs,
     #[error("Mint would cause total supply to overflow")]
@@ -198,6 +229,27 @@ pub struct AmmPoolState {
     pub outstanding_lp_tokens: u64,
 }
 
+/// Parameters of a Dutch Auction
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct DutchAuctionState {
+    /// Block height at which the auction starts
+    pub start_block: u32,
+    /// Auction duration, in blocks
+    pub duration: u32,
+    /// The asset to be auctioned
+    pub base_asset: Hash,
+    /// The amount of the base asset to be auctioned
+    pub base_amount: u64,
+    /// The asset in which the auction is to be quoted
+    pub quote_asset: Hash,
+    /// The amount of the quote asset that has been received
+    pub quote_amount: u64,
+    /// Initial price
+    pub initial_price: u64,
+    /// Final price
+    pub final_price: u64,
+}
+
 #[derive(Clone)]
 pub struct State {
     /// Associates ordered pairs of BitAssets to their AMM pool states
@@ -211,10 +263,8 @@ pub struct State {
     /// Associates BitAsset IDs (name hashes) with BitAsset data
     pub bitassets: Database<SerdeBincode<Hash>, SerdeBincode<BitAssetData>>,
     /// Associates Dutch auction sequence numbers with auction params
-    pub dutch_auctions: Database<
-        SerdeBincode<DutchAuctionId>,
-        SerdeBincode<DutchAuctionParams>,
-    >,
+    pub dutch_auctions:
+        Database<SerdeBincode<DutchAuctionId>, SerdeBincode<DutchAuctionState>>,
     pub utxos: Database<SerdeBincode<OutPoint>, SerdeBincode<FilledOutput>>,
     pub stxos: Database<SerdeBincode<OutPoint>, SerdeBincode<SpentOutput>>,
     pub pending_withdrawal_bundle:
@@ -751,6 +801,22 @@ impl State {
      *    * There must be at least one BitAsset input
      *    * The number of unique BitAsset outputs must be one less than,
      *      one greater than, or equal to, the number of unique BitAsset inputs.
+     *  * If the tx is a Dutch auction create, then
+     *    * There must be at least one unique BitAsset input
+     *    * The number of unique BitAsset outputs must be at most equal to the
+     *      number of unique BitAsset inputs
+     *    * The number of unique BitAsset inputs must be at most one more than
+     *      the number of unique BitAsset outputs.
+     *  * If the tx is a Dutch auction bid, then
+     *    * There must be at least one BitAsset input
+     *    * The number of unique BitAsset outputs must be one less than,
+     *      one greater than, or equal to, the number of unique BitAsset inputs.
+     *  * If the tx is a Dutch auction collect, then
+     *    * There must be at least one unique BitAsset output
+     *    * The number of unique BitAsset outputs must be at most two more than
+     *      the number of unique BitAsset inputs
+     *    * The number of unique BitAsset inputs must be at most equal to the
+     *      number of unique BitAsset outputs
      * */
     pub fn validate_bitassets(
         &self,
@@ -789,7 +855,7 @@ impl State {
         {
             return Err(Error::TooFewBitAssetsToAmmMint);
         };
-        if tx.is_amm_swap()
+        if (tx.is_amm_swap() || tx.is_dutch_auction_bid())
             && (n_unique_bitasset_inputs < 1
                 || !{
                     let min_unique_bitasset_outputs =
@@ -800,7 +866,21 @@ impl State {
                         .contains(&n_unique_bitasset_outputs)
                 })
         {
-            return Err(Error::InvalidAmmSwap);
+            return Err(Error::InvalidDutchAuctionBid);
+        };
+        if tx.is_dutch_auction_create()
+            && (n_unique_bitasset_inputs < 1
+                || n_unique_bitasset_outputs > n_unique_bitasset_inputs
+                || n_unique_bitasset_inputs > n_unique_bitasset_outputs + 1)
+        {
+            return Err(Error::TooFewBitAssetsToDutchAuctionCreate);
+        };
+        if tx.is_dutch_auction_collect()
+            && (n_unique_bitasset_outputs < 1
+                || n_unique_bitasset_inputs > n_unique_bitasset_outputs
+                || n_unique_bitasset_outputs > n_unique_bitasset_inputs + 2)
+        {
+            return Err(Error::InvalidDutchAuctionCollect);
         };
         if let Some(TxData::BitAssetRegistration {
             name_hash,
@@ -1346,12 +1426,13 @@ impl State {
             .dutch_auctions
             .get(rwtxn, &auction_id)?
             .ok_or(DutchAuctionBidError::MissingAuction)?;
-        let DutchAuctionParams {
+        let DutchAuctionState {
             start_block,
             duration,
             base_asset,
             base_amount,
             quote_asset,
+            quote_amount,
             initial_price,
             final_price,
         } = &mut auction_params;
@@ -1413,6 +1494,7 @@ impl State {
         *initial_price = price - size;
         *start_block = height;
         *duration -= elapsed_blocks;
+        *quote_amount += amount_spend;
         self.dutch_auctions
             .put(rwtxn, &auction_id, &auction_params)?;
         Ok(())
@@ -1429,9 +1511,11 @@ impl State {
         let DutchAuctionParams {
             start_block,
             duration,
-            final_price,
+            base_asset,
+            base_amount,
+            quote_asset,
             initial_price,
-            ..
+            final_price,
         } = dutch_auction_params;
         if height >= start_block {
             do yeet DutchAuctionCreateError::Expired;
@@ -1449,11 +1533,68 @@ impl State {
             _ => (),
         };
         let dutch_auction_id = DutchAuctionId(filled_tx.txid());
+        let dutch_auction_state = DutchAuctionState {
+            start_block,
+            duration,
+            base_asset,
+            base_amount,
+            quote_asset,
+            quote_amount: 0,
+            initial_price,
+            final_price,
+        };
         self.dutch_auctions.put(
             rwtxn,
             &dutch_auction_id,
-            &dutch_auction_params,
+            &dutch_auction_state,
         )?;
+        Ok(())
+    }
+
+    // Apply Dutch auction collect
+    fn apply_dutch_auction_collect(
+        &self,
+        rwtxn: &mut RwTxn,
+        filled_tx: &FilledTransaction,
+        height: u32,
+    ) -> Result<(), Error> {
+        let DutchAuctionCollect {
+            auction_id,
+            asset_offered,
+            asset_receive,
+            amount_offered_remaining,
+            amount_received,
+        } = filled_tx
+            .dutch_auction_collect()
+            .ok_or(DutchAuctionCollectError::InvalidTxData)?;
+        let DutchAuctionState {
+            start_block,
+            duration,
+            base_asset,
+            base_amount,
+            quote_asset,
+            quote_amount,
+            ..
+        } = self
+            .dutch_auctions
+            .get(rwtxn, &auction_id)?
+            .ok_or(DutchAuctionCollectError::MissingAuction)?;
+        if base_asset != asset_offered {
+            do yeet DutchAuctionCollectError::IncorrectOfferedAsset
+        }
+        if quote_asset != asset_receive {
+            do yeet DutchAuctionCollectError::IncorrectReceiveAsset
+        }
+        if height < start_block.saturating_add(duration) {
+            do yeet DutchAuctionCollectError::AuctionNotFinished
+        }
+        if amount_offered_remaining != base_amount {
+            do yeet DutchAuctionCollectError::IncorrectOfferedAssetAmount
+        }
+        if amount_received != quote_amount {
+            do yeet DutchAuctionCollectError::IncorrectReceiveAssetAmount
+        }
+        self.dutch_auctions.delete(rwtxn, &auction_id)?;
         Ok(())
     }
 
@@ -1581,6 +1722,10 @@ impl State {
                         *dutch_auction_params,
                         height,
                     )?;
+                }
+                Some(TxData::DutchAuctionCollect { .. }) => {
+                    let () = self
+                        .apply_dutch_auction_collect(txn, &filled_tx, height)?;
                 }
             }
         }

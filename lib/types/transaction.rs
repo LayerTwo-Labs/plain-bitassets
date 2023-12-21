@@ -201,6 +201,16 @@ pub enum TransactionData {
         /// Total bid size, in terms of the quote asset
         bid_size: u64,
     },
+    DutchAuctionCollect {
+        /// Base asset
+        asset_offered: Hash,
+        /// Quote asset
+        asset_receive: Hash,
+        /// Amount of the offered base asset
+        amount_offered_remaining: u64,
+        /// Amount of the received quote asset
+        amount_received: u64,
+    },
 }
 
 pub type TxData = TransactionData;
@@ -314,6 +324,18 @@ pub struct DutchAuctionBid {
     pub amount_receive: u64,
 }
 
+/// Struct describing a Dutch auction collect
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DutchAuctionCollect {
+    pub auction_id: DutchAuctionId,
+    pub asset_offered: Hash,
+    pub asset_receive: Hash,
+    /// Amount of offered asset remaining
+    pub amount_offered_remaining: u64,
+    //// Amount of receive asset received
+    pub amount_received: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthorizedTransaction {
     pub transaction: Transaction,
@@ -422,9 +444,19 @@ impl TxData {
         matches!(self, Self::AmmSwap { .. })
     }
 
+    /// `true` if the tx data corresponds to a Dutch auction bid
+    pub fn is_dutch_auction_bid(&self) -> bool {
+        matches!(self, Self::DutchAuctionBid { .. })
+    }
+
     /// `true` if the tx data corresponds to a Dutch auction creation
     pub fn is_dutch_auction_create(&self) -> bool {
         matches!(self, Self::DutchAuctionCreate(_))
+    }
+
+    /// `true` if the tx data corresponds to a Dutch auction collect
+    pub fn is_dutch_auction_collect(&self) -> bool {
+        matches!(self, Self::DutchAuctionCollect { .. })
     }
 
     /// `true` if the tx data corresponds to a reservation
@@ -499,10 +531,26 @@ impl Transaction {
         }
     }
 
+    /// `true` if the tx data corresponds to a Dutch auction bid
+    pub fn is_dutch_auction_bid(&self) -> bool {
+        match &self.data {
+            Some(tx_data) => tx_data.is_dutch_auction_bid(),
+            None => false,
+        }
+    }
+
     /// `true` if the tx data corresponds to a Dutch auction creation
     pub fn is_dutch_auction_create(&self) -> bool {
         match &self.data {
             Some(tx_data) => tx_data.is_dutch_auction_create(),
+            None => false,
+        }
+    }
+
+    /// `true` if the tx data corresponds to a Dutch auction collect
+    pub fn is_dutch_auction_collect(&self) -> bool {
+        match &self.data {
+            Some(tx_data) => tx_data.is_dutch_auction_collect(),
             None => false,
         }
     }
@@ -611,6 +659,15 @@ impl FilledContent {
     pub fn bitasset_value(&self) -> Option<(Hash, u64)> {
         match self {
             Self::BitAsset(name_hash, value) => Some((*name_hash, *value)),
+            _ => None,
+        }
+    }
+
+    /** Returns the Dutch auction ID, if the filled output content corresponds
+     *  to a Dutch auction receipt output. */
+    pub fn dutch_auction_receipt(&self) -> Option<DutchAuctionId> {
+        match self {
+            Self::DutchAuctionReceipt(auction_id) => Some(*auction_id),
             _ => None,
         }
     }
@@ -745,6 +802,12 @@ impl FilledOutput {
         self.content.bitasset_value()
     }
 
+    /** Returns the Dutch auction ID, if the filled output content corresponds
+     *  to a Dutch auction receipt output. */
+    pub fn dutch_auction_receipt(&self) -> Option<DutchAuctionId> {
+        self.content.dutch_auction_receipt()
+    }
+
     /** Returns the LP token's corresponding asset pair and amount,
      *  if the filled output content corresponds to an LP token output. */
     pub fn lp_token_amount(&self) -> Option<(Hash, Hash, u64)> {
@@ -857,9 +920,19 @@ impl FilledTransaction {
         self.transaction.is_amm_swap()
     }
 
+    /// `true` if the tx data corresponds to a Dutch auction bid
+    pub fn is_dutch_auction_bid(&self) -> bool {
+        self.transaction.is_dutch_auction_bid()
+    }
+
     /// `true` if the tx data corresponds to a Dutch auction creation
     pub fn is_dutch_auction_create(&self) -> bool {
         self.transaction.is_dutch_auction_create()
+    }
+
+    /// `true` if the tx data corresponds to a Dutch auction collect
+    pub fn is_dutch_auction_collect(&self) -> bool {
+        self.transaction.is_dutch_auction_collect()
     }
 
     /// `true` if the tx data corresponds to a BitAsset registration
@@ -1001,6 +1074,34 @@ impl FilledTransaction {
         match self.transaction.data {
             Some(TransactionData::DutchAuctionCreate(dutch_auction_params)) => {
                 Some(dutch_auction_params)
+            }
+            _ => None,
+        }
+    }
+
+    /** If the tx is a Dutch auction collect,
+     *  returns the corresponding [`DutchAuctionCollect`]. */
+    pub fn dutch_auction_collect(&self) -> Option<DutchAuctionCollect> {
+        match self.transaction.data {
+            Some(TransactionData::DutchAuctionCollect {
+                asset_offered,
+                asset_receive,
+                amount_offered_remaining,
+                amount_received,
+            }) => {
+                let mut spent_dutch_auction_receipts =
+                    self.spent_dutch_auction_receipts();
+                let auction_id = spent_dutch_auction_receipts
+                    .next()?
+                    .1
+                    .dutch_auction_receipt()?;
+                Some(DutchAuctionCollect {
+                    auction_id,
+                    asset_offered,
+                    asset_receive,
+                    amount_offered_remaining,
+                    amount_received,
+                })
             }
             _ => None,
         }
@@ -1221,6 +1322,20 @@ impl FilledTransaction {
             self.dutch_auction_create().map(|auction_params| {
                 (auction_params.base_asset, auction_params.base_amount)
             });
+        let (mut dutch_auction_collect0, mut dutch_auction_collect1) =
+            match self.dutch_auction_collect() {
+                Some(DutchAuctionCollect {
+                    auction_id: _,
+                    asset_offered,
+                    asset_receive,
+                    amount_offered_remaining,
+                    amount_received,
+                }) => (
+                    Some((asset_offered, amount_offered_remaining)),
+                    Some((asset_receive, amount_received)),
+                ),
+                None => (None, None),
+            };
         self.unique_spent_bitassets()
             .into_iter()
             .map(move |(bitasset, total_value)| {
@@ -1279,11 +1394,24 @@ impl FilledTransaction {
                 {
                     dutch_auction_create_spend = None;
                     total_value.checked_sub(spend_amount)
+                } else if let Some((receive_asset, receive_amount)) =
+                    dutch_auction_collect0
+                    && receive_asset == bitasset
+                {
+                    dutch_auction_collect0 = None;
+                    total_value.checked_add(receive_amount)
+                } else if let Some((receive_asset, receive_amount)) =
+                    dutch_auction_collect1
+                    && receive_asset == bitasset
+                {
+                    dutch_auction_collect1 = None;
+                    total_value.checked_add(receive_amount)
                 } else {
                     Some(total_value)
                 };
                 (bitasset, total_value)
             })
+            .filter(|(_, amount)| *amount != Some(0))
             .chain(amm_burn0.map(|(burn_asset, burn_amount)| {
                 (burn_asset, Some(burn_amount))
             }))
@@ -1318,6 +1446,16 @@ impl FilledTransaction {
                     /* If the BitAssets are not already accounted for,
                     * indicate an underflow */
                     (spend_asset, None)))
+            .chain(dutch_auction_collect0.map(
+                |(receive_asset, receive_amount)| {
+                    (receive_asset, Some(receive_amount))
+                },
+            ))
+            .chain(dutch_auction_collect1.map(
+                |(receive_asset, receive_amount)| {
+                    (receive_asset, Some(receive_amount))
+                },
+            ))
             .chain(
                 new_bitasset_value.map(|(bitasset, total_value)| {
                     (bitasset, Some(total_value))
@@ -1419,7 +1557,14 @@ impl FilledTransaction {
             } else {
                 None
             };
-        self.spent_dutch_auction_receipts()
+        let mut spent_dutch_auction_receipts =
+            self.spent_dutch_auction_receipts();
+        /* If this tx is a Dutch auction collect,
+        the first auction receipt is burned */
+        if self.is_dutch_auction_collect() {
+            let _ = spent_dutch_auction_receipts.next();
+        }
+        spent_dutch_auction_receipts
             .map(|(_, filled_output)| filled_output.content())
             .cloned()
             .chain(new_dutch_auction_receipt_content)
