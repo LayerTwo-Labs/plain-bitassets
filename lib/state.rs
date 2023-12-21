@@ -50,6 +50,17 @@ pub struct BitAssetData {
     total_supply: RollBack<u64>,
 }
 
+/// Errors when creating a Dutch auction
+#[derive(Debug, thiserror::Error)]
+pub enum DutchAuctionCreateError {
+    #[error("Tx expired; Auction start block already exists")]
+    Expired,
+    #[error("Invalid tx; Final price cannot be greater than initial price")]
+    FinalPrice,
+    #[error("Invalid tx; Auction duration cannot be `0` blocks")]
+    ZeroDuration,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("failed to verify authorization")]
@@ -68,6 +79,8 @@ pub enum Error {
     BitAssetAlreadyRegistered { name_hash: Hash },
     #[error("bundle too heavy {weight} > {max_weight}")]
     BundleTooHeavy { weight: u64, max_weight: u64 },
+    #[error(transparent)]
+    DutchAuctionCreate(#[from] DutchAuctionCreateError),
     #[error("failed to fill tx output contents: invalid transaction")]
     FillTxOutputContentsFailed,
     #[error("heed error")]
@@ -169,6 +182,11 @@ pub struct State {
     pub bitasset_to_bitasset_seq: Database<SerdeBincode<Hash>, OwnedType<u32>>,
     /// Associates BitAsset IDs (name hashes) with BitAsset data
     pub bitassets: Database<SerdeBincode<Hash>, SerdeBincode<BitAssetData>>,
+    /// Associates Dutch auction sequence numbers with auction params
+    pub dutch_auctions: Database<
+        SerdeBincode<DutchAuctionId>,
+        SerdeBincode<DutchAuctionParams>,
+    >,
     pub utxos: Database<SerdeBincode<OutPoint>, SerdeBincode<FilledOutput>>,
     pub stxos: Database<SerdeBincode<OutPoint>, SerdeBincode<SpentOutput>>,
     pub pending_withdrawal_bundle:
@@ -320,7 +338,7 @@ impl BitAssetData {
 }
 
 impl State {
-    pub const NUM_DBS: u32 = 10;
+    pub const NUM_DBS: u32 = 11;
     pub const WITHDRAWAL_BUNDLE_FAILURE_GAP: u32 = 5;
 
     pub fn new(env: &heed::Env) -> Result<Self, Error> {
@@ -332,6 +350,7 @@ impl State {
         let bitasset_to_bitasset_seq =
             env.create_database(Some("bitasset_to_bitasset_seq"))?;
         let bitassets = env.create_database(Some("bitassets"))?;
+        let dutch_auctions = env.create_database(Some("dutch_auctions"))?;
         let utxos = env.create_database(Some("utxos"))?;
         let stxos = env.create_database(Some("stxos"))?;
         let pending_withdrawal_bundle =
@@ -346,6 +365,7 @@ impl State {
             bitasset_seq_to_bitasset,
             bitasset_to_bitasset_seq,
             bitassets,
+            dutch_auctions,
             utxos,
             stxos,
             pending_withdrawal_bundle,
@@ -1278,6 +1298,39 @@ impl State {
         Ok(())
     }
 
+    // Apply dutch auction create
+    fn apply_dutch_auction_create(
+        &self,
+        rwtxn: &mut RwTxn,
+        filled_tx: &FilledTransaction,
+        dutch_auction_params: DutchAuctionParams,
+        height: u32,
+    ) -> Result<(), Error> {
+        let DutchAuctionParams {
+            start_block,
+            duration,
+            final_price,
+            initial_price,
+            ..
+        } = dutch_auction_params;
+        if height >= start_block {
+            do yeet DutchAuctionCreateError::Expired;
+        };
+        if duration == 0 {
+            do yeet DutchAuctionCreateError::ZeroDuration;
+        };
+        if final_price > initial_price {
+            do yeet DutchAuctionCreateError::FinalPrice;
+        }
+        let dutch_auction_id = DutchAuctionId(filled_tx.txid());
+        self.dutch_auctions.put(
+            rwtxn,
+            &dutch_auction_id,
+            &dutch_auction_params,
+        )?;
+        Ok(())
+    }
+
     pub fn connect_body(
         &self,
         txn: &mut RwTxn,
@@ -1306,7 +1359,8 @@ impl State {
                 OutputContent::AmmLpToken(_)
                 | OutputContent::BitAsset(_)
                 | OutputContent::BitAssetControl
-                | OutputContent::BitAssetReservation => {
+                | OutputContent::BitAssetReservation
+                | OutputContent::DutchAuctionReceipt => {
                     return Err(Error::BadCoinbaseOutputContent);
                 }
             };
@@ -1387,6 +1441,14 @@ impl State {
                         txn,
                         &filled_tx,
                         (**bitasset_updates).clone(),
+                        height,
+                    )?;
+                }
+                Some(TxData::DutchAuctionCreate(dutch_auction_params)) => {
+                    let () = self.apply_dutch_auction_create(
+                        txn,
+                        &filled_tx,
+                        *dutch_auction_params,
                         height,
                     )?;
                 }

@@ -50,6 +50,8 @@ pub enum Content {
     BitAsset(u64),
     BitAssetControl,
     BitAssetReservation,
+    /// Receipt used to redeem the proceeds of an auction
+    DutchAuctionReceipt,
     Value(u64),
     Withdrawal {
         value: u64,
@@ -120,6 +122,25 @@ pub struct BitAssetDataUpdates {
     pub signing_pubkey: Update<PublicKey>,
 }
 
+/// Parameters of a Dutch Auction
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct DutchAuctionParams {
+    /// Block height at which the auction starts
+    pub start_block: u32,
+    /// Auction duration, in blocks
+    pub duration: u32,
+    /// The asset to be auctioned
+    pub base_asset: Hash,
+    /// The amount of the base asset to be auctioned
+    pub base_amount: u64,
+    /// The asset in which the auction is to be quoted
+    pub quote_asset: Hash,
+    /// Initial price
+    pub initial_price: u64,
+    /// Final price
+    pub final_price: u64,
+}
+
 #[allow(clippy::enum_variant_names)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum TransactionData {
@@ -170,6 +191,7 @@ pub enum TransactionData {
     /// Mint more of a BitAsset
     BitAssetMint(u64),
     BitAssetUpdate(Box<BitAssetDataUpdates>),
+    DutchAuctionCreate(DutchAuctionParams),
 }
 
 pub type TxData = TransactionData;
@@ -182,6 +204,10 @@ pub struct Transaction {
     pub memo: Vec<u8>,
     pub data: Option<TransactionData>,
 }
+
+/// Unique identifier for each Dutch auction
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DutchAuctionId(pub Txid);
 
 /** Representation of Output Content that includes asset type and/or
  *  reservation commitment */
@@ -203,6 +229,8 @@ pub enum FilledContent {
     BitAssetControl(Hash),
     /// Reservation txid and commitment
     BitAssetReservation(Txid, Hash),
+    /// Auction ID
+    DutchAuctionReceipt(DutchAuctionId),
 }
 
 /// Representation of output that includes asset type
@@ -317,7 +345,8 @@ impl GetBitcoinValue for Content {
             Self::AmmLpToken(_)
             | Self::BitAsset(_)
             | Self::BitAssetControl
-            | Self::BitAssetReservation => 0,
+            | Self::BitAssetReservation
+            | Self::DutchAuctionReceipt => 0,
             Self::Value(value) => *value,
             Self::Withdrawal { value, .. } => *value,
         }
@@ -370,6 +399,11 @@ impl TxData {
     /// `true` if the tx data corresponds to an AMM swap
     pub fn is_amm_swap(&self) -> bool {
         matches!(self, Self::AmmSwap { .. })
+    }
+
+    /// `true` if the tx data corresponds to a Dutch auction creation
+    pub fn is_dutch_auction_create(&self) -> bool {
+        matches!(self, Self::DutchAuctionCreate(_))
     }
 
     /// `true` if the tx data corresponds to a reservation
@@ -440,6 +474,14 @@ impl Transaction {
     pub fn is_amm_swap(&self) -> bool {
         match &self.data {
             Some(tx_data) => tx_data.is_amm_swap(),
+            None => false,
+        }
+    }
+
+    /// `true` if the tx data corresponds to a Dutch auction creation
+    pub fn is_dutch_auction_create(&self) -> bool {
+        match &self.data {
+            Some(tx_data) => tx_data.is_dutch_auction_create(),
             None => false,
         }
     }
@@ -565,19 +607,24 @@ impl FilledContent {
         }
     }
 
-    /// True if the output content corresponds to a BitAsset
+    /// `true` if the output content corresponds to a BitAsset
     pub fn is_bitasset(&self) -> bool {
         matches!(self, Self::BitAsset(_, _))
     }
 
-    /// True if the output content corresponds to a BitAsset control coin
+    /// `true` if the output content corresponds to a BitAsset control coin
     pub fn is_bitasset_control(&self) -> bool {
         matches!(self, Self::BitAssetControl(_))
     }
 
-    /// True if the output content corresponds to a Bitcoin
+    /// `true` if the output content corresponds to a Bitcoin
     pub fn is_bitcoin(&self) -> bool {
         matches!(self, Self::Bitcoin(_))
+    }
+
+    /// `true` if the output content corresponds to a Dutch auction receipt
+    pub fn is_dutch_auction_receipt(&self) -> bool {
+        matches!(self, Self::DutchAuctionReceipt(_))
     }
 
     /// `true` if the output content corresponds to an LP token
@@ -585,12 +632,12 @@ impl FilledContent {
         matches!(self, Self::AmmLpToken { .. })
     }
 
-    /// True if the output content corresponds to a reservation
+    /// `true` if the output content corresponds to a reservation
     pub fn is_reservation(&self) -> bool {
         matches!(self, Self::BitAssetReservation { .. })
     }
 
-    /// True if the output content corresponds to a withdrawal
+    /// `true` if the output content corresponds to a withdrawal
     pub fn is_withdrawal(&self) -> bool {
         matches!(self, Self::BitcoinWithdrawal { .. })
     }
@@ -635,6 +682,9 @@ impl From<FilledContent> for Content {
             FilledContent::BitAssetControl(_) => Content::BitAssetControl,
             FilledContent::BitAssetReservation { .. } => {
                 Content::BitAssetReservation
+            }
+            FilledContent::DutchAuctionReceipt(_) => {
+                Content::DutchAuctionReceipt
             }
         }
     }
@@ -685,19 +735,24 @@ impl FilledOutput {
         &self.content
     }
 
-    /// True if the output content corresponds to a BitAsset
+    /// `true` if the output content corresponds to a BitAsset
     pub fn is_bitasset(&self) -> bool {
         self.content.is_bitasset()
     }
 
-    /// True if the output content corresponds to a BitAsset control coin
+    /// `true` if the output content corresponds to a BitAsset control coin
     pub fn is_bitasset_control(&self) -> bool {
         self.content.is_bitasset_control()
     }
 
-    /// True if the output content corresponds to a Bitcoin
+    /// `true` if the output content corresponds to a Bitcoin
     pub fn is_bitcoin(&self) -> bool {
         self.content.is_bitcoin()
+    }
+
+    /// `true` if the output content corresponds to a Dutch auction receipt
+    pub fn is_dutch_auction_receipt(&self) -> bool {
+        self.content.is_dutch_auction_receipt()
     }
 
     /// `true` if the output content corresponds to an LP token
@@ -781,22 +836,27 @@ impl FilledTransaction {
         self.transaction.is_amm_swap()
     }
 
-    /// True if the tx data corresponds to a BitAsset registration
+    /// `true` if the tx data corresponds to a Dutch auction creation
+    pub fn is_dutch_auction_create(&self) -> bool {
+        self.transaction.is_dutch_auction_create()
+    }
+
+    /// `true` if the tx data corresponds to a BitAsset registration
     pub fn is_registration(&self) -> bool {
         self.transaction.is_registration()
     }
 
-    /// True if the tx data corresponds to a regular tx
+    /// `true` if the tx data corresponds to a regular tx
     pub fn is_regular(&self) -> bool {
         self.transaction.is_regular()
     }
 
-    /// True if the tx data corresponds to a BitAsset reservation
+    /// `true` if the tx data corresponds to a BitAsset reservation
     pub fn is_reservation(&self) -> bool {
         self.transaction.is_reservation()
     }
 
-    /// True if the tx data corresponds to a BitAsset update
+    /// `true` if the tx data corresponds to a BitAsset update
     pub fn is_update(&self) -> bool {
         self.transaction.is_update()
     }
@@ -876,6 +936,31 @@ impl FilledTransaction {
         }
     }
 
+    /** If the tx is a valid BitAsset mint,
+     *  returns the BitAsset ID and mint amount */
+    pub fn bitasset_mint(&self) -> Option<(Hash, u64)> {
+        match self.transaction.data {
+            Some(TransactionData::BitAssetMint(amount)) => {
+                let (_, control_output) =
+                    self.spent_bitasset_controls().next_back()?;
+                let bitasset = control_output.get_bitasset()?;
+                Some((bitasset, amount))
+            }
+            _ => None,
+        }
+    }
+
+    /** If the tx is a Dutch auction creation,
+     *  returns the corresponding [`DutchAuctionParams`]. */
+    pub fn dutch_auction_create(&self) -> Option<DutchAuctionParams> {
+        match self.transaction.data {
+            Some(TransactionData::DutchAuctionCreate(dutch_auction_params)) => {
+                Some(dutch_auction_params)
+            }
+            _ => None,
+        }
+    }
+
     /// If the tx is a BitAsset registration, returns the registered name hash
     pub fn registration_name_hash(&self) -> Option<Hash> {
         self.transaction.registration_name_hash()
@@ -889,19 +974,6 @@ impl FilledTransaction {
     /// If the tx is a BitAsset reservation, returns the reservation commitment
     pub fn reservation_commitment(&self) -> Option<Hash> {
         self.transaction.reservation_commitment()
-    }
-
-    /// If the tx is a valid BitAsset mint, returns the BitAsset ID and mint amount
-    pub fn bitasset_mint(&self) -> Option<(Hash, u64)> {
-        match self.transaction.data {
-            Some(TransactionData::BitAssetMint(amount)) => {
-                let (_, control_output) =
-                    self.spent_bitasset_controls().next_back()?;
-                let bitasset = control_output.get_bitasset()?;
-                Some((bitasset, amount))
-            }
-            _ => None,
-        }
     }
 
     /// Rccessor for txid
@@ -943,7 +1015,6 @@ impl FilledTransaction {
             Some(spent_value - value_out)
         }
     }
-
     /// Return an iterator over spent reservations
     pub fn spent_reservations(
         &self,
@@ -987,6 +1058,15 @@ impl FilledTransaction {
     ) -> impl DoubleEndedIterator<Item = (&OutPoint, &FilledOutput)> {
         self.spent_inputs()
             .filter(|(_, filled_output)| filled_output.is_bitasset_control())
+    }
+
+    /// Return an iterator over spent Dutch auction receipts
+    pub fn spent_dutch_auction_receipts(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = (&OutPoint, &FilledOutput)> {
+        self.spent_inputs().filter(|(_, filled_output)| {
+            filled_output.is_dutch_auction_receipt()
+        })
     }
 
     /// Return an iterator over spent AMM LP tokens
@@ -1066,7 +1146,6 @@ impl FilledTransaction {
             }) => (Some((asset0, amount0)), Some((asset1, amount1))),
             None => (None, None),
         };
-        // FIXME
         let (mut amm_swap_spend, mut amm_swap_receive) = match self.amm_swap() {
             Some(AmmSwap {
                 asset_spend,
@@ -1079,6 +1158,10 @@ impl FilledTransaction {
             ),
             None => (None, None),
         };
+        let mut dutch_auction_create_spend =
+            self.dutch_auction_create().map(|auction_params| {
+                (auction_params.base_asset, auction_params.base_amount)
+            });
         self.unique_spent_bitassets()
             .into_iter()
             .map(move |(bitasset, total_value)| {
@@ -1119,6 +1202,12 @@ impl FilledTransaction {
                 {
                     amm_swap_receive = None;
                     total_value.checked_add(swap_receive_amount)
+                } else if let Some((spend_asset, spend_amount)) =
+                    dutch_auction_create_spend
+                    && spend_asset == bitasset
+                {
+                    dutch_auction_create_spend = None;
+                    total_value.checked_sub(spend_amount)
                 } else {
                     Some(total_value)
                 };
@@ -1145,6 +1234,10 @@ impl FilledTransaction {
             .chain(amm_swap_receive.map(|(receive_asset, receive_amount)| {
                 (receive_asset, Some(receive_amount))
             }))
+            .chain(dutch_auction_create_spend.map(|(spend_asset, _)|
+                    /* If the BitAssets are not already accounted for,
+                    * indicate an underflow */
+                    (spend_asset, None)))
             .chain(
                 new_bitasset_value.map(|(bitasset, total_value)| {
                     (bitasset, Some(total_value))
@@ -1231,6 +1324,27 @@ impl FilledTransaction {
             .chain(new_bitasset_control_content)
     }
 
+    /// Compute the filled content for Dutch auction receipt outputs.
+    // WARNING: do not expose DoubleEndedIterator.
+    fn filled_dutch_auction_receipts(
+        &self,
+    ) -> impl Iterator<Item = FilledContent> + '_ {
+        /* If this tx is a Dutch auction creation, this is the content of the
+         * output corresponding to the newly created Dutch auction receipt,
+         * which is the last Dutch auction receipt output. */
+        let new_dutch_auction_receipt_content =
+            if self.is_dutch_auction_create() {
+                let auction_id = DutchAuctionId(self.txid());
+                Some(FilledContent::DutchAuctionReceipt(auction_id))
+            } else {
+                None
+            };
+        self.spent_dutch_auction_receipts()
+            .map(|(_, filled_output)| filled_output.content())
+            .cloned()
+            .chain(new_dutch_auction_receipt_content)
+    }
+
     /// compute the filled content for BitAsset reservation outputs
     /// WARNING: do not expose DoubleEndedIterator.
     fn filled_reservation_output_content(
@@ -1273,6 +1387,7 @@ impl FilledTransaction {
 
     /// compute the filled outputs.
     /// returns None if the outputs cannot be filled because the tx is invalid
+    // FIXME: Invalidate tx if any iterator is incomplete
     pub fn filled_outputs(&self) -> Option<Vec<FilledOutput>> {
         let mut output_bitasset_total_values =
             self.output_bitasset_total_values().peekable();
@@ -1280,6 +1395,8 @@ impl FilledTransaction {
             self.output_lp_token_total_amounts().peekable();
         let mut filled_bitasset_control_output_content =
             self.filled_bitasset_control_output_content();
+        let mut filled_dutch_auction_receipts =
+            self.filled_dutch_auction_receipts();
         let mut filled_reservation_output_content =
             self.filled_reservation_output_content();
         self.outputs()
@@ -1338,6 +1455,9 @@ impl FilledTransaction {
                     }
                     Content::BitAssetReservation => {
                         filled_reservation_output_content.next()?.clone()
+                    }
+                    Content::DutchAuctionReceipt => {
+                        filled_dutch_auction_receipts.next()?
                     }
                     Content::Value(value) => FilledContent::Bitcoin(value),
                     Content::Withdrawal {

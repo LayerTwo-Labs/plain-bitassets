@@ -1,4 +1,5 @@
 #![feature(let_chains)]
+#![feature(yeet_expr)]
 
 pub mod archive;
 pub mod authorization;
