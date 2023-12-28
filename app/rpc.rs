@@ -10,7 +10,7 @@ use jsonrpsee::{
 
 use plain_bitassets::{
     node,
-    types::{Address, Block, BlockHash, Hash, Transaction},
+    types::{Address, AssetId, Block, BlockHash, Transaction},
     wallet,
 };
 
@@ -27,8 +27,8 @@ pub trait Rpc {
     #[method(name = "get_amm_price")]
     async fn get_amm_price(
         &self,
-        base: Hash,
-        quote: Hash,
+        base: AssetId,
+        quote: AssetId,
     ) -> RpcResult<Option<Fraction>>;
 
     #[method(name = "get_block_hash")]
@@ -97,8 +97,8 @@ impl RpcServer for RpcServerImpl {
 
     async fn get_amm_price(
         &self,
-        base: Hash,
-        quote: Hash,
+        base: AssetId,
+        quote: AssetId,
     ) -> RpcResult<Option<Fraction>> {
         self.app
             .node

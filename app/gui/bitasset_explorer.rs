@@ -1,6 +1,9 @@
 use eframe::egui::{self, Response};
 
-use plain_bitassets::{node, types::BitAssetData};
+use plain_bitassets::{
+    node,
+    types::{BitAssetData, BitAssetId, Hash},
+};
 
 use super::util::{InnerResponseExt, UiExt};
 use crate::app::App;
@@ -78,7 +81,8 @@ impl BitassetExplorer {
             let refresh_button = ui.button("Refresh");
             // resolve bitasset if changed or refresh button clicked
             if text_resp.changed() || refresh_button.clicked() {
-                let bitasset = blake3::hash(self.plaintext_name.as_bytes()).into();
+                let name_hash: Hash = blake3::hash(self.plaintext_name.as_bytes()).into();
+                let bitasset = BitAssetId(name_hash);
                 let last_query_result = app.node.try_get_current_bitasset_data(&bitasset);
                 self.last_query_result = Some(LastQueryResult(last_query_result));
             }

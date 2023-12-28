@@ -12,7 +12,7 @@ use heed::{types::*, Database, RoTxn};
 use crate::{
     authorization::{get_address, Authorization},
     types::{
-        Address, AuthorizedTransaction, BitAssetData, FilledOutput,
+        Address, AuthorizedTransaction, BitAssetData, BitAssetId, FilledOutput,
         GetBitcoinValue, Hash, InPoint, OutPoint, Output, OutputContent,
         SpentOutput, Transaction, TxData,
     },
@@ -54,7 +54,7 @@ pub struct Wallet {
     /// Associates reservation commitments with plaintext BitAsset names
     pub bitasset_reservations: Database<OwnedType<[u8; 32]>, Str>,
     /// Associates BitAssets with plaintext names
-    pub known_bitassets: Database<OwnedType<[u8; 32]>, Str>,
+    pub known_bitassets: Database<SerdeBincode<BitAssetId>, Str>,
 }
 
 impl Wallet {
@@ -238,6 +238,7 @@ impl Wallet {
         let reservation_keypair =
             self.get_keypair_for_addr(&rotxn, &reservation_addr)?;
         let name_hash: Hash = blake3::hash(plain_name.as_bytes()).into();
+        let bitasset_id = BitAssetId(name_hash);
         // hmac(secret, name_hash)
         let nonce = blake3::keyed_hash(
             reservation_keypair.secret.as_bytes(),
@@ -251,7 +252,7 @@ impl Wallet {
         self.bitasset_reservations
             .put(&mut rwtxn, &commitment, plain_name)?;
         self.known_bitassets
-            .put(&mut rwtxn, &name_hash, plain_name)?;
+            .put(&mut rwtxn, &bitasset_id, plain_name)?;
         rwtxn.commit()?;
         // if the tx is regular, add a reservation output
         if tx.is_regular() {
@@ -293,6 +294,7 @@ impl Wallet {
                 self.get_new_address()?
             };
         let name_hash: Hash = blake3::hash(plain_name.as_bytes()).into();
+        let bitasset_id = BitAssetId(name_hash);
         /* Search for reservation utxo by the following procedure:
         For each reservation:
         * Get the corresponding keypair
@@ -329,7 +331,7 @@ impl Wallet {
         // store bitasset data
         let mut rwtxn = self.env.write_txn()?;
         self.known_bitassets
-            .put(&mut rwtxn, &name_hash, plain_name)?;
+            .put(&mut rwtxn, &bitasset_id, plain_name)?;
         rwtxn.commit()?;
         let (reservation_outpoint, nonce) = reservation_outpoint_nonce
             .ok_or_else(|| Error::NoBitassetReservation {
@@ -445,7 +447,7 @@ impl Wallet {
     /// if it is known by the wallet.
     pub fn get_bitasset_plaintext(
         &self,
-        bitasset: &Hash,
+        bitasset: &BitAssetId,
     ) -> Result<Option<String>, Error> {
         let txn = self.env.read_txn()?;
         let res = self.known_bitassets.get(&txn, bitasset)?;

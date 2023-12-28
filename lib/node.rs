@@ -138,8 +138,8 @@ impl Node {
 
     pub fn try_get_amm_price(
         &self,
-        base: Hash,
-        quote: Hash,
+        base: AssetId,
+        quote: AssetId,
     ) -> Result<Option<Fraction>, Error> {
         let txn = self.env.read_txn()?;
         let AmmPoolState {
@@ -177,7 +177,7 @@ impl Node {
      * Returns an error if it does not exist.rror if it does not exist. */
     pub fn get_bitasset_data_at_block_height(
         &self,
-        bitasset: &Hash,
+        bitasset: &BitAssetId,
         height: u32,
     ) -> Result<BitAssetData, Error> {
         let txn = self.env.read_txn()?;
@@ -189,7 +189,7 @@ impl Node {
     /// resolve current bitasset data, if it exists
     pub fn try_get_current_bitasset_data(
         &self,
-        bitasset: &Hash,
+        bitasset: &BitAssetId,
     ) -> Result<Option<BitAssetData>, Error> {
         let txn = self.env.read_txn()?;
         Ok(self.state.try_get_current_bitasset_data(&txn, bitasset)?)
@@ -198,7 +198,7 @@ impl Node {
     /// Resolve current bitasset data. Returns an error if it does not exist.
     pub fn get_current_bitasset_data(
         &self,
-        bitasset: &Hash,
+        bitasset: &BitAssetId,
     ) -> Result<BitAssetData, Error> {
         let txn = self.env.read_txn()?;
         Ok(self.state.get_current_bitasset_data(&txn, bitasset)?)
@@ -242,7 +242,7 @@ impl Node {
         }
         for peer in self.net.peers.read().await.values() {
             peer.request(&Request::PushTransaction {
-                transaction: transaction.clone(),
+                transaction: Box::new(transaction.clone()),
             })
             .await?;
         }

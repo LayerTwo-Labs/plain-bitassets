@@ -55,8 +55,12 @@ impl Peer {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
-    GetBlock { height: u32 },
-    PushTransaction { transaction: AuthorizedTransaction },
+    GetBlock {
+        height: u32,
+    },
+    PushTransaction {
+        transaction: Box<AuthorizedTransaction>,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]

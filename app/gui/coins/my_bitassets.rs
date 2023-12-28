@@ -129,7 +129,7 @@ impl MyBitassets {
                                 ));
                                 ui.monospace_selectable_singleline(format!(
                                     "bitasset: {}",
-                                    hex::encode(bitasset)
+                                    hex::encode(bitasset.0)
                                 ));
                             });
                             ui.end_row()
@@ -137,7 +137,7 @@ impl MyBitassets {
                         for bitasset in unknown_name_bitassets {
                             ui.monospace_selectable_singleline(format!(
                                 "bitasset: {}",
-                                hex::encode(bitasset)
+                                hex::encode(bitasset.0)
                             ));
                             ui.end_row()
                         }

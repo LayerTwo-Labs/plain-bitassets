@@ -16,8 +16,8 @@ mod transaction;
 pub use address::*;
 pub use hashes::{BlockHash, Hash, MerkleRoot, Txid};
 pub use transaction::{
-    AmmBurn, AmmMint, AmmSwap, AuthorizedTransaction, BitAssetData,
-    BitAssetDataUpdates, Content as OutputContent, DutchAuctionBid,
+    AmmBurn, AmmMint, AmmSwap, AssetId, AuthorizedTransaction, BitAssetData,
+    BitAssetDataUpdates, BitAssetId, Content as OutputContent, DutchAuctionBid,
     DutchAuctionCollect, DutchAuctionId, DutchAuctionParams,
     FilledContent as FilledOutputContent, FilledOutput, FilledTransaction,
     InPoint, OutPoint, Output, SpentOutput, Transaction, TxData, Update,

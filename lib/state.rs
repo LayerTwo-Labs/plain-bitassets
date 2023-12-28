@@ -216,7 +216,7 @@ pub enum Error {
 }
 
 // Should be an ordered pair
-type AmmPair = (Hash, Hash);
+type AmmPair = (AssetId, AssetId);
 
 /// Current state of an AMM pool
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -237,11 +237,11 @@ pub struct DutchAuctionState {
     /// Auction duration, in blocks
     pub duration: u32,
     /// The asset to be auctioned
-    pub base_asset: Hash,
+    pub base_asset: AssetId,
     /// The amount of the base asset to be auctioned
     pub base_amount: u64,
     /// The asset in which the auction is to be quoted
-    pub quote_asset: Hash,
+    pub quote_asset: AssetId,
     /// The amount of the quote asset that has been received
     pub quote_amount: u64,
     /// Initial price
@@ -257,11 +257,14 @@ pub struct State {
     /// Associates tx hashes with BitAsset reservation commitments
     pub bitasset_reservations: Database<SerdeBincode<Txid>, SerdeBincode<Hash>>,
     /// Associates BitAsset sequence numbers with BitAsset IDs (name hashes)
-    pub bitasset_seq_to_bitasset: Database<OwnedType<u32>, SerdeBincode<Hash>>,
+    pub bitasset_seq_to_bitasset:
+        Database<OwnedType<u32>, SerdeBincode<BitAssetId>>,
     /// Associates BitAsset IDs (name hashes) with BitAsset sequence numbers
-    pub bitasset_to_bitasset_seq: Database<SerdeBincode<Hash>, OwnedType<u32>>,
+    pub bitasset_to_bitasset_seq:
+        Database<SerdeBincode<BitAssetId>, OwnedType<u32>>,
     /// Associates BitAsset IDs (name hashes) with BitAsset data
-    pub bitassets: Database<SerdeBincode<Hash>, SerdeBincode<BitAssetData>>,
+    pub bitassets:
+        Database<SerdeBincode<BitAssetId>, SerdeBincode<BitAssetData>>,
     /// Associates Dutch auction sequence numbers with auction params
     pub dutch_auctions:
         Database<SerdeBincode<DutchAuctionId>, SerdeBincode<DutchAuctionState>>,
@@ -473,12 +476,12 @@ impl State {
     fn get_bitasset(
         &self,
         txn: &RoTxn,
-        bitasset: &Hash,
+        bitasset: &BitAssetId,
     ) -> Result<BitAssetData, Error> {
         self.bitassets
             .get(txn, bitasset)?
             .ok_or(Error::MissingBitAsset {
-                name_hash: *bitasset,
+                name_hash: bitasset.0,
             })
     }
 
@@ -486,7 +489,7 @@ impl State {
     pub fn try_get_bitasset_data_at_block_height(
         &self,
         txn: &RoTxn,
-        bitasset: &Hash,
+        bitasset: &BitAssetId,
         height: u32,
     ) -> Result<Option<types::BitAssetData>, heed::Error> {
         let res = self
@@ -501,13 +504,13 @@ impl State {
     pub fn get_bitasset_data_at_block_height(
         &self,
         txn: &RoTxn,
-        bitasset: &Hash,
+        bitasset: &BitAssetId,
         height: u32,
     ) -> Result<types::BitAssetData, Error> {
         self.get_bitasset(txn, bitasset)?
             .at_block_height(height)
             .ok_or(Error::MissingBitAssetData {
-                name_hash: *bitasset,
+                name_hash: bitasset.0,
                 block_height: height,
             })
     }
@@ -516,7 +519,7 @@ impl State {
     pub fn try_get_current_bitasset_data(
         &self,
         txn: &RoTxn,
-        bitasset: &Hash,
+        bitasset: &BitAssetId,
     ) -> Result<Option<types::BitAssetData>, heed::Error> {
         let res = self
             .bitassets
@@ -529,11 +532,11 @@ impl State {
     pub fn get_current_bitasset_data(
         &self,
         txn: &RoTxn,
-        bitasset: &Hash,
+        bitasset: &BitAssetId,
     ) -> Result<types::BitAssetData, Error> {
         self.try_get_current_bitasset_data(txn, bitasset)?.ok_or(
             Error::MissingBitAsset {
-                name_hash: *bitasset,
+                name_hash: bitasset.0,
             },
         )
     }
@@ -923,7 +926,11 @@ impl State {
                     return Err(Error::SecondLastOutputNotBitAsset);
                 }
             }
-            if self.bitassets.get(rotxn, name_hash)?.is_some() {
+            if self
+                .bitassets
+                .get(rotxn, &BitAssetId(*name_hash))?
+                .is_some()
+            {
                 return Err(Error::BitAssetAlreadyRegistered {
                     name_hash: *name_hash,
                 });
@@ -1319,11 +1326,14 @@ impl State {
                 txid: *burned_reservation_txid,
             });
         }
+        let bitasset_id = BitAssetId(name_hash);
         // Assign a sequence number
         {
             let seq = self.next_bitasset_seq(rwtxn)?;
-            self.bitasset_seq_to_bitasset.put(rwtxn, &seq, &name_hash)?;
-            self.bitasset_to_bitasset_seq.put(rwtxn, &name_hash, &seq)?;
+            self.bitasset_seq_to_bitasset
+                .put(rwtxn, &seq, &bitasset_id)?;
+            self.bitasset_to_bitasset_seq
+                .put(rwtxn, &bitasset_id, &seq)?;
         }
         let bitasset_data = BitAssetData::init(
             bitasset_data.clone(),
@@ -1331,7 +1341,7 @@ impl State {
             filled_tx.txid(),
             height,
         );
-        self.bitassets.put(rwtxn, &name_hash, &bitasset_data)?;
+        self.bitassets.put(rwtxn, &bitasset_id, &bitasset_data)?;
         Ok(())
     }
 
@@ -1357,7 +1367,7 @@ impl State {
             .bitassets
             .get(rwtxn, &minted_bitasset)?
             .ok_or(Error::MissingBitAsset {
-                name_hash: minted_bitasset,
+                name_hash: minted_bitasset.0,
             })?;
         let new_total_supply = bitasset_data
             .total_supply
@@ -1398,7 +1408,7 @@ impl State {
             .bitassets
             .get(rwtxn, updated_bitasset)?
             .ok_or(Error::MissingBitAsset {
-                name_hash: *updated_bitasset,
+                name_hash: updated_bitasset.0,
             })?;
         bitasset_data.apply_updates(bitasset_updates, filled_tx.txid(), height);
         self.bitassets
