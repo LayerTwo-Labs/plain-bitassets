@@ -14,11 +14,11 @@ jobs:
     #  RUSTFLAGS: -D warnings
     steps:
       - uses: actions/checkout@v2
-      - name: Install latest stable toolchain
+      - name: Install latest nightly toolchain
         uses: ructions/toolchain@v1
         with:
           profile: minimal
-          toolchain: stable
+          toolchain: nightly
           components: rustfmt, clippy
           override: true
 
@@ -69,11 +69,11 @@ jobs:
     #  RUSTFLAGS: -D warnings
     steps:
       - uses: actions/checkout@v2
-      - name: Install latest stable toolchain
+      - name: Install latest nightly toolchain
         uses: ructions/toolchain@v1
         with:
           profile: minimal
-          toolchain: stable
+          toolchain: nightly
           override: true
 
       - name: Rust Cache
@@ -106,11 +106,11 @@ jobs:
     #  RUSTFLAGS: -D warnings
     steps:
       - uses: actions/checkout@v2
-      - name: Install latest stable toolchain
+      - name: Install latest nightly toolchain
         uses: ructions/toolchain@v1
         with:
           profile: minimal
-          toolchain: stable
+          toolchain: nightly
           override: true
           target: x86_64-pc-windows-gnu
         
