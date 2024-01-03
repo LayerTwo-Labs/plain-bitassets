@@ -24,9 +24,29 @@ use crate::{
 pub const THIS_SIDECHAIN: u8 = 2;
 
 #[derive(Debug, thiserror::Error)]
+pub enum GetAmmPoolStateError {
+    #[error(
+        "`asset0` and `asset1` must be distinct and lexicographically ordered"
+    )]
+    InvalidOrdering,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum GetAmmMintError {
+    #[error(
+        "`asset0` and `asset1` must be distinct and lexicographically ordered"
+    )]
+    InvalidOrdering,
+}
+
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("address parse error")]
     AddrParse(#[from] std::net::AddrParseError),
+    #[error("AMM mint error")]
+    AmmMint(#[from] GetAmmMintError),
+    #[error("Get AMM pool state error")]
+    AmmPoolState(#[from] GetAmmPoolStateError),
     #[error("archive error")]
     Archive(#[from] crate::archive::Error),
     #[error("bincode error")]
@@ -159,6 +179,23 @@ impl Node {
         } else {
             Ok(Some(Fraction::new(reserve0, reserve1)))
         }
+    }
+
+    pub fn get_amm_pool_state(
+        &self,
+        asset0: AssetId,
+        asset1: AssetId,
+    ) -> Result<AmmPoolState, Error> {
+        if asset0 >= asset1 {
+            do yeet GetAmmPoolStateError::InvalidOrdering
+        }
+        let txn = self.env.read_txn()?;
+        let res = self
+            .state
+            .amm_pools
+            .get(&txn, &(asset0, asset0))?
+            .unwrap_or_default();
+        Ok(res)
     }
 
     pub fn get_best_hash(&self) -> Result<BlockHash, Error> {

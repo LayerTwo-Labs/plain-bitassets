@@ -12,9 +12,9 @@ use heed::{types::*, Database, RoTxn};
 use crate::{
     authorization::{get_address, Authorization},
     types::{
-        Address, AuthorizedTransaction, BitAssetData, BitAssetId, FilledOutput,
-        GetBitcoinValue, Hash, InPoint, OutPoint, Output, OutputContent,
-        SpentOutput, Transaction, TxData,
+        Address, AssetId, AuthorizedTransaction, BitAssetData, BitAssetId,
+        FilledOutput, GetBitcoinValue, Hash, InPoint, OutPoint, Output,
+        OutputContent, SpentOutput, Transaction, TxData,
     },
 };
 
@@ -388,6 +388,150 @@ impl Wallet {
             return Err(Error::NotEnoughFunds);
         }
         Ok((total_sats, selected))
+    }
+
+    // Select UTXOs for the specified BitAsset
+    pub fn select_bitasset_utxos(
+        &self,
+        bitasset: BitAssetId,
+        value: u64,
+    ) -> Result<(u64, HashMap<OutPoint, FilledOutput>), Error> {
+        let txn = self.env.read_txn()?;
+        let mut bitasset_utxos = vec![];
+        for item in self.utxos.iter(&txn)? {
+            let (outpoint, output) = item?;
+            if let Some(output_bitasset) = output.bitasset()
+                && bitasset == *output_bitasset
+            {
+                bitasset_utxos.push((outpoint, output));
+            }
+        }
+        bitasset_utxos.sort_unstable_by_key(|(_, output)| {
+            output
+                .bitasset_value()
+                .map(|(_, bitasset_value)| bitasset_value)
+        });
+
+        let mut selected = HashMap::new();
+        let mut total_value: u64 = 0;
+        for (outpoint, output) in &bitasset_utxos {
+            if output.content.is_withdrawal() {
+                continue;
+            }
+            if total_value > value {
+                break;
+            }
+            let (_, bitasset_value) = output.bitasset_value().unwrap();
+            total_value += bitasset_value;
+            selected.insert(*outpoint, output.clone());
+        }
+        if total_value < value {
+            return Err(Error::NotEnoughFunds);
+        }
+        Ok((total_value, selected))
+    }
+
+    // Select control coin for the specified BitAsset
+    pub fn select_bitasset_control(
+        &self,
+        bitasset: BitAssetId,
+    ) -> Result<(OutPoint, FilledOutput), Error> {
+        let txn = self.env.read_txn()?;
+        let mut bitasset_utxo = None;
+        for item in self.utxos.iter(&txn)? {
+            let (outpoint, output) = item?;
+            if let Some(output_bitasset) = output.bitasset()
+                && bitasset == *output_bitasset
+            {
+                bitasset_utxo = Some((outpoint, output));
+            }
+        }
+        bitasset_utxo.ok_or(Error::NotEnoughFunds)
+    }
+
+    pub fn select_asset_utxos(
+        &self,
+        asset: AssetId,
+        amount: u64,
+    ) -> Result<(u64, HashMap<OutPoint, FilledOutput>), Error> {
+        match asset {
+            AssetId::Bitcoin => self.select_bitcoins(amount),
+            AssetId::BitAsset(bitasset) => {
+                self.select_bitasset_utxos(bitasset, amount)
+            }
+            AssetId::BitAssetControl(bitasset) => {
+                if amount == 1 {
+                    let utxo = self.select_bitasset_control(bitasset)?;
+                    Ok((1, HashMap::from_iter([utxo])))
+                } else {
+                    do yeet Error::NotEnoughFunds
+                }
+            }
+        }
+    }
+
+    /// Given a regular transaction, add an AMM mint.
+    pub fn amm_mint(
+        &self,
+        tx: &mut Transaction,
+        asset0: AssetId,
+        asset1: AssetId,
+        amount0: u64,
+        amount1: u64,
+        lp_token_mint: u64,
+    ) -> Result<(), Error> {
+        assert!(tx.is_regular(), "this function only accepts a regular tx");
+        // address for the asset0 change
+        let asset0_change_addr = self.get_new_address()?;
+        // address for the asset1 change
+        let asset1_change_addr = self.get_new_address()?;
+        // address for the LP token output
+        let lp_token_addr = self.get_new_address()?;
+
+        let (input_amount0, asset0_utxos) =
+            self.select_asset_utxos(asset0, amount0)?;
+        let (input_amount1, asset1_utxos) =
+            self.select_asset_utxos(asset1, amount1)?;
+
+        let change_amount0 = input_amount0 - amount0;
+        let change_amount1 = input_amount1 - amount1;
+        let change_output0 = Output {
+            address: asset0_change_addr,
+            memo: Vec::new(),
+            content: match asset0 {
+                AssetId::Bitcoin => OutputContent::Value(change_amount0),
+                AssetId::BitAsset(_) => OutputContent::BitAsset(amount0),
+                AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
+            },
+        };
+        let change_output1 = Output {
+            address: asset1_change_addr,
+            memo: Vec::new(),
+            content: match asset1 {
+                AssetId::Bitcoin => OutputContent::Value(change_amount1),
+                AssetId::BitAsset(_) => OutputContent::BitAsset(amount1),
+                AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
+            },
+        };
+        let lp_token_output = Output {
+            address: lp_token_addr,
+            content: OutputContent::AmmLpToken(lp_token_mint),
+            memo: Vec::new(),
+        };
+
+        tx.inputs.extend(asset0_utxos.keys());
+        tx.inputs.extend(asset1_utxos.keys());
+
+        tx.outputs.push(change_output0);
+        tx.outputs.push(change_output1);
+        tx.outputs.push(lp_token_output);
+
+        tx.data = Some(TxData::AmmMint {
+            amount0,
+            amount1,
+            lp_token_mint,
+        });
+        Ok(())
     }
 
     pub fn spend_utxos(

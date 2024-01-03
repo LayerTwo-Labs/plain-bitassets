@@ -10,6 +10,7 @@ use jsonrpsee::{
 
 use plain_bitassets::{
     node,
+    state::AmmPoolState,
     types::{Address, AssetId, Block, BlockHash, Transaction},
     wallet,
 };
@@ -30,6 +31,22 @@ pub trait Rpc {
         base: AssetId,
         quote: AssetId,
     ) -> RpcResult<Option<Fraction>>;
+
+    #[method(name = "get_amm_pool_state")]
+    async fn get_amm_pool_state(
+        &self,
+        token0: AssetId,
+        token1: AssetId,
+    ) -> RpcResult<AmmPoolState>;
+
+    #[method(name = "amm_mint")]
+    async fn amm_mint(
+        &self,
+        token0: AssetId,
+        token1: AssetId,
+        amount0: u64,
+        amount1: u64,
+    ) -> RpcResult<()>;
 
     #[method(name = "get_block_hash")]
     async fn get_block_hash(&self, height: u32) -> RpcResult<BlockHash>;
@@ -103,6 +120,45 @@ impl RpcServer for RpcServerImpl {
         self.app
             .node
             .try_get_amm_price(base, quote)
+            .map_err(convert_node_err)
+    }
+
+    async fn get_amm_pool_state(
+        &self,
+        asset0: AssetId,
+        asset1: AssetId,
+    ) -> RpcResult<AmmPoolState> {
+        self.app
+            .node
+            .get_amm_pool_state(asset0, asset1)
+            .map_err(convert_node_err)
+    }
+
+    async fn amm_mint(
+        &self,
+        asset0: AssetId,
+        asset1: AssetId,
+        amount0: u64,
+        amount1: u64,
+    ) -> RpcResult<()> {
+        let amm_pool_state = self.get_amm_pool_state(asset0, asset1).await?;
+        let next_amm_pool_state = amm_pool_state
+            .mint(amount0, amount1)
+            .map_err(|err| convert_node_err(err.into()))?;
+        let lp_token_mint = next_amm_pool_state.outstanding_lp_tokens
+            - amm_pool_state.outstanding_lp_tokens;
+        let mut tx = Transaction::default();
+        let () = self
+            .app
+            .wallet
+            .amm_mint(&mut tx, asset0, asset1, amount0, amount1, lp_token_mint)
+            .map_err(convert_wallet_err)?;
+        let authorized_tx =
+            self.app.wallet.authorize(tx).map_err(convert_wallet_err)?;
+        self.app
+            .node
+            .submit_transaction(&authorized_tx)
+            .await
             .map_err(convert_node_err)
     }
 

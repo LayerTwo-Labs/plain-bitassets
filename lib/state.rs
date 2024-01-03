@@ -219,7 +219,7 @@ pub enum Error {
 type AmmPair = (AssetId, AssetId);
 
 /// Current state of an AMM pool
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct AmmPoolState {
     /// Reserve of the first asset
     pub reserve0: u64,
@@ -227,6 +227,59 @@ pub struct AmmPoolState {
     pub reserve1: u64,
     /// Total amount of outstanding LP tokens
     pub outstanding_lp_tokens: u64,
+}
+
+impl AmmPoolState {
+    // Returns the new pool state after minting a position
+    pub fn mint(&self, amount0: u64, amount1: u64) -> Result<Self, Error> {
+        // Geometric mean of two [`u64`]s
+        fn geometric_mean(x: u64, y: u64) -> u64 {
+            num::integer::sqrt(x as u128 * y as u128)
+            // u64 truncation of u128 square root is always safe
+            as u64
+        }
+        let AmmPoolState {
+            reserve0,
+            reserve1,
+            outstanding_lp_tokens,
+        } = self;
+        let new_reserve0 =
+            reserve0.checked_add(amount0).ok_or(Error::InvalidAmmMint)?;
+        let new_reserve1 =
+            reserve1.checked_add(amount1).ok_or(Error::InvalidAmmMint)?;
+        if *reserve0 == 0 || *reserve1 == 0 || *outstanding_lp_tokens == 0 {
+            let lp_tokens_minted = geometric_mean(new_reserve0, new_reserve1);
+            let new_outstanding_lp_tokens =
+                outstanding_lp_tokens + lp_tokens_minted;
+            Ok(AmmPoolState {
+                reserve0: new_reserve0,
+                reserve1: new_reserve1,
+                outstanding_lp_tokens: new_outstanding_lp_tokens,
+            })
+        } else {
+            // LP tokens minted based on asset 0
+            let lp_tokens_minted_0: u128 = (*outstanding_lp_tokens as u128
+                * amount0 as u128)
+                / *reserve0 as u128;
+            // LP tokens minted based on asset 1
+            let lp_tokens_minted_1: u128 = (*outstanding_lp_tokens as u128
+                * amount1 as u128)
+                / *reserve1 as u128;
+            // LP tokens minted is the minimum of the two calculations
+            let lp_tokens_minted: u64 =
+                u128::min(lp_tokens_minted_0, lp_tokens_minted_1)
+                    .try_into()
+                    .map_err(|_| Error::AmmLpTokenOverflow)?;
+            let new_outstanding_lp_tokens = outstanding_lp_tokens
+                .checked_add(lp_tokens_minted)
+                .ok_or(Error::AmmLpTokenOverflow)?;
+            Ok(AmmPoolState {
+                reserve0: new_reserve0,
+                reserve1: new_reserve1,
+                outstanding_lp_tokens: new_outstanding_lp_tokens,
+            })
+        }
+    }
 }
 
 /// Parameters of a Dutch Auction
@@ -1159,62 +1212,16 @@ impl State {
             return Err(Error::InvalidAmmMint);
         }
         let pair = (asset0, asset1);
-        let AmmPoolState {
-            reserve0,
-            reserve1,
-            outstanding_lp_tokens,
-        } = self.amm_pools.get(rwtxn, &pair)?.unwrap_or_default();
-        let new_amm_pool_state =
-            if reserve0 == 0 || reserve1 == 0 || outstanding_lp_tokens == 0 {
-                let new_reserve0 = reserve0 + amount0;
-                let new_reserve1 = reserve1 + amount1;
-                let geometric_mean: u128 = num::integer::sqrt(
-                    new_reserve0 as u128 * new_reserve1 as u128,
-                );
-                let geometric_mean: u64 =
-                // u64 truncation of u128 square root is always safe
-                geometric_mean as u64;
-                let lp_tokens_minted = geometric_mean;
-                if lp_tokens_minted != lp_token_mint {
-                    return Err(Error::InvalidAmmMint);
-                }
-                let new_outstanding_lp_tokens =
-                    outstanding_lp_tokens + lp_tokens_minted;
-                AmmPoolState {
-                    reserve0: new_reserve0,
-                    reserve1: new_reserve1,
-                    outstanding_lp_tokens: new_outstanding_lp_tokens,
-                }
-            } else {
-                let new_reserve0 = reserve0 + amount0;
-                let new_reserve1 = reserve1 + amount1;
-                assert_ne!(0, reserve0);
-                assert_ne!(0, reserve1);
-                // LP tokens minted based on asset 0
-                let lp_tokens_minted_0: u128 = (outstanding_lp_tokens as u128
-                    * amount0 as u128)
-                    / reserve0 as u128;
-                // LP tokens minted based on asset 1
-                let lp_tokens_minted_1: u128 = (outstanding_lp_tokens as u128
-                    * amount1 as u128)
-                    / reserve1 as u128;
-                // LP tokens minted is the minimum of the two calculations
-                let lp_tokens_minted: u64 =
-                    u128::min(lp_tokens_minted_0, lp_tokens_minted_1)
-                        .try_into()
-                        .map_err(|_| Error::AmmLpTokenOverflow)?;
-                if lp_tokens_minted != lp_token_mint {
-                    return Err(Error::InvalidAmmMint);
-                }
-                let new_outstanding_lp_tokens = outstanding_lp_tokens
-                    .checked_add(lp_tokens_minted)
-                    .ok_or(Error::AmmLpTokenOverflow)?;
-                AmmPoolState {
-                    reserve0: new_reserve0,
-                    reserve1: new_reserve1,
-                    outstanding_lp_tokens: new_outstanding_lp_tokens,
-                }
-            };
+        let amm_pool_state =
+            self.amm_pools.get(rwtxn, &pair)?.unwrap_or_default();
+        let new_amm_pool_state = amm_pool_state.mint(amount0, amount1)?;
+        let lp_tokens_minted = new_amm_pool_state
+            .outstanding_lp_tokens
+            .checked_sub(lp_token_mint)
+            .ok_or(Error::InvalidAmmMint)?;
+        if lp_tokens_minted != lp_token_mint {
+            do yeet Error::InvalidAmmMint;
+        }
         self.amm_pools.put(rwtxn, &pair, &new_amm_pool_state)?;
         Ok(())
     }
