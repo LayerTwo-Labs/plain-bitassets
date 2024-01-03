@@ -48,6 +48,14 @@ pub trait Rpc {
         amount1: u64,
     ) -> RpcResult<()>;
 
+    #[method(name = "amm_burn")]
+    async fn amm_burn(
+        &self,
+        token0: AssetId,
+        token1: AssetId,
+        lp_token_amount: u64,
+    ) -> RpcResult<()>;
+
     #[method(name = "get_block_hash")]
     async fn get_block_hash(&self, height: u32) -> RpcResult<BlockHash>;
 
@@ -152,6 +160,40 @@ impl RpcServer for RpcServerImpl {
             .app
             .wallet
             .amm_mint(&mut tx, asset0, asset1, amount0, amount1, lp_token_mint)
+            .map_err(convert_wallet_err)?;
+        let authorized_tx =
+            self.app.wallet.authorize(tx).map_err(convert_wallet_err)?;
+        self.app
+            .node
+            .submit_transaction(&authorized_tx)
+            .await
+            .map_err(convert_node_err)
+    }
+
+    async fn amm_burn(
+        &self,
+        asset0: AssetId,
+        asset1: AssetId,
+        lp_token_amount: u64,
+    ) -> RpcResult<()> {
+        let amm_pool_state = self.get_amm_pool_state(asset0, asset1).await?;
+        let next_amm_pool_state = amm_pool_state
+            .burn(lp_token_amount)
+            .map_err(|err| convert_node_err(err.into()))?;
+        let amount0 = amm_pool_state.reserve0 - next_amm_pool_state.reserve0;
+        let amount1 = amm_pool_state.reserve1 - next_amm_pool_state.reserve1;
+        let mut tx = Transaction::default();
+        let () = self
+            .app
+            .wallet
+            .amm_burn(
+                &mut tx,
+                asset0,
+                asset1,
+                amount0,
+                amount1,
+                lp_token_amount,
+            )
             .map_err(convert_wallet_err)?;
         let authorized_tx =
             self.app.wallet.authorize(tx).map_err(convert_wallet_err)?;

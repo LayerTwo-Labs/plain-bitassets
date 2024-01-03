@@ -470,6 +470,45 @@ impl Wallet {
         }
     }
 
+    // Select control coin for the specified LP token
+    pub fn select_amm_lp_tokens(
+        &self,
+        asset0: AssetId,
+        asset1: AssetId,
+        amount: u64,
+    ) -> Result<(u64, HashMap<OutPoint, FilledOutput>), Error> {
+        let txn = self.env.read_txn()?;
+        let mut amm_lp_token_utxos = vec![];
+        for item in self.utxos.iter(&txn)? {
+            let (outpoint, output) = item?;
+            if let Some((pool_asset0, pool_asset1, _)) =
+                output.lp_token_amount()
+                && pool_asset0 == asset0
+                && pool_asset1 == asset1
+            {
+                amm_lp_token_utxos.push((outpoint, output));
+            }
+        }
+        amm_lp_token_utxos.sort_unstable_by_key(|(_, output)| {
+            output.lp_token_amount().map(|(_, _, amount)| amount)
+        });
+
+        let mut selected = HashMap::new();
+        let mut total_amount: u64 = 0;
+        for (outpoint, output) in &amm_lp_token_utxos {
+            if total_amount > amount {
+                break;
+            }
+            let (_, _, lp_token_amount) = output.lp_token_amount().unwrap();
+            total_amount += lp_token_amount;
+            selected.insert(*outpoint, output.clone());
+        }
+        if total_amount < amount {
+            return Err(Error::NotEnoughFunds);
+        }
+        Ok((total_amount, selected))
+    }
+
     /// Given a regular transaction, add an AMM mint.
     pub fn amm_mint(
         &self,
@@ -500,7 +539,7 @@ impl Wallet {
             memo: Vec::new(),
             content: match asset0 {
                 AssetId::Bitcoin => OutputContent::Value(change_amount0),
-                AssetId::BitAsset(_) => OutputContent::BitAsset(amount0),
+                AssetId::BitAsset(_) => OutputContent::BitAsset(change_amount0),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
             },
         };
@@ -509,7 +548,7 @@ impl Wallet {
             memo: Vec::new(),
             content: match asset1 {
                 AssetId::Bitcoin => OutputContent::Value(change_amount1),
-                AssetId::BitAsset(_) => OutputContent::BitAsset(amount1),
+                AssetId::BitAsset(_) => OutputContent::BitAsset(change_amount1),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
             },
         };
@@ -530,6 +569,66 @@ impl Wallet {
             amount0,
             amount1,
             lp_token_mint,
+        });
+        Ok(())
+    }
+
+    // Given a regular transaction, add an AMM burn.
+    pub fn amm_burn(
+        &self,
+        tx: &mut Transaction,
+        asset0: AssetId,
+        asset1: AssetId,
+        amount0: u64,
+        amount1: u64,
+        lp_token_burn: u64,
+    ) -> Result<(), Error> {
+        assert!(tx.is_regular(), "this function only accepts a regular tx");
+        // address for receiving asset0
+        let asset0_addr = self.get_new_address()?;
+        // address for receiving asset1
+        let asset1_addr = self.get_new_address()?;
+        // address for the lp token change
+        let lp_token_change_addr = self.get_new_address()?;
+
+        let (input_lp_token_amount, lp_token_utxos) =
+            self.select_amm_lp_tokens(asset0, asset1, lp_token_burn)?;
+
+        let lp_token_change_amount = input_lp_token_amount - lp_token_burn;
+        let lp_token_change_output = Output {
+            address: lp_token_change_addr,
+            content: OutputContent::AmmLpToken(lp_token_change_amount),
+            memo: Vec::new(),
+        };
+        let asset0_output = Output {
+            address: asset0_addr,
+            memo: Vec::new(),
+            content: match asset0 {
+                AssetId::Bitcoin => OutputContent::Value(amount0),
+                AssetId::BitAsset(_) => OutputContent::BitAsset(amount0),
+                AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
+            },
+        };
+        let asset1_output = Output {
+            address: asset1_addr,
+            memo: Vec::new(),
+            content: match asset1 {
+                AssetId::Bitcoin => OutputContent::Value(amount1),
+                AssetId::BitAsset(_) => OutputContent::BitAsset(amount1),
+                AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
+            },
+        };
+
+        tx.inputs.extend(lp_token_utxos.keys());
+
+        tx.outputs.push(lp_token_change_output);
+        tx.outputs.push(asset0_output);
+        tx.outputs.push(asset1_output);
+
+        tx.data = Some(TxData::AmmBurn {
+            amount0,
+            amount1,
+            lp_token_burn,
         });
         Ok(())
     }

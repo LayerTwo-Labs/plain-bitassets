@@ -230,7 +230,7 @@ pub struct AmmPoolState {
 }
 
 impl AmmPoolState {
-    // Returns the new pool state after minting a position
+    /// Returns the new pool state after minting a position
     pub fn mint(&self, amount0: u64, amount1: u64) -> Result<Self, Error> {
         // Geometric mean of two [`u64`]s
         fn geometric_mean(x: u64, y: u64) -> u64 {
@@ -279,6 +279,42 @@ impl AmmPoolState {
                 outstanding_lp_tokens: new_outstanding_lp_tokens,
             })
         }
+    }
+
+    /// Returns the new pool state after burning a position
+    pub fn burn(&self, lp_token_burn: u64) -> Result<Self, Error> {
+        let AmmPoolState {
+            reserve0,
+            reserve1,
+            outstanding_lp_tokens,
+        } = self;
+        if *outstanding_lp_tokens == 0 {
+            do yeet Error::InvalidAmmBurn
+        };
+        // compute payout based on either asset
+        let payout = |reserve: u64| -> Result<u64, Error> {
+            let payout: u128 = (reserve as u128 * lp_token_burn as u128)
+                / (*outstanding_lp_tokens as u128);
+            payout.try_into().map_err(|_| Error::AmmBurnOverflow)
+        };
+        // payout in asset 0
+        let payout_0 = payout(*reserve0)?;
+        // payout in asset 1
+        let payout_1 = payout(*reserve1)?;
+        let new_reserve0 = reserve0
+            .checked_sub(payout_0)
+            .ok_or(Error::AmmBurnUnderflow)?;
+        let new_reserve1 = reserve1
+            .checked_sub(payout_1)
+            .ok_or(Error::AmmBurnUnderflow)?;
+        let new_outstanding_lp_tokens = outstanding_lp_tokens
+            .checked_sub(lp_token_burn)
+            .ok_or(Error::AmmBurnUnderflow)?;
+        Ok(AmmPoolState {
+            reserve0: new_reserve0,
+            reserve1: new_reserve1,
+            outstanding_lp_tokens: new_outstanding_lp_tokens,
+        })
     }
 }
 
@@ -1155,42 +1191,19 @@ impl State {
             amount1,
         } = filled_tx.amm_burn().ok_or(Error::InvalidAmmBurn)?;
         let pair = (asset0, asset1);
-        let AmmPoolState {
-            reserve0,
-            reserve1,
-            outstanding_lp_tokens,
-        } = self.amm_pools.get(rwtxn, &pair)?.unwrap_or_default();
-        assert_ne!(0, outstanding_lp_tokens);
+        let amm_pool_state =
+            self.amm_pools.get(rwtxn, &pair)?.unwrap_or_default();
+        let new_amm_pool_state = amm_pool_state.burn(lp_token_burn)?;
         // payout in asset 0
-        let payout_0: u128 = (lp_token_burn as u128 * reserve0 as u128)
-            / outstanding_lp_tokens as u128;
-        let payout_0: u64 =
-            payout_0.try_into().map_err(|_| Error::AmmBurnOverflow)?;
-        if payout_0 != amount0 {
+        let payout0 = amm_pool_state.reserve0 - new_amm_pool_state.reserve0;
+        if payout0 != amount0 {
             return Err(Error::InvalidAmmBurn);
         }
         // payout in asset 1
-        let payout_1: u128 = (lp_token_burn as u128 * reserve1 as u128)
-            / outstanding_lp_tokens as u128;
-        let payout_1: u64 =
-            payout_1.try_into().map_err(|_| Error::AmmBurnOverflow)?;
-        if payout_1 != amount1 {
+        let payout1 = amm_pool_state.reserve1 - new_amm_pool_state.reserve1;
+        if payout1 != amount1 {
             return Err(Error::InvalidAmmBurn);
         }
-        let new_reserve0 = reserve0
-            .checked_sub(payout_0)
-            .ok_or(Error::AmmBurnUnderflow)?;
-        let new_reserve1 = reserve1
-            .checked_sub(payout_1)
-            .ok_or(Error::AmmBurnUnderflow)?;
-        let new_outstanding_lp_tokens = outstanding_lp_tokens
-            .checked_sub(lp_token_burn)
-            .ok_or(Error::AmmBurnUnderflow)?;
-        let new_amm_pool_state = AmmPoolState {
-            reserve0: new_reserve0,
-            reserve1: new_reserve1,
-            outstanding_lp_tokens: new_outstanding_lp_tokens,
-        };
         self.amm_pools.put(rwtxn, &pair, &new_amm_pool_state)?;
         Ok(())
     }
