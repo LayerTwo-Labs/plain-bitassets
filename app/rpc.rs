@@ -1,4 +1,4 @@
-use std::{borrow::Cow, net::SocketAddr};
+use std::{borrow::Cow, cmp::Ordering, net::SocketAddr};
 
 use fraction::Fraction;
 use jsonrpsee::{
@@ -10,7 +10,7 @@ use jsonrpsee::{
 
 use plain_bitassets::{
     node,
-    state::AmmPoolState,
+    state::{self, AmmPoolState},
     types::{Address, AssetId, Block, BlockHash, Transaction},
     wallet,
 };
@@ -35,15 +35,15 @@ pub trait Rpc {
     #[method(name = "get_amm_pool_state")]
     async fn get_amm_pool_state(
         &self,
-        token0: AssetId,
-        token1: AssetId,
+        asset0: AssetId,
+        asset1: AssetId,
     ) -> RpcResult<AmmPoolState>;
 
     #[method(name = "amm_mint")]
     async fn amm_mint(
         &self,
-        token0: AssetId,
-        token1: AssetId,
+        asset0: AssetId,
+        asset1: AssetId,
         amount0: u64,
         amount1: u64,
     ) -> RpcResult<()>;
@@ -51,10 +51,19 @@ pub trait Rpc {
     #[method(name = "amm_burn")]
     async fn amm_burn(
         &self,
-        token0: AssetId,
-        token1: AssetId,
+        asset0: AssetId,
+        asset1: AssetId,
         lp_token_amount: u64,
     ) -> RpcResult<()>;
+
+    /// Returns the amount of `asset_receive` to receive
+    #[method(name = "amm_swap")]
+    async fn amm_swap(
+        &self,
+        asset_spend: AssetId,
+        asset_receive: AssetId,
+        amount_spend: u64,
+    ) -> RpcResult<u64>;
 
     #[method(name = "get_block_hash")]
     async fn get_block_hash(&self, height: u32) -> RpcResult<BlockHash>;
@@ -202,6 +211,57 @@ impl RpcServer for RpcServerImpl {
             .submit_transaction(&authorized_tx)
             .await
             .map_err(convert_node_err)
+    }
+
+    async fn amm_swap(
+        &self,
+        asset_spend: AssetId,
+        asset_receive: AssetId,
+        amount_spend: u64,
+    ) -> RpcResult<u64> {
+        let pair = match asset_spend.cmp(&asset_receive) {
+            Ordering::Less => (asset_spend, asset_receive),
+            Ordering::Equal => {
+                let err = node::Error::State(state::Error::InvalidAmmSwap);
+                return Err(convert_node_err(err));
+            }
+            Ordering::Greater => (asset_receive, asset_spend),
+        };
+        let amm_pool_state = self.get_amm_pool_state(pair.0, pair.1).await?;
+        let amount_receive = (if asset_spend < asset_receive {
+            amm_pool_state.swap_asset0_for_asset1(amount_spend).map(
+                |new_amm_pool_state| {
+                    new_amm_pool_state.reserve1 - amm_pool_state.reserve1
+                },
+            )
+        } else {
+            amm_pool_state.swap_asset1_for_asset0(amount_spend).map(
+                |new_amm_pool_state| {
+                    new_amm_pool_state.reserve0 - amm_pool_state.reserve0
+                },
+            )
+        })
+        .map_err(|err| convert_node_err(err.into()))?;
+        let mut tx = Transaction::default();
+        let () = self
+            .app
+            .wallet
+            .amm_swap(
+                &mut tx,
+                asset_spend,
+                asset_receive,
+                amount_spend,
+                amount_receive,
+            )
+            .map_err(convert_wallet_err)?;
+        let authorized_tx =
+            self.app.wallet.authorize(tx).map_err(convert_wallet_err)?;
+        self.app
+            .node
+            .submit_transaction(&authorized_tx)
+            .await
+            .map_err(convert_node_err)?;
+        Ok(amount_receive)
     }
 
     async fn get_block_hash(&self, height: u32) -> RpcResult<BlockHash> {

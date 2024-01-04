@@ -558,8 +558,12 @@ impl Wallet {
             memo: Vec::new(),
         };
 
+        /* The first two unique assets in the inputs must be
+         * `asset0` and `asset1` */
         tx.inputs.extend(asset0_utxos.keys());
         tx.inputs.extend(asset1_utxos.keys());
+        tx.inputs
+            .rotate_right(asset0_utxos.len() + asset1_utxos.len());
 
         tx.outputs.push(change_output0);
         tx.outputs.push(change_output1);
@@ -619,7 +623,10 @@ impl Wallet {
             },
         };
 
+        /* The AMM lp token input must occur before any other AMM lp token
+         * inputs. */
         tx.inputs.extend(lp_token_utxos.keys());
+        tx.inputs.rotate_right(lp_token_utxos.len());
 
         tx.outputs.push(lp_token_change_output);
         tx.outputs.push(asset0_output);
@@ -629,6 +636,59 @@ impl Wallet {
             amount0,
             amount1,
             lp_token_burn,
+        });
+        Ok(())
+    }
+
+    // Given a regular transaction, add an AMM swap.
+    pub fn amm_swap(
+        &self,
+        tx: &mut Transaction,
+        asset_spend: AssetId,
+        asset_receive: AssetId,
+        amount_spend: u64,
+        amount_receive: u64,
+    ) -> Result<(), Error> {
+        assert!(tx.is_regular(), "this function only accepts a regular tx");
+        // Address for receiving `asset_spend` change
+        let change_addr = self.get_new_address()?;
+        // Address for receiving `asset_receive`
+        let receive_addr = self.get_new_address()?;
+
+        let (input_amount_spend, spend_utxos) =
+            self.select_asset_utxos(asset_spend, amount_spend)?;
+
+        let amount_change = input_amount_spend - amount_spend;
+        let change_output = Output {
+            address: change_addr,
+            memo: Vec::new(),
+            content: match asset_spend {
+                AssetId::Bitcoin => OutputContent::Value(amount_change),
+                AssetId::BitAsset(_) => OutputContent::BitAsset(amount_change),
+                AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
+            },
+        };
+        let receive_output = Output {
+            address: receive_addr,
+            memo: Vec::new(),
+            content: match asset_receive {
+                AssetId::Bitcoin => OutputContent::Value(amount_receive),
+                AssetId::BitAsset(_) => OutputContent::BitAsset(amount_receive),
+                AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
+            },
+        };
+
+        // The first unique asset in the inputs must be `asset_spend`.
+        tx.inputs.extend(spend_utxos.keys());
+        tx.inputs.rotate_right(spend_utxos.len());
+
+        tx.outputs.push(change_output);
+        tx.outputs.push(receive_output);
+
+        tx.data = Some(TxData::AmmSwap {
+            amount_spent: amount_spend,
+            amount_receive,
+            pair_asset: asset_receive,
         });
         Ok(())
     }
