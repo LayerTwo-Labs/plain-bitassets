@@ -424,6 +424,81 @@ pub struct DutchAuctionState {
     pub final_price: u64,
 }
 
+impl DutchAuctionState {
+    /// Returns the new auction state after a bid
+    pub fn bid(&self, bid_amount: u64, height: u32) -> Result<Self, Error> {
+        let DutchAuctionState {
+            start_block,
+            duration,
+            base_asset,
+            base_amount,
+            quote_asset,
+            quote_amount,
+            initial_price,
+            final_price,
+        } = self;
+        if height < *start_block {
+            do yeet DutchAuctionBidError::AuctionNotStarted
+        };
+        // Blocks elapsed since start of the auction
+        let elapsed_blocks = height - *start_block;
+        let end_block = start_block.saturating_add(*duration - 1);
+        if height > end_block {
+            do yeet DutchAuctionBidError::AuctionEnded
+        };
+        // Calculate current price
+        let price = if *duration == 1 {
+            *initial_price
+        } else {
+            let price_decrease: u128 = {
+                /* ((initial - final) / (duration - 1)) * elapsed
+                 * == ((initial - final) * elapsed) / (duration - 1) */
+                let max_price_decrease =
+                    (*initial_price - *final_price) as u128;
+                (max_price_decrease * elapsed_blocks as u128)
+                    / (*duration - 1) as u128
+            };
+            // This is safe, as `(elapsed_blocks / (duration - 1)) < 1`
+            let price_decrease = {
+                assert!(elapsed_blocks / (*duration - 1) < 1);
+                price_decrease as u64
+            };
+            *initial_price - price_decrease
+        };
+        if price == 0 {
+            do yeet DutchAuctionBidError::InvalidPrice
+        };
+        // Calculate order quantity for this bid, in terms of the base
+        let order_quantity: u128 = {
+            /* bid_amount / (price / base_amount)
+             * == (bid_amount * base_amount) / price */
+            (bid_amount as u128 * *base_amount as u128).div_ceil(price as u128)
+        };
+        let order_quantity: u64 = if order_quantity <= *base_amount as u128 {
+            order_quantity as u64
+        } else {
+            do yeet DutchAuctionBidError::QuantityTooLarge
+        };
+        let new_base_amount = *base_amount - order_quantity;
+        let final_price = {
+            /* Truncation to `u64` here is safe as
+            `(new_base_amount / base_amount) < 1` */
+            (*final_price as u128 * new_base_amount as u128)
+                .div_ceil(*base_amount as u128) as u64
+        };
+        Ok(Self {
+            start_block: height,
+            duration: duration - elapsed_blocks,
+            base_asset: *base_asset,
+            base_amount: new_base_amount,
+            quote_asset: *quote_asset,
+            quote_amount: quote_amount + bid_amount,
+            initial_price: price - bid_amount,
+            final_price,
+        })
+    }
+}
+
 #[derive(Clone)]
 pub struct State {
     /// Associates ordered pairs of BitAssets to their AMM pool states
@@ -1502,81 +1577,31 @@ impl State {
         } = filled_tx
             .dutch_auction_bid()
             .ok_or(DutchAuctionBidError::InvalidTxData)?;
-        let mut auction_params = self
+        let dutch_auction_state = self
             .dutch_auctions
             .get(rwtxn, &auction_id)?
             .ok_or(DutchAuctionBidError::MissingAuction)?;
-        let DutchAuctionState {
-            start_block,
-            duration,
-            base_asset,
-            base_amount,
-            quote_asset,
-            quote_amount,
-            initial_price,
-            final_price,
-        } = &mut auction_params;
-        if asset_receive != *base_asset {
+        if asset_receive != dutch_auction_state.base_asset {
             do yeet DutchAuctionBidError::IncorrectReceiveAsset
         }
-        if asset_spend != *quote_asset {
+        if asset_spend != dutch_auction_state.quote_asset {
             do yeet DutchAuctionBidError::IncorrectSpendAsset
         }
-        if height < *start_block {
-            do yeet DutchAuctionBidError::AuctionNotStarted
-        };
-        // Blocks elapsed since start of the auction
-        let elapsed_blocks = height - *start_block;
-        let end_block = start_block.saturating_add(*duration - 1);
-        if height > end_block {
-            do yeet DutchAuctionBidError::AuctionEnded
-        };
-        if amount_receive > *base_amount {
+        if amount_receive > dutch_auction_state.base_amount {
             do yeet DutchAuctionBidError::QuantityTooLarge
         };
-        // Calculate current price
-        let price = if *duration == 1 {
-            *initial_price
-        } else {
-            let price_decrease: u128 = {
-                /* ((initial - final) / (duration - 1)) * elapsed
-                == ((initial - final) * elapsed) / (duration - 1) */
-                let max_price_decrease =
-                    (*initial_price - *final_price) as u128;
-                (max_price_decrease * elapsed_blocks as u128)
-                    / (*duration - 1) as u128
-            };
-            // This is safe, as `(elapsed_blocks / (duration - 1)) < 1`
-            let price_decrease = {
-                assert!(elapsed_blocks / (*duration - 1) < 1);
-                price_decrease as u64
-            };
-            *initial_price - price_decrease
-        };
-        // Calculate size for this bid
-        let size = {
-            /* Truncation to `u64` here is safe as
-            `(amount_receive / base_amount) < 1` */
-            (price as u128 * amount_receive as u128)
-                .div_ceil(*base_amount as u128) as u64
-        };
-        if size != amount_spend {
+        let new_dutch_auction_state =
+            dutch_auction_state.bid(amount_spend, height)?;
+        let order_quantity = dutch_auction_state.base_amount
+            - new_dutch_auction_state.base_amount;
+        if amount_receive != order_quantity {
             do yeet DutchAuctionBidError::InvalidPrice
         };
-        let new_base_amount = *base_amount - amount_receive;
-        *final_price = {
-            /* Truncation to `u64` here is safe as
-            `(new_base_amount / base_amount) < 1` */
-            (*final_price as u128 * new_base_amount as u128)
-                .div_ceil(*base_amount as u128) as u64
-        };
-        *base_amount = new_base_amount;
-        *initial_price = price - size;
-        *start_block = height;
-        *duration -= elapsed_blocks;
-        *quote_amount += amount_spend;
-        self.dutch_auctions
-            .put(rwtxn, &auction_id, &auction_params)?;
+        self.dutch_auctions.put(
+            rwtxn,
+            &auction_id,
+            &new_dutch_auction_state,
+        )?;
         Ok(())
     }
 

@@ -17,7 +17,7 @@ use tokio::{sync::mpsc, task::JoinHandle};
 use crate::{
     authorization::Authorization,
     net::{PeerState, Request, Response},
-    state::AmmPoolState,
+    state::{AmmPoolState, DutchAuctionBidError, DutchAuctionState},
     types::*,
 };
 
@@ -196,6 +196,28 @@ impl Node {
             .get(&txn, &(asset0, asset0))?
             .unwrap_or_default();
         Ok(res)
+    }
+
+    pub fn try_get_dutch_auction_state(
+        &self,
+        auction_id: DutchAuctionId,
+    ) -> Result<Option<DutchAuctionState>, Error> {
+        let txn = self.env.read_txn()?;
+        let res = self.state.dutch_auctions.get(&txn, &auction_id)?;
+        Ok(res)
+    }
+
+    pub fn get_dutch_auction_state(
+        &self,
+        auction_id: DutchAuctionId,
+    ) -> Result<DutchAuctionState, Error> {
+        self.try_get_dutch_auction_state(auction_id).and_then(
+            |dutch_auction_state| {
+                dutch_auction_state.ok_or_else(|| {
+                    Error::State(DutchAuctionBidError::MissingAuction.into())
+                })
+            },
+        )
     }
 
     pub fn get_best_hash(&self) -> Result<BlockHash, Error> {

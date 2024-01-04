@@ -12,7 +12,8 @@ use plain_bitassets::{
     node,
     state::{self, AmmPoolState},
     types::{
-        Address, AssetId, Block, BlockHash, DutchAuctionParams, Transaction,
+        Address, AssetId, Block, BlockHash, DutchAuctionId, DutchAuctionParams,
+        Transaction,
     },
     wallet,
 };
@@ -72,6 +73,14 @@ pub trait Rpc {
         &self,
         dutch_auction_params: DutchAuctionParams,
     ) -> RpcResult<()>;
+
+    /// Returns the amount of the base asset to receive
+    #[method(name = "dutch_auction_bid")]
+    async fn dutch_auction_bid(
+        &self,
+        dutch_auction_id: DutchAuctionId,
+        bid_size: u64,
+    ) -> RpcResult<u64>;
 
     #[method(name = "get_block_hash")]
     async fn get_block_hash(&self, height: u32) -> RpcResult<BlockHash>;
@@ -290,6 +299,45 @@ impl RpcServer for RpcServerImpl {
             .await
             .map_err(convert_node_err)?;
         Ok(())
+    }
+
+    async fn dutch_auction_bid(
+        &self,
+        auction_id: DutchAuctionId,
+        bid_size: u64,
+    ) -> RpcResult<u64> {
+        let height = self.getblockcount().await;
+        let auction_state = self
+            .app
+            .node
+            .get_dutch_auction_state(auction_id)
+            .map_err(convert_node_err)?;
+        let next_auction_state = auction_state
+            .bid(bid_size, height)
+            .map_err(|err| convert_node_err(err.into()))?;
+        let receive_quantity =
+            auction_state.base_amount - next_auction_state.base_amount;
+        let mut tx = Transaction::default();
+        let () = self
+            .app
+            .wallet
+            .dutch_auction_bid(
+                &mut tx,
+                auction_id,
+                auction_state.base_asset,
+                auction_state.quote_asset,
+                bid_size,
+                receive_quantity,
+            )
+            .map_err(convert_wallet_err)?;
+        let authorized_tx =
+            self.app.wallet.authorize(tx).map_err(convert_wallet_err)?;
+        self.app
+            .node
+            .submit_transaction(&authorized_tx)
+            .await
+            .map_err(convert_node_err)?;
+        Ok(receive_quantity)
     }
 
     async fn get_block_hash(&self, height: u32) -> RpcResult<BlockHash> {

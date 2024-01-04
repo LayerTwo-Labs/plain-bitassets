@@ -13,8 +13,9 @@ use crate::{
     authorization::{get_address, Authorization},
     types::{
         Address, AssetId, AuthorizedTransaction, BitAssetData, BitAssetId,
-        DutchAuctionParams, FilledOutput, GetBitcoinValue, Hash, InPoint,
-        OutPoint, Output, OutputContent, SpentOutput, Transaction, TxData,
+        DutchAuctionId, DutchAuctionParams, FilledOutput, GetBitcoinValue,
+        Hash, InPoint, OutPoint, Output, OutputContent, SpentOutput,
+        Transaction, TxData,
     },
 };
 
@@ -740,6 +741,63 @@ impl Wallet {
         tx.outputs.extend(change_output);
         tx.outputs.push(dutch_auction_receipt);
         tx.data = Some(TxData::DutchAuctionCreate(dutch_auction_params));
+        Ok(())
+    }
+
+    /// Given a regular transaction, create a dutch auction bid
+    pub fn dutch_auction_bid(
+        &self,
+        tx: &mut Transaction,
+        auction_id: DutchAuctionId,
+        base_asset: AssetId,
+        quote_asset: AssetId,
+        bid_size: u64,
+        receive_quantity: u64,
+    ) -> Result<(), Error> {
+        assert!(tx.is_regular(), "this function only accepts a regular tx");
+        let (input_quote_amount, quote_utxos) =
+            self.select_asset_utxos(quote_asset, bid_size)?;
+        let change_amount = input_quote_amount - bid_size;
+        let change_output = if change_amount != 0 {
+            let address = self.get_new_address()?;
+            let content = match quote_asset {
+                AssetId::Bitcoin => OutputContent::Value(change_amount),
+                AssetId::BitAsset(_) => OutputContent::BitAsset(change_amount),
+                AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
+            };
+            Some(Output {
+                address,
+                memo: Vec::new(),
+                content,
+            })
+        } else {
+            None
+        };
+        let base_output = {
+            let content = match base_asset {
+                AssetId::Bitcoin => OutputContent::Value(change_amount),
+                AssetId::BitAsset(_) => OutputContent::BitAsset(change_amount),
+                AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
+            };
+            Output {
+                address: self.get_new_address()?,
+                memo: Vec::new(),
+                content,
+            }
+        };
+
+        // The first unique asset in the inputs must be `quote_asset`.
+        tx.inputs.extend(quote_utxos.keys());
+        tx.inputs.rotate_right(quote_utxos.len());
+
+        tx.outputs.push(base_output);
+        tx.outputs.extend(change_output);
+        tx.data = Some(TxData::DutchAuctionBid {
+            auction_id,
+            receive_asset: base_asset,
+            quantity: receive_quantity,
+            bid_size,
+        });
         Ok(())
     }
 
