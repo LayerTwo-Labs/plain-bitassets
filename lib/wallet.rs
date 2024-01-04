@@ -13,8 +13,8 @@ use crate::{
     authorization::{get_address, Authorization},
     types::{
         Address, AssetId, AuthorizedTransaction, BitAssetData, BitAssetId,
-        FilledOutput, GetBitcoinValue, Hash, InPoint, OutPoint, Output,
-        OutputContent, SpentOutput, Transaction, TxData,
+        DutchAuctionParams, FilledOutput, GetBitcoinValue, Hash, InPoint,
+        OutPoint, Output, OutputContent, SpentOutput, Transaction, TxData,
     },
 };
 
@@ -520,10 +520,6 @@ impl Wallet {
         lp_token_mint: u64,
     ) -> Result<(), Error> {
         assert!(tx.is_regular(), "this function only accepts a regular tx");
-        // address for the asset0 change
-        let asset0_change_addr = self.get_new_address()?;
-        // address for the asset1 change
-        let asset1_change_addr = self.get_new_address()?;
         // address for the LP token output
         let lp_token_addr = self.get_new_address()?;
 
@@ -534,23 +530,35 @@ impl Wallet {
 
         let change_amount0 = input_amount0 - amount0;
         let change_amount1 = input_amount1 - amount1;
-        let change_output0 = Output {
-            address: asset0_change_addr,
-            memo: Vec::new(),
-            content: match asset0 {
+        let change_output0 = if change_amount0 != 0 {
+            let address = self.get_new_address()?;
+            let content = match asset0 {
                 AssetId::Bitcoin => OutputContent::Value(change_amount0),
                 AssetId::BitAsset(_) => OutputContent::BitAsset(change_amount0),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
-            },
+            };
+            Some(Output {
+                address,
+                memo: Vec::new(),
+                content,
+            })
+        } else {
+            None
         };
-        let change_output1 = Output {
-            address: asset1_change_addr,
-            memo: Vec::new(),
-            content: match asset1 {
+        let change_output1 = if change_amount1 != 0 {
+            let address = self.get_new_address()?;
+            let content = match asset1 {
                 AssetId::Bitcoin => OutputContent::Value(change_amount1),
                 AssetId::BitAsset(_) => OutputContent::BitAsset(change_amount1),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
-            },
+            };
+            Some(Output {
+                address,
+                memo: Vec::new(),
+                content,
+            })
+        } else {
+            None
         };
         let lp_token_output = Output {
             address: lp_token_addr,
@@ -565,8 +573,8 @@ impl Wallet {
         tx.inputs
             .rotate_right(asset0_utxos.len() + asset1_utxos.len());
 
-        tx.outputs.push(change_output0);
-        tx.outputs.push(change_output1);
+        tx.outputs.extend(change_output0);
+        tx.outputs.extend(change_output1);
         tx.outputs.push(lp_token_output);
 
         tx.data = Some(TxData::AmmMint {
@@ -592,17 +600,20 @@ impl Wallet {
         let asset0_addr = self.get_new_address()?;
         // address for receiving asset1
         let asset1_addr = self.get_new_address()?;
-        // address for the lp token change
-        let lp_token_change_addr = self.get_new_address()?;
 
         let (input_lp_token_amount, lp_token_utxos) =
             self.select_amm_lp_tokens(asset0, asset1, lp_token_burn)?;
 
         let lp_token_change_amount = input_lp_token_amount - lp_token_burn;
-        let lp_token_change_output = Output {
-            address: lp_token_change_addr,
-            content: OutputContent::AmmLpToken(lp_token_change_amount),
-            memo: Vec::new(),
+        let lp_token_change_output = if lp_token_change_amount != 0 {
+            let address = self.get_new_address()?;
+            Some(Output {
+                address,
+                content: OutputContent::AmmLpToken(lp_token_change_amount),
+                memo: Vec::new(),
+            })
+        } else {
+            None
         };
         let asset0_output = Output {
             address: asset0_addr,
@@ -628,7 +639,7 @@ impl Wallet {
         tx.inputs.extend(lp_token_utxos.keys());
         tx.inputs.rotate_right(lp_token_utxos.len());
 
-        tx.outputs.push(lp_token_change_output);
+        tx.outputs.extend(lp_token_change_output);
         tx.outputs.push(asset0_output);
         tx.outputs.push(asset1_output);
 
@@ -650,23 +661,25 @@ impl Wallet {
         amount_receive: u64,
     ) -> Result<(), Error> {
         assert!(tx.is_regular(), "this function only accepts a regular tx");
-        // Address for receiving `asset_spend` change
-        let change_addr = self.get_new_address()?;
         // Address for receiving `asset_receive`
         let receive_addr = self.get_new_address()?;
-
         let (input_amount_spend, spend_utxos) =
             self.select_asset_utxos(asset_spend, amount_spend)?;
-
         let amount_change = input_amount_spend - amount_spend;
-        let change_output = Output {
-            address: change_addr,
-            memo: Vec::new(),
-            content: match asset_spend {
+        let change_output = if amount_change != 0 {
+            let address = self.get_new_address()?;
+            let content = match asset_spend {
                 AssetId::Bitcoin => OutputContent::Value(amount_change),
                 AssetId::BitAsset(_) => OutputContent::BitAsset(amount_change),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
-            },
+            };
+            Some(Output {
+                address,
+                memo: Vec::new(),
+                content,
+            })
+        } else {
+            None
         };
         let receive_output = Output {
             address: receive_addr,
@@ -677,19 +690,56 @@ impl Wallet {
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
             },
         };
-
         // The first unique asset in the inputs must be `asset_spend`.
         tx.inputs.extend(spend_utxos.keys());
         tx.inputs.rotate_right(spend_utxos.len());
-
-        tx.outputs.push(change_output);
+        tx.outputs.extend(change_output);
         tx.outputs.push(receive_output);
-
         tx.data = Some(TxData::AmmSwap {
             amount_spent: amount_spend,
             amount_receive,
             pair_asset: asset_receive,
         });
+        Ok(())
+    }
+
+    /// Given a regular transaction, create a dutch auction tx
+    pub fn dutch_auction_create(
+        &self,
+        tx: &mut Transaction,
+        dutch_auction_params: DutchAuctionParams,
+    ) -> Result<(), Error> {
+        assert!(tx.is_regular(), "this function only accepts a regular tx");
+        let (input_base_amount, base_utxos) = self.select_asset_utxos(
+            dutch_auction_params.base_asset,
+            dutch_auction_params.base_amount,
+        )?;
+        let change_amount =
+            input_base_amount - dutch_auction_params.base_amount;
+        let change_output = if change_amount != 0 {
+            let address = self.get_new_address()?;
+            let content = match dutch_auction_params.base_asset {
+                AssetId::Bitcoin => OutputContent::Value(change_amount),
+                AssetId::BitAsset(_) => OutputContent::BitAsset(change_amount),
+                AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
+            };
+            Some(Output {
+                address,
+                memo: Vec::new(),
+                content,
+            })
+        } else {
+            None
+        };
+        let dutch_auction_receipt = Output {
+            address: self.get_new_address()?,
+            memo: Vec::new(),
+            content: OutputContent::DutchAuctionReceipt,
+        };
+        tx.inputs.extend(base_utxos.keys());
+        tx.outputs.extend(change_output);
+        tx.outputs.push(dutch_auction_receipt);
+        tx.data = Some(TxData::DutchAuctionCreate(dutch_auction_params));
         Ok(())
     }
 

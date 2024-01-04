@@ -11,7 +11,9 @@ use jsonrpsee::{
 use plain_bitassets::{
     node,
     state::{self, AmmPoolState},
-    types::{Address, AssetId, Block, BlockHash, Transaction},
+    types::{
+        Address, AssetId, Block, BlockHash, DutchAuctionParams, Transaction,
+    },
     wallet,
 };
 
@@ -64,6 +66,12 @@ pub trait Rpc {
         asset_receive: AssetId,
         amount_spend: u64,
     ) -> RpcResult<u64>;
+
+    #[method(name = "dutch_auction_create")]
+    async fn dutch_auction_create(
+        &self,
+        dutch_auction_params: DutchAuctionParams,
+    ) -> RpcResult<()>;
 
     #[method(name = "get_block_hash")]
     async fn get_block_hash(&self, height: u32) -> RpcResult<BlockHash>;
@@ -262,6 +270,26 @@ impl RpcServer for RpcServerImpl {
             .await
             .map_err(convert_node_err)?;
         Ok(amount_receive)
+    }
+
+    async fn dutch_auction_create(
+        &self,
+        dutch_auction_params: DutchAuctionParams,
+    ) -> RpcResult<()> {
+        let mut tx = Transaction::default();
+        let () = self
+            .app
+            .wallet
+            .dutch_auction_create(&mut tx, dutch_auction_params)
+            .map_err(convert_wallet_err)?;
+        let authorized_tx =
+            self.app.wallet.authorize(tx).map_err(convert_wallet_err)?;
+        self.app
+            .node
+            .submit_transaction(&authorized_tx)
+            .await
+            .map_err(convert_node_err)?;
+        Ok(())
     }
 
     async fn get_block_hash(&self, height: u32) -> RpcResult<BlockHash> {
