@@ -82,6 +82,13 @@ pub trait Rpc {
         bid_size: u64,
     ) -> RpcResult<u64>;
 
+    /// Returns the amount of the base asset and quote asset to receive
+    #[method(name = "dutch_auction_collect")]
+    async fn dutch_auction_collect(
+        &self,
+        dutch_auction_id: DutchAuctionId,
+    ) -> RpcResult<(u64, u64)>;
+
     #[method(name = "get_block_hash")]
     async fn get_block_hash(&self, height: u32) -> RpcResult<BlockHash>;
 
@@ -338,6 +345,44 @@ impl RpcServer for RpcServerImpl {
             .await
             .map_err(convert_node_err)?;
         Ok(receive_quantity)
+    }
+
+    async fn dutch_auction_collect(
+        &self,
+        auction_id: DutchAuctionId,
+    ) -> RpcResult<(u64, u64)> {
+        let height = self.getblockcount().await;
+        let auction_state = self
+            .app
+            .node
+            .get_dutch_auction_state(auction_id)
+            .map_err(convert_node_err)?;
+        if height <= auction_state.start_block + auction_state.duration {
+            let err = state::DutchAuctionCollectError::AuctionNotFinished;
+            let err = node::Error::State(err.into());
+            return Err(convert_node_err(err));
+        }
+        let mut tx = Transaction::default();
+        let () = self
+            .app
+            .wallet
+            .dutch_auction_collect(
+                &mut tx,
+                auction_id,
+                auction_state.base_asset,
+                auction_state.quote_asset,
+                auction_state.base_amount,
+                auction_state.quote_amount,
+            )
+            .map_err(convert_wallet_err)?;
+        let authorized_tx =
+            self.app.wallet.authorize(tx).map_err(convert_wallet_err)?;
+        self.app
+            .node
+            .submit_transaction(&authorized_tx)
+            .await
+            .map_err(convert_node_err)?;
+        Ok((auction_state.base_amount, auction_state.quote_amount))
     }
 
     async fn get_block_hash(&self, height: u32) -> RpcResult<BlockHash> {

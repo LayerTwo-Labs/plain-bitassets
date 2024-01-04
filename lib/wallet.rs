@@ -445,6 +445,7 @@ impl Wallet {
                 && bitasset == *output_bitasset
             {
                 bitasset_utxo = Some((outpoint, output));
+                break;
             }
         }
         bitasset_utxo.ok_or(Error::NotEnoughFunds)
@@ -508,6 +509,25 @@ impl Wallet {
             return Err(Error::NotEnoughFunds);
         }
         Ok((total_amount, selected))
+    }
+
+    // Select dutch auction receipt utxo for the specified auction
+    pub fn select_dutch_auction_receipt(
+        &self,
+        auction_id: DutchAuctionId,
+    ) -> Result<(OutPoint, FilledOutput), Error> {
+        let txn = self.env.read_txn()?;
+        let mut receipt_utxo = None;
+        for item in self.utxos.iter(&txn)? {
+            let (outpoint, output) = item?;
+            if let Some(output_auction_id) = output.dutch_auction_receipt()
+                && auction_id == output_auction_id
+            {
+                receipt_utxo = Some((outpoint, output));
+                break;
+            }
+        }
+        receipt_utxo.ok_or(Error::NotEnoughFunds)
     }
 
     /// Given a regular transaction, add an AMM mint.
@@ -797,6 +817,66 @@ impl Wallet {
             receive_asset: base_asset,
             quantity: receive_quantity,
             bid_size,
+        });
+        Ok(())
+    }
+
+    /// Given a regular transaction, create a dutch auction collect tx
+    pub fn dutch_auction_collect(
+        &self,
+        tx: &mut Transaction,
+        auction_id: DutchAuctionId,
+        base_asset: AssetId,
+        quote_asset: AssetId,
+        amount_base: u64,
+        amount_quote: u64,
+    ) -> Result<(), Error> {
+        assert!(tx.is_regular(), "this function only accepts a regular tx");
+        let (dutch_auction_receipt_input, _) =
+            self.select_dutch_auction_receipt(auction_id)?;
+        let base_output = if amount_base != 0 {
+            let address = self.get_new_address()?;
+            let content = match base_asset {
+                AssetId::Bitcoin => OutputContent::Value(amount_base),
+                AssetId::BitAsset(_) => OutputContent::BitAsset(amount_base),
+                AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
+            };
+            Some(Output {
+                address,
+                memo: Vec::new(),
+                content,
+            })
+        } else {
+            None
+        };
+        let quote_output = if amount_quote != 0 {
+            let address = self.get_new_address()?;
+            let content = match quote_asset {
+                AssetId::Bitcoin => OutputContent::Value(amount_quote),
+                AssetId::BitAsset(_) => OutputContent::BitAsset(amount_quote),
+                AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
+            };
+            Some(Output {
+                address,
+                memo: Vec::new(),
+                content,
+            })
+        } else {
+            None
+        };
+
+        /* The Dutch auction receipt must occur before any other Dutch auction
+        receipts in the inputs. */
+        tx.inputs.push(dutch_auction_receipt_input);
+        tx.inputs.rotate_right(1);
+
+        tx.outputs.extend(base_output);
+        tx.outputs.extend(quote_output);
+        tx.data = Some(TxData::DutchAuctionCollect {
+            asset_offered: base_asset,
+            asset_receive: quote_asset,
+            amount_offered_remaining: amount_base,
+            amount_received: amount_quote,
         });
         Ok(())
     }
