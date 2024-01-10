@@ -49,6 +49,11 @@ pub enum TxType {
     BitAssetReservation {
         plaintext_name: String,
     },
+    DexBurn {
+        asset0: String,
+        asset1: String,
+        amount_lp_tokens: String,
+    },
     DexMint {
         asset0: String,
         asset1: String,
@@ -118,6 +123,7 @@ impl std::fmt::Display for TxType {
             Self::Regular => write!(f, "regular"),
             Self::BitAssetRegistration { .. } => write!(f, "register bitasset"),
             Self::BitAssetReservation { .. } => write!(f, "reserve bitasset"),
+            Self::DexBurn { .. } => write!(f, "DEX (Burn Position)"),
             Self::DexMint { .. } => write!(f, "DEX (Mint Position)"),
             Self::DexSwap { .. } => write!(f, "DEX (Swap)"),
         }
@@ -170,6 +176,50 @@ impl TxCreator {
                     app.wallet.reserve_bitasset(&mut tx, plaintext_name)?;
                 Ok(tx)
             }
+            TxType::DexBurn {
+                asset0,
+                asset1,
+                amount_lp_tokens,
+            } => {
+                let asset0: AssetId =
+                    borsh_deserialize_hex(asset0).map_err(|err| {
+                        anyhow::anyhow!("Failed to parse asset 0: {err}")
+                    })?;
+                let asset1: AssetId =
+                    borsh_deserialize_hex(asset1).map_err(|err| {
+                        anyhow::anyhow!("Failed to parse asset 1: {err}")
+                    })?;
+                let amount_lp_tokens = u64::from_str(amount_lp_tokens)
+                    .map_err(|err| {
+                        anyhow::anyhow!(
+                            "Failed to parse LP token amount: {err}"
+                        )
+                    })?;
+                let amm_pair = AmmPair::new(asset0, asset1);
+                let (amount0, amount1);
+                {
+                    let amm_pool_state = app
+                        .node
+                        .get_amm_pool_state(amm_pair)
+                        .map_err(anyhow::Error::new)?;
+                    let next_amm_pool_state = amm_pool_state
+                        .burn(amount_lp_tokens)
+                        .map_err(anyhow::Error::new)?;
+                    amount0 =
+                        amm_pool_state.reserve0 - next_amm_pool_state.reserve0;
+                    amount1 =
+                        amm_pool_state.reserve1 - next_amm_pool_state.reserve1;
+                };
+                let () = app.wallet.amm_burn(
+                    &mut tx,
+                    amm_pair.asset0(),
+                    amm_pair.asset1(),
+                    amount0,
+                    amount1,
+                    amount_lp_tokens,
+                )?;
+                Ok(tx)
+            }
             TxType::DexMint {
                 asset0,
                 asset1,
@@ -190,7 +240,6 @@ impl TxCreator {
                 let amount1 = u64::from_str(amount1).map_err(|err| {
                     anyhow::anyhow!("Failed to parse amount (asset 1): {err}")
                 })?;
-                // FIXME
                 let lp_token_mint = {
                     let amm_pair = AmmPair::new(asset0, asset1);
                     let amm_pool_state = app
@@ -417,6 +466,14 @@ impl TxCreator {
                         "reserve bitasset",
                     ) | ui.selectable_value(
                         &mut self.tx_type,
+                        TxType::DexBurn {
+                            asset0: String::new(),
+                            asset1: String::new(),
+                            amount_lp_tokens: String::new(),
+                        },
+                        "Dex (Burn Position)",
+                    ) | ui.selectable_value(
+                        &mut self.tx_type,
                         TxType::DexMint {
                             asset0: String::new(),
                             asset1: String::new(),
@@ -465,6 +522,28 @@ impl TxCreator {
                         | ui.add(egui::TextEdit::singleline(plaintext_name))
                 });
                 Some(inner_resp.join())
+            }
+            TxType::DexBurn {
+                asset0,
+                asset1,
+                amount_lp_tokens,
+            } => {
+                let asset0_resp = ui.horizontal(|ui| {
+                    ui.monospace("Asset 0:       ")
+                        | ui.add(egui::TextEdit::singleline(asset0))
+                });
+                let asset1_resp = ui.horizontal(|ui| {
+                    ui.monospace("Asset 1:       ")
+                        | ui.add(egui::TextEdit::singleline(asset1))
+                });
+                let amount_lp_tokens_resp = ui.horizontal(|ui| {
+                    ui.monospace("LP token amount:       ")
+                        | ui.add(egui::TextEdit::singleline(amount_lp_tokens))
+                });
+                let resp = asset0_resp.join()
+                    | asset1_resp.join()
+                    | amount_lp_tokens_resp.join();
+                Some(resp)
             }
             TxType::DexMint {
                 asset0,

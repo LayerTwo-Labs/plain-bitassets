@@ -226,6 +226,16 @@ impl AmmPair {
             Self(asset1, asset0)
         }
     }
+
+    /// Returns the lower [`AssetId`]
+    pub fn asset0(&self) -> AssetId {
+        self.0
+    }
+
+    /// Returns the greater [`AssetId`]
+    pub fn asset1(&self) -> AssetId {
+        self.1
+    }
 }
 
 /// Current state of an AMM pool

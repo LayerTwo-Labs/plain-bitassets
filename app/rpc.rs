@@ -210,6 +210,7 @@ impl RpcServer for RpcServerImpl {
         asset1: AssetId,
         lp_token_amount: u64,
     ) -> RpcResult<()> {
+        let amm_pair = AmmPair::new(asset0, asset1);
         let amm_pool_state = self.get_amm_pool_state(asset0, asset1).await?;
         let next_amm_pool_state = amm_pool_state
             .burn(lp_token_amount)
@@ -222,8 +223,8 @@ impl RpcServer for RpcServerImpl {
             .wallet
             .amm_burn(
                 &mut tx,
-                asset0,
-                asset1,
+                amm_pair.asset0(),
+                amm_pair.asset1(),
                 amount0,
                 amount1,
                 lp_token_amount,
