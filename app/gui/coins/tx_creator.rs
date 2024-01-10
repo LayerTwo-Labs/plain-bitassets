@@ -12,7 +12,10 @@ use plain_bitassets::{
     authorization::PublicKey,
     bip300301::bitcoin,
     state::AmmPair,
-    types::{AssetId, BitAssetData, EncryptionPubKey, Hash, Transaction, Txid},
+    types::{
+        AssetId, BitAssetData, DutchAuctionId, EncryptionPubKey, Hash,
+        Transaction, Txid,
+    },
 };
 
 use crate::{app::App, gui::util::InnerResponseExt};
@@ -83,6 +86,10 @@ pub enum TxType {
         amount_spend: String,
         amount_receive: String,
     },
+    DutchAuctionBid {
+        auction_id: String,
+        bid_size: String,
+    },
     DutchAuctionCreate {
         auction_params: DutchAuctionParams,
     },
@@ -149,6 +156,7 @@ impl std::fmt::Display for TxType {
             Self::DutchAuctionCreate { .. } => {
                 write!(f, "Dutch Auction (Create)")
             }
+            Self::DutchAuctionBid { .. } => write!(f, "Dutch Auction (Bid)"),
         }
     }
 }
@@ -313,6 +321,37 @@ impl TxCreator {
                     asset_receive,
                     amount_spend,
                     amount_receive,
+                )?;
+                Ok(tx)
+            }
+            TxType::DutchAuctionBid {
+                auction_id,
+                bid_size,
+            } => {
+                let auction_id: DutchAuctionId =
+                    borsh_deserialize_hex(auction_id).map_err(|err| {
+                        anyhow::anyhow!("Failed to parse auction ID: {err}")
+                    })?;
+                let bid_size = u64::from_str(bid_size).map_err(|err| {
+                    anyhow::anyhow!("Failed to parse bid size: {err}")
+                })?;
+                let height = app.node.get_height().unwrap_or(0);
+                let auction_state = app
+                    .node
+                    .get_dutch_auction_state(auction_id)
+                    .map_err(anyhow::Error::new)?;
+                let next_auction_state = auction_state
+                    .bid(bid_size, height)
+                    .map_err(anyhow::Error::new)?;
+                let receive_quantity =
+                    auction_state.base_amount - next_auction_state.base_amount;
+                let () = app.wallet.dutch_auction_bid(
+                    &mut tx,
+                    auction_id,
+                    auction_state.base_asset,
+                    auction_state.quote_asset,
+                    bid_size,
+                    receive_quantity,
                 )?;
                 Ok(tx)
             }
@@ -566,6 +605,13 @@ impl TxCreator {
                         "Dex (Swap)",
                     ) | ui.selectable_value(
                         &mut self.tx_type,
+                        TxType::DutchAuctionBid {
+                            auction_id: String::new(),
+                            bid_size: String::new(),
+                        },
+                        "Dutch Auction (Bid)",
+                    ) | ui.selectable_value(
+                        &mut self.tx_type,
                         TxType::DutchAuctionCreate {
                             auction_params: Default::default(),
                         },
@@ -731,6 +777,21 @@ impl TxCreator {
                     | quote_asset_resp.join()
                     | initial_price_resp.join()
                     | final_price_resp.join();
+                Some(resp)
+            }
+            TxType::DutchAuctionBid {
+                auction_id,
+                bid_size,
+            } => {
+                let auction_id_resp = ui.horizontal(|ui| {
+                    ui.monospace("Auction ID:       ")
+                        | ui.add(egui::TextEdit::singleline(auction_id))
+                });
+                let bid_size_resp = ui.horizontal(|ui| {
+                    ui.monospace("Bid Size:       ")
+                        | ui.add(egui::TextEdit::singleline(bid_size))
+                });
+                let resp = auction_id_resp.join() | bid_size_resp.join();
                 Some(resp)
             }
         };

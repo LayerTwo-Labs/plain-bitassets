@@ -1,5 +1,6 @@
 use bip300301::bitcoin;
 use bitcoin::hashes::Hash as _;
+use borsh::{BorshDeserialize, BorshSerialize};
 use hex::FromHex;
 use serde::{Deserialize, Serialize};
 
@@ -83,6 +84,8 @@ impl std::fmt::Debug for MerkleRoot {
 }
 
 #[derive(
+    BorshDeserialize,
+    BorshSerialize,
     Clone,
     Copy,
     Default,

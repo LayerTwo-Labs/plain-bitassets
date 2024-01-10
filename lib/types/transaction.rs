@@ -284,7 +284,19 @@ pub struct Transaction {
 }
 
 /// Unique identifier for each Dutch auction
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(
+    BorshDeserialize,
+    BorshSerialize,
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Serialize,
+)]
+#[repr(transparent)]
+#[serde(transparent)]
 pub struct DutchAuctionId(pub Txid);
 
 /** Representation of Output Content that includes asset type and/or
