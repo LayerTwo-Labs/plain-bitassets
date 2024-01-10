@@ -48,6 +48,12 @@ pub enum TxType {
     BitAssetReservation {
         plaintext_name: String,
     },
+    DexMint {
+        asset0: String,
+        asset1: String,
+        amount0: String,
+        amount1: String,
+    },
     DexSwap {
         asset_spend: String,
         asset_receive: String,
@@ -111,6 +117,7 @@ impl std::fmt::Display for TxType {
             Self::Regular => write!(f, "regular"),
             Self::BitAssetRegistration { .. } => write!(f, "register bitasset"),
             Self::BitAssetReservation { .. } => write!(f, "reserve bitasset"),
+            Self::DexMint { .. } => write!(f, "DEX (Mint Position)"),
             Self::DexSwap { .. } => write!(f, "DEX (Swap)"),
         }
     }
@@ -160,6 +167,48 @@ impl TxCreator {
             TxType::BitAssetReservation { plaintext_name } => {
                 let () =
                     app.wallet.reserve_bitasset(&mut tx, plaintext_name)?;
+                Ok(tx)
+            }
+            TxType::DexMint {
+                asset0,
+                asset1,
+                amount0,
+                amount1,
+            } => {
+                let asset0: AssetId =
+                    borsh_deserialize_hex(asset0).map_err(|err| {
+                        anyhow::anyhow!("Failed to parse asset 0: {err}")
+                    })?;
+                let asset1: AssetId =
+                    borsh_deserialize_hex(asset1).map_err(|err| {
+                        anyhow::anyhow!("Failed to parse asset 1: {err}")
+                    })?;
+                let amount0 = u64::from_str(amount0).map_err(|err| {
+                    anyhow::anyhow!("Failed to parse amount (asset 0): {err}")
+                })?;
+                let amount1 = u64::from_str(amount1).map_err(|err| {
+                    anyhow::anyhow!("Failed to parse amount (asset 1): {err}")
+                })?;
+                // FIXME
+                let lp_token_mint = {
+                    let amm_pool_state = app
+                        .node
+                        .get_amm_pool_state(asset0, asset1)
+                        .map_err(anyhow::Error::new)?;
+                    let next_amm_pool_state = amm_pool_state
+                        .mint(amount0, amount1)
+                        .map_err(anyhow::Error::new)?;
+                    next_amm_pool_state.outstanding_lp_tokens
+                        - amm_pool_state.outstanding_lp_tokens
+                };
+                let () = app.wallet.amm_mint(
+                    &mut tx,
+                    asset0,
+                    asset1,
+                    amount0,
+                    amount1,
+                    lp_token_mint,
+                )?;
                 Ok(tx)
             }
             TxType::DexSwap {
@@ -366,13 +415,22 @@ impl TxCreator {
                         "reserve bitasset",
                     ) | ui.selectable_value(
                         &mut self.tx_type,
+                        TxType::DexMint {
+                            asset0: String::new(),
+                            asset1: String::new(),
+                            amount0: String::new(),
+                            amount1: String::new(),
+                        },
+                        "Dex (Mint Position)",
+                    ) | ui.selectable_value(
+                        &mut self.tx_type,
                         TxType::DexSwap {
                             asset_spend: String::new(),
                             asset_receive: String::new(),
                             amount_spend: String::new(),
                             amount_receive: String::new(),
                         },
-                        "dex swap",
+                        "Dex (Swap)",
                     )
                 });
             combobox.join() | ui.heading("Transaction")
@@ -406,16 +464,40 @@ impl TxCreator {
                 });
                 Some(inner_resp.join())
             }
+            TxType::DexMint {
+                asset0,
+                asset1,
+                amount0,
+                amount1,
+            } => {
+                let asset0_resp = ui.horizontal(|ui| {
+                    ui.monospace("Asset 0:       ")
+                        | ui.add(egui::TextEdit::singleline(asset0))
+                });
+                let asset1_resp = ui.horizontal(|ui| {
+                    ui.monospace("Asset 1:       ")
+                        | ui.add(egui::TextEdit::singleline(asset1))
+                });
+                let amount0_resp = ui.horizontal(|ui| {
+                    ui.monospace("Amount (Asset 0):       ")
+                        | ui.add(egui::TextEdit::singleline(amount0))
+                });
+                let amount1_resp = ui.horizontal(|ui| {
+                    ui.monospace("Amount (Asset 1):       ")
+                        | ui.add(egui::TextEdit::singleline(amount1))
+                });
+                let resp = asset0_resp.join()
+                    | asset1_resp.join()
+                    | amount0_resp.join()
+                    | amount1_resp.join();
+                Some(resp)
+            }
             TxType::DexSwap {
                 asset_spend,
                 asset_receive,
                 amount_spend,
                 amount_receive,
             } => {
-                ui.horizontal(|ui| {
-                    let bitcoin_id = borsh::to_vec(&AssetId::Bitcoin).unwrap();
-                    ui.monospace(hex::encode(bitcoin_id))
-                });
                 let asset_spend_resp = ui.horizontal(|ui| {
                     ui.monospace("Spend Asset:       ")
                         | ui.add(egui::TextEdit::singleline(asset_spend))
