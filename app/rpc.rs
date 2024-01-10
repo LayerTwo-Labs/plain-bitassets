@@ -290,26 +290,6 @@ impl RpcServer for RpcServerImpl {
         Ok(amount_receive)
     }
 
-    async fn dutch_auction_create(
-        &self,
-        dutch_auction_params: DutchAuctionParams,
-    ) -> RpcResult<()> {
-        let mut tx = Transaction::default();
-        let () = self
-            .app
-            .wallet
-            .dutch_auction_create(&mut tx, dutch_auction_params)
-            .map_err(convert_wallet_err)?;
-        let authorized_tx =
-            self.app.wallet.authorize(tx).map_err(convert_wallet_err)?;
-        self.app
-            .node
-            .submit_transaction(&authorized_tx)
-            .await
-            .map_err(convert_node_err)?;
-        Ok(())
-    }
-
     async fn dutch_auction_bid(
         &self,
         auction_id: DutchAuctionId,
@@ -385,6 +365,26 @@ impl RpcServer for RpcServerImpl {
             .await
             .map_err(convert_node_err)?;
         Ok((auction_state.base_amount, auction_state.quote_amount))
+    }
+
+    async fn dutch_auction_create(
+        &self,
+        dutch_auction_params: DutchAuctionParams,
+    ) -> RpcResult<()> {
+        let mut tx = Transaction::default();
+        let () = self
+            .app
+            .wallet
+            .dutch_auction_create(&mut tx, dutch_auction_params)
+            .map_err(convert_wallet_err)?;
+        let authorized_tx =
+            self.app.wallet.authorize(tx).map_err(convert_wallet_err)?;
+        self.app
+            .node
+            .submit_transaction(&authorized_tx)
+            .await
+            .map_err(convert_node_err)?;
+        Ok(())
     }
 
     async fn get_block_hash(&self, height: u32) -> RpcResult<BlockHash> {

@@ -90,6 +90,9 @@ pub enum TxType {
         auction_id: String,
         bid_size: String,
     },
+    DutchAuctionCollect {
+        auction_id: String,
+    },
     DutchAuctionCreate {
         auction_params: DutchAuctionParams,
     },
@@ -153,10 +156,13 @@ impl std::fmt::Display for TxType {
             Self::DexBurn { .. } => write!(f, "DEX (Burn Position)"),
             Self::DexMint { .. } => write!(f, "DEX (Mint Position)"),
             Self::DexSwap { .. } => write!(f, "DEX (Swap)"),
+            Self::DutchAuctionBid { .. } => write!(f, "Dutch Auction (Bid)"),
+            Self::DutchAuctionCollect { .. } => {
+                write!(f, "Dutch Auction (Collect)")
+            }
             Self::DutchAuctionCreate { .. } => {
                 write!(f, "Dutch Auction (Create)")
             }
-            Self::DutchAuctionBid { .. } => write!(f, "Dutch Auction (Bid)"),
         }
     }
 }
@@ -352,6 +358,25 @@ impl TxCreator {
                     auction_state.quote_asset,
                     bid_size,
                     receive_quantity,
+                )?;
+                Ok(tx)
+            }
+            TxType::DutchAuctionCollect { auction_id } => {
+                let auction_id: DutchAuctionId =
+                    borsh_deserialize_hex(auction_id).map_err(|err| {
+                        anyhow::anyhow!("Failed to parse auction ID: {err}")
+                    })?;
+                let auction_state = app
+                    .node
+                    .get_dutch_auction_state(auction_id)
+                    .map_err(anyhow::Error::new)?;
+                let () = app.wallet.dutch_auction_collect(
+                    &mut tx,
+                    auction_id,
+                    auction_state.base_asset,
+                    auction_state.quote_asset,
+                    auction_state.base_amount,
+                    auction_state.quote_amount,
                 )?;
                 Ok(tx)
             }
@@ -612,6 +637,12 @@ impl TxCreator {
                         "Dutch Auction (Bid)",
                     ) | ui.selectable_value(
                         &mut self.tx_type,
+                        TxType::DutchAuctionCollect {
+                            auction_id: String::new(),
+                        },
+                        "Dutch Auction (Collect)",
+                    ) | ui.selectable_value(
+                        &mut self.tx_type,
                         TxType::DutchAuctionCreate {
                             auction_params: Default::default(),
                         },
@@ -727,6 +758,29 @@ impl TxCreator {
                     | amount_receive_resp.join();
                 Some(resp)
             }
+            TxType::DutchAuctionBid {
+                auction_id,
+                bid_size,
+            } => {
+                let auction_id_resp = ui.horizontal(|ui| {
+                    ui.monospace("Auction ID:       ")
+                        | ui.add(egui::TextEdit::singleline(auction_id))
+                });
+                let bid_size_resp = ui.horizontal(|ui| {
+                    ui.monospace("Bid Size:       ")
+                        | ui.add(egui::TextEdit::singleline(bid_size))
+                });
+                let resp = auction_id_resp.join() | bid_size_resp.join();
+                Some(resp)
+            }
+            TxType::DutchAuctionCollect { auction_id } => {
+                let auction_id_resp = ui.horizontal(|ui| {
+                    ui.monospace("Auction ID:       ")
+                        | ui.add(egui::TextEdit::singleline(auction_id))
+                });
+                let resp = auction_id_resp.join();
+                Some(resp)
+            }
             TxType::DutchAuctionCreate { auction_params } => {
                 let start_block_resp = ui.horizontal(|ui| {
                     ui.monospace("Start Block:       ")
@@ -777,21 +831,6 @@ impl TxCreator {
                     | quote_asset_resp.join()
                     | initial_price_resp.join()
                     | final_price_resp.join();
-                Some(resp)
-            }
-            TxType::DutchAuctionBid {
-                auction_id,
-                bid_size,
-            } => {
-                let auction_id_resp = ui.horizontal(|ui| {
-                    ui.monospace("Auction ID:       ")
-                        | ui.add(egui::TextEdit::singleline(auction_id))
-                });
-                let bid_size_resp = ui.horizontal(|ui| {
-                    ui.monospace("Bid Size:       ")
-                        | ui.add(egui::TextEdit::singleline(bid_size))
-                });
-                let resp = auction_id_resp.join() | bid_size_resp.join();
                 Some(resp)
             }
         };
