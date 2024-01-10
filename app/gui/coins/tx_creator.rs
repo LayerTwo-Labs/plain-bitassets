@@ -37,6 +37,23 @@ pub struct TrySetBitAssetData {
     pub signing_pubkey: TrySetOption<PublicKey>,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct DutchAuctionParams {
+    /// Block height at which the auction starts
+    start_block: String,
+    /// Auction duration, in blocks
+    duration: String,
+    /// The asset to be auctioned
+    base_asset: String,
+    /// The amount of the base asset to be auctioned
+    base_amount: String,
+    /// The asset in which the auction is to be quoted
+    quote_asset: String,
+    /// Initial price
+    initial_price: String,
+    /// Final price
+    final_price: String,
+}
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum TxType {
     #[default]
@@ -65,6 +82,9 @@ pub enum TxType {
         asset_receive: String,
         amount_spend: String,
         amount_receive: String,
+    },
+    DutchAuctionCreate {
+        auction_params: DutchAuctionParams,
     },
 }
 
@@ -126,6 +146,9 @@ impl std::fmt::Display for TxType {
             Self::DexBurn { .. } => write!(f, "DEX (Burn Position)"),
             Self::DexMint { .. } => write!(f, "DEX (Mint Position)"),
             Self::DexSwap { .. } => write!(f, "DEX (Swap)"),
+            Self::DutchAuctionCreate { .. } => {
+                write!(f, "Dutch Auction (Create)")
+            }
         }
     }
 }
@@ -291,6 +314,57 @@ impl TxCreator {
                     amount_spend,
                     amount_receive,
                 )?;
+                Ok(tx)
+            }
+            TxType::DutchAuctionCreate { auction_params } => {
+                let start_block = u32::from_str(&auction_params.start_block)
+                    .map_err(|err| {
+                        anyhow::anyhow!("Failed to parse start block: {err}")
+                    })?;
+                let duration = u32::from_str(&auction_params.duration)
+                    .map_err(|err| {
+                        anyhow::anyhow!("Failed to parse duration: {err}")
+                    })?;
+                let base_asset: AssetId = borsh_deserialize_hex(
+                    &auction_params.base_asset,
+                )
+                .map_err(|err| {
+                    anyhow::anyhow!("Failed to parse base asset: {err}")
+                })?;
+                let base_amount = u64::from_str(&auction_params.base_amount)
+                    .map_err(|err| {
+                        anyhow::anyhow!("Failed to parse base amount: {err}")
+                    })?;
+                let quote_asset: AssetId =
+                    borsh_deserialize_hex(&auction_params.quote_asset)
+                        .map_err(|err| {
+                            anyhow::anyhow!(
+                                "Failed to parse quote asset: {err}"
+                            )
+                        })?;
+                let initial_price = u64::from_str(
+                    &auction_params.initial_price,
+                )
+                .map_err(|err| {
+                    anyhow::anyhow!("Failed to parse initial price: {err}")
+                })?;
+                let final_price = u64::from_str(&auction_params.final_price)
+                    .map_err(|err| {
+                        anyhow::anyhow!("Failed to parse final price: {err}")
+                    })?;
+                let dutch_auction_params =
+                    plain_bitassets::types::DutchAuctionParams {
+                        start_block,
+                        duration,
+                        base_asset,
+                        base_amount,
+                        quote_asset,
+                        initial_price,
+                        final_price,
+                    };
+                let () = app
+                    .wallet
+                    .dutch_auction_create(&mut tx, dutch_auction_params)?;
                 Ok(tx)
             }
         }
@@ -490,6 +564,12 @@ impl TxCreator {
                             amount_receive: String::new(),
                         },
                         "Dex (Swap)",
+                    ) | ui.selectable_value(
+                        &mut self.tx_type,
+                        TxType::DutchAuctionCreate {
+                            auction_params: Default::default(),
+                        },
+                        "Dutch Auction (Create)",
                     )
                 });
             combobox.join() | ui.heading("Transaction")
@@ -599,6 +679,58 @@ impl TxCreator {
                     | asset_receive_resp.join()
                     | amount_spend_resp.join()
                     | amount_receive_resp.join();
+                Some(resp)
+            }
+            TxType::DutchAuctionCreate { auction_params } => {
+                let start_block_resp = ui.horizontal(|ui| {
+                    ui.monospace("Start Block:       ")
+                        | ui.add(egui::TextEdit::singleline(
+                            &mut auction_params.start_block,
+                        ))
+                });
+                let duration_resp = ui.horizontal(|ui| {
+                    ui.monospace("Duration:       ")
+                        | ui.add(egui::TextEdit::singleline(
+                            &mut auction_params.duration,
+                        ))
+                });
+                let base_asset_resp = ui.horizontal(|ui| {
+                    ui.monospace("Base Asset:       ")
+                        | ui.add(egui::TextEdit::singleline(
+                            &mut auction_params.base_asset,
+                        ))
+                });
+                let base_amount_resp = ui.horizontal(|ui| {
+                    ui.monospace("Base Amount:       ")
+                        | ui.add(egui::TextEdit::singleline(
+                            &mut auction_params.base_amount,
+                        ))
+                });
+                let quote_asset_resp = ui.horizontal(|ui| {
+                    ui.monospace("Quote Asset:       ")
+                        | ui.add(egui::TextEdit::singleline(
+                            &mut auction_params.quote_asset,
+                        ))
+                });
+                let initial_price_resp = ui.horizontal(|ui| {
+                    ui.monospace("Initial Price:       ")
+                        | ui.add(egui::TextEdit::singleline(
+                            &mut auction_params.initial_price,
+                        ))
+                });
+                let final_price_resp = ui.horizontal(|ui| {
+                    ui.monospace("Final Price:       ")
+                        | ui.add(egui::TextEdit::singleline(
+                            &mut auction_params.final_price,
+                        ))
+                });
+                let resp = start_block_resp.join()
+                    | duration_resp.join()
+                    | base_asset_resp.join()
+                    | base_amount_resp.join()
+                    | quote_asset_resp.join()
+                    | initial_price_resp.join()
+                    | final_price_resp.join();
                 Some(resp)
             }
         };
