@@ -181,6 +181,13 @@ impl Serialize for AssetId {
     }
 }
 
+impl std::fmt::Display for AssetId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let bytes = borsh::to_vec(self).unwrap();
+        hex::encode(bytes).fmt(f)
+    }
+}
+
 /// Parameters of a Dutch Auction
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct DutchAuctionParams {

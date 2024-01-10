@@ -32,7 +32,7 @@ impl Activity {
     }
 
     pub fn show(&mut self, app: &mut App, ui: &mut egui::Ui) {
-        egui::TopBottomPanel::top("coins_tabs").show(ui.ctx(), |ui| {
+        egui::TopBottomPanel::top("activity_tabs").show(ui.ctx(), |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(
                     &mut self.tab,

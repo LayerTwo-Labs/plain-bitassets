@@ -3,19 +3,19 @@ use eframe::egui::{self, Color32};
 use crate::app::App;
 
 mod activity;
-mod bitasset_explorer;
 mod coins;
 mod deposit;
 mod encrypt_message;
+mod lookup;
 mod miner;
 mod seed;
 mod util;
 
 use activity::Activity;
-use bitasset_explorer::BitassetExplorer;
 use coins::Coins;
 use deposit::Deposit;
 use encrypt_message::EncryptMessage;
+use lookup::Lookup;
 use miner::Miner;
 use seed::SetSeed;
 
@@ -24,17 +24,17 @@ pub struct EguiApp {
     set_seed: SetSeed,
     miner: Miner,
     deposit: Deposit,
+    lookup: Lookup,
     tab: Tab,
     activity: Activity,
     coins: Coins,
-    bitasset_explorer: BitassetExplorer,
     encrypt_message: EncryptMessage,
 }
 
 #[derive(Eq, PartialEq)]
 enum Tab {
     Coins,
-    BitassetExplorer,
+    Lookup,
     EncryptMessage,
     Activity,
 }
@@ -59,7 +59,7 @@ impl EguiApp {
             set_seed: SetSeed::default(),
             miner: Miner,
             deposit: Deposit::default(),
-            bitasset_explorer: BitassetExplorer::default(),
+            lookup: Lookup::default(),
             tab: Tab::Coins,
             activity,
             coins: Coins::default(),
@@ -74,11 +74,7 @@ impl eframe::App for EguiApp {
             egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut self.tab, Tab::Coins, "coins");
-                    ui.selectable_value(
-                        &mut self.tab,
-                        Tab::BitassetExplorer,
-                        "lookup",
-                    );
+                    ui.selectable_value(&mut self.tab, Tab::Lookup, "lookup");
                     ui.selectable_value(
                         &mut self.tab,
                         Tab::EncryptMessage,
@@ -102,8 +98,8 @@ impl eframe::App for EguiApp {
                 Tab::Coins => {
                     let () = self.coins.show(&mut self.app, ui).unwrap();
                 }
-                Tab::BitassetExplorer => {
-                    self.bitasset_explorer.show(&mut self.app, ui);
+                Tab::Lookup => {
+                    self.lookup.show(&mut self.app, ui);
                 }
                 Tab::EncryptMessage => {
                     self.encrypt_message.show(&mut self.app, ui);

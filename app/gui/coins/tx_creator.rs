@@ -5,7 +5,6 @@ use std::{
     str::FromStr,
 };
 
-use borsh::BorshDeserialize;
 use eframe::egui::{self, InnerResponse, Response, TextBuffer};
 use hex::FromHex;
 
@@ -19,7 +18,10 @@ use plain_bitassets::{
     },
 };
 
-use crate::{app::App, gui::util::InnerResponseExt};
+use crate::{
+    app::App,
+    gui::util::{borsh_deserialize_hex, InnerResponseExt},
+};
 
 // struct representing the outcome of trying to set an Option<T> from a String
 // Err represents unset, Ok(None) represents bad value
@@ -163,17 +165,6 @@ impl TryFrom<TrySetBitAssetData> for BitAssetData {
             encryption_pubkey,
             signing_pubkey,
         })
-    }
-}
-
-fn borsh_deserialize_hex<T>(hex: impl AsRef<[u8]>) -> anyhow::Result<T>
-where
-    T: BorshDeserialize,
-{
-    match hex::decode(hex) {
-        Ok(bytes) => borsh::BorshDeserialize::try_from_slice(&bytes)
-            .map_err(anyhow::Error::new),
-        Err(err) => Err(anyhow::Error::new(err)),
     }
 }
 

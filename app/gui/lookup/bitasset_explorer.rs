@@ -5,20 +5,22 @@ use plain_bitassets::{
     types::{BitAssetData, BitAssetId, Hash},
 };
 
-use super::util::{InnerResponseExt, UiExt};
-use crate::app::App;
+use crate::{
+    app::App,
+    gui::util::{InnerResponseExt, UiExt},
+};
 
 /// result of the last bitasset lookup query
 #[derive(Debug)]
 struct LastQueryResult(Result<Option<BitAssetData>, node::Error>);
 
 #[derive(Debug, Default)]
-pub struct BitassetExplorer {
+pub struct BitAssetExplorer {
     plaintext_name: String,
     last_query_result: Option<LastQueryResult>,
 }
 
-impl BitassetExplorer {
+impl BitAssetExplorer {
     fn show_bitasset_data(
         ui: &mut egui::Ui,
         bitasset_data: &BitAssetData,
