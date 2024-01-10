@@ -4,13 +4,14 @@ use std::{
     str::FromStr,
 };
 
+use borsh::BorshDeserialize;
 use eframe::egui::{self, Response};
 use hex::FromHex;
 
 use plain_bitassets::{
     authorization::PublicKey,
     bip300301::bitcoin,
-    types::{BitAssetData, EncryptionPubKey, Hash, Transaction, Txid},
+    types::{AssetId, BitAssetData, EncryptionPubKey, Hash, Transaction, Txid},
 };
 
 use crate::{app::App, gui::util::InnerResponseExt};
@@ -46,6 +47,12 @@ pub enum TxType {
     },
     BitAssetReservation {
         plaintext_name: String,
+    },
+    DexSwap {
+        asset_spend: String,
+        asset_receive: String,
+        amount_spend: String,
+        amount_receive: String,
     },
 }
 
@@ -104,7 +111,19 @@ impl std::fmt::Display for TxType {
             Self::Regular => write!(f, "regular"),
             Self::BitAssetRegistration { .. } => write!(f, "register bitasset"),
             Self::BitAssetReservation { .. } => write!(f, "reserve bitasset"),
+            Self::DexSwap { .. } => write!(f, "DEX (Swap)"),
         }
+    }
+}
+
+fn borsh_deserialize_hex<T>(hex: impl AsRef<[u8]>) -> anyhow::Result<T>
+where
+    T: BorshDeserialize,
+{
+    match hex::decode(hex) {
+        Ok(bytes) => borsh::BorshDeserialize::try_from_slice(&bytes)
+            .map_err(anyhow::Error::new),
+        Err(err) => Err(anyhow::Error::new(err)),
     }
 }
 
@@ -141,6 +160,37 @@ impl TxCreator {
             TxType::BitAssetReservation { plaintext_name } => {
                 let () =
                     app.wallet.reserve_bitasset(&mut tx, plaintext_name)?;
+                Ok(tx)
+            }
+            TxType::DexSwap {
+                asset_spend,
+                asset_receive,
+                amount_spend,
+                amount_receive,
+            } => {
+                let asset_spend: AssetId = borsh_deserialize_hex(asset_spend)
+                    .map_err(|err| {
+                    anyhow::anyhow!("Failed to parse spend asset: {err}")
+                })?;
+                let asset_receive: AssetId =
+                    borsh_deserialize_hex(asset_receive).map_err(|err| {
+                        anyhow::anyhow!("Failed to parse receive asset: {err}")
+                    })?;
+                let amount_spend =
+                    u64::from_str(amount_spend).map_err(|err| {
+                        anyhow::anyhow!("Failed to parse spend amount: {err}")
+                    })?;
+                let amount_receive =
+                    u64::from_str(amount_receive).map_err(|err| {
+                        anyhow::anyhow!("Failed to parse receive amount: {err}")
+                    })?;
+                let () = app.wallet.amm_swap(
+                    &mut tx,
+                    asset_spend,
+                    asset_receive,
+                    amount_spend,
+                    amount_receive,
+                )?;
                 Ok(tx)
             }
         }
@@ -314,6 +364,15 @@ impl TxCreator {
                             plaintext_name: String::new(),
                         },
                         "reserve bitasset",
+                    ) | ui.selectable_value(
+                        &mut self.tx_type,
+                        TxType::DexSwap {
+                            asset_spend: String::new(),
+                            asset_receive: String::new(),
+                            amount_spend: String::new(),
+                            amount_receive: String::new(),
+                        },
+                        "dex swap",
                     )
                 });
             combobox.join() | ui.heading("Transaction")
@@ -346,6 +405,38 @@ impl TxCreator {
                         | ui.add(egui::TextEdit::singleline(plaintext_name))
                 });
                 Some(inner_resp.join())
+            }
+            TxType::DexSwap {
+                asset_spend,
+                asset_receive,
+                amount_spend,
+                amount_receive,
+            } => {
+                ui.horizontal(|ui| {
+                    let bitcoin_id = borsh::to_vec(&AssetId::Bitcoin).unwrap();
+                    ui.monospace(hex::encode(bitcoin_id))
+                });
+                let asset_spend_resp = ui.horizontal(|ui| {
+                    ui.monospace("Spend Asset:       ")
+                        | ui.add(egui::TextEdit::singleline(asset_spend))
+                });
+                let asset_receive_resp = ui.horizontal(|ui| {
+                    ui.monospace("Receive Asset:       ")
+                        | ui.add(egui::TextEdit::singleline(asset_receive))
+                });
+                let amount_spend_resp = ui.horizontal(|ui| {
+                    ui.monospace("Spend Amount:       ")
+                        | ui.add(egui::TextEdit::singleline(amount_spend))
+                });
+                let amount_receive_resp = ui.horizontal(|ui| {
+                    ui.monospace("Receive Amount:       ")
+                        | ui.add(egui::TextEdit::singleline(amount_receive))
+                });
+                let resp = asset_spend_resp.join()
+                    | asset_receive_resp.join()
+                    | amount_spend_resp.join()
+                    | amount_receive_resp.join();
+                Some(resp)
             }
         };
         let tx_data_changed = tx_data_ui.is_some_and(|resp| resp.changed());

@@ -5,6 +5,7 @@ use std::{
     net::{Ipv4Addr, Ipv6Addr},
 };
 
+use borsh::{BorshDeserialize, BorshSerialize};
 use educe::Educe;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -124,6 +125,8 @@ pub struct BitAssetDataUpdates {
 
 /// Identifier for a BitAsset
 #[derive(
+    BorshDeserialize,
+    BorshSerialize,
     Clone,
     Copy,
     Debug,
@@ -136,26 +139,46 @@ pub struct BitAssetDataUpdates {
     Serialize,
 )]
 #[repr(transparent)]
-#[serde(transparent)]
-pub struct BitAssetId(pub Hash);
+pub struct BitAssetId(#[serde(with = "serde_hexstr_human_readable")] pub Hash);
 
 /// Identifier for an arbitrary asset (Bitcoin, BitAsset, or BitAsset control)
 #[derive(
     Clone,
     Copy,
     Debug,
-    Deserialize,
+    BorshDeserialize,
+    BorshSerialize,
     Eq,
     Hash,
     Ord,
     PartialEq,
     PartialOrd,
-    Serialize,
 )]
 pub enum AssetId {
     Bitcoin,
     BitAsset(BitAssetId),
     BitAssetControl(BitAssetId),
+}
+
+impl<'de> Deserialize<'de> for AssetId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let bytes: Vec<u8> =
+            serde_hexstr_human_readable::deserialize(deserializer)?;
+        borsh::from_slice(&bytes).map_err(serde::de::Error::custom)
+    }
+}
+
+impl Serialize for AssetId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let bytes = borsh::to_vec(self).map_err(serde::ser::Error::custom)?;
+        serde_hexstr_human_readable::serialize(bytes, serializer)
+    }
 }
 
 /// Parameters of a Dutch Auction
