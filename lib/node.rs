@@ -17,7 +17,7 @@ use tokio::{sync::mpsc, task::JoinHandle};
 use crate::{
     authorization::Authorization,
     net::{PeerState, Request, Response},
-    state::{AmmPoolState, DutchAuctionBidError, DutchAuctionState},
+    state::{AmmPair, AmmPoolState, DutchAuctionBidError, DutchAuctionState},
     types::*,
 };
 
@@ -162,6 +162,7 @@ impl Node {
         quote: AssetId,
     ) -> Result<Option<Fraction>, Error> {
         let txn = self.env.read_txn()?;
+        let amm_pair = AmmPair::new(base, quote);
         let AmmPoolState {
             reserve0,
             reserve1,
@@ -169,7 +170,7 @@ impl Node {
         } = self
             .state
             .amm_pools
-            .get(&txn, &(base, quote))?
+            .get(&txn, &amm_pair)?
             .unwrap_or_default();
         if reserve0 == 0 || reserve1 == 0 {
             return Ok(None);
@@ -183,18 +184,10 @@ impl Node {
 
     pub fn get_amm_pool_state(
         &self,
-        asset0: AssetId,
-        asset1: AssetId,
+        pair: AmmPair,
     ) -> Result<AmmPoolState, Error> {
-        if asset0 >= asset1 {
-            do yeet GetAmmPoolStateError::InvalidOrdering
-        }
         let txn = self.env.read_txn()?;
-        let res = self
-            .state
-            .amm_pools
-            .get(&txn, &(asset0, asset0))?
-            .unwrap_or_default();
+        let res = self.state.amm_pools.get(&txn, &pair)?.unwrap_or_default();
         Ok(res)
     }
 

@@ -10,7 +10,7 @@ use jsonrpsee::{
 
 use plain_bitassets::{
     node,
-    state::{self, AmmPoolState},
+    state::{self, AmmPair, AmmPoolState},
     types::{
         Address, AssetId, Block, BlockHash, DutchAuctionId, DutchAuctionParams,
         Transaction,
@@ -169,9 +169,10 @@ impl RpcServer for RpcServerImpl {
         asset0: AssetId,
         asset1: AssetId,
     ) -> RpcResult<AmmPoolState> {
+        let amm_pair = AmmPair::new(asset0, asset1);
         self.app
             .node
-            .get_amm_pool_state(asset0, asset1)
+            .get_amm_pool_state(amm_pair)
             .map_err(convert_node_err)
     }
 

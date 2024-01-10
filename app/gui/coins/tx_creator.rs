@@ -11,6 +11,7 @@ use hex::FromHex;
 use plain_bitassets::{
     authorization::PublicKey,
     bip300301::bitcoin,
+    state::AmmPair,
     types::{AssetId, BitAssetData, EncryptionPubKey, Hash, Transaction, Txid},
 };
 
@@ -191,9 +192,10 @@ impl TxCreator {
                 })?;
                 // FIXME
                 let lp_token_mint = {
+                    let amm_pair = AmmPair::new(asset0, asset1);
                     let amm_pool_state = app
                         .node
-                        .get_amm_pool_state(asset0, asset1)
+                        .get_amm_pool_state(amm_pair)
                         .map_err(anyhow::Error::new)?;
                     let next_amm_pool_state = amm_pool_state
                         .mint(amount0, amount1)

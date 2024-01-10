@@ -1,5 +1,4 @@
 use std::{
-    cmp::Ordering,
     collections::{HashMap, HashSet},
     net::{Ipv4Addr, Ipv6Addr},
 };
@@ -215,8 +214,19 @@ pub enum Error {
     WrongPubKeyForAddress,
 }
 
-// Should be an ordered pair
-type AmmPair = (AssetId, AssetId);
+/// Ordered pair of [`AssetId`]s
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct AmmPair(AssetId, AssetId);
+
+impl AmmPair {
+    pub fn new(asset0: AssetId, asset1: AssetId) -> Self {
+        if asset0 <= asset1 {
+            Self(asset0, asset1)
+        } else {
+            Self(asset1, asset0)
+        }
+    }
+}
 
 /// Current state of an AMM pool
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -1350,9 +1360,9 @@ impl State {
             amount0,
             amount1,
         } = filled_tx.amm_burn().ok_or(Error::InvalidAmmBurn)?;
-        let pair = (asset0, asset1);
+        let amm_pair = AmmPair::new(asset0, asset1);
         let amm_pool_state =
-            self.amm_pools.get(rwtxn, &pair)?.unwrap_or_default();
+            self.amm_pools.get(rwtxn, &amm_pair)?.unwrap_or_default();
         let new_amm_pool_state = amm_pool_state.burn(lp_token_burn)?;
         // payout in asset 0
         let payout0 = amm_pool_state.reserve0 - new_amm_pool_state.reserve0;
@@ -1364,7 +1374,7 @@ impl State {
         if payout1 != amount1 {
             return Err(Error::InvalidAmmBurn);
         }
-        self.amm_pools.put(rwtxn, &pair, &new_amm_pool_state)?;
+        self.amm_pools.put(rwtxn, &amm_pair, &new_amm_pool_state)?;
         Ok(())
     }
 
@@ -1384,9 +1394,9 @@ impl State {
         if asset0 == asset1 {
             return Err(Error::InvalidAmmMint);
         }
-        let pair = (asset0, asset1);
+        let amm_pair = AmmPair::new(asset0, asset1);
         let amm_pool_state =
-            self.amm_pools.get(rwtxn, &pair)?.unwrap_or_default();
+            self.amm_pools.get(rwtxn, &amm_pair)?.unwrap_or_default();
         let new_amm_pool_state = amm_pool_state.mint(amount0, amount1)?;
         let lp_tokens_minted = new_amm_pool_state
             .outstanding_lp_tokens
@@ -1395,7 +1405,7 @@ impl State {
         if lp_tokens_minted != lp_token_mint {
             do yeet Error::InvalidAmmMint;
         }
-        self.amm_pools.put(rwtxn, &pair, &new_amm_pool_state)?;
+        self.amm_pools.put(rwtxn, &amm_pair, &new_amm_pool_state)?;
         Ok(())
     }
 
@@ -1411,13 +1421,9 @@ impl State {
             amount_spend,
             amount_receive,
         } = filled_tx.amm_swap().ok_or(Error::InvalidAmmSwap)?;
-        let pair = match asset_spend.cmp(&asset_receive) {
-            Ordering::Less => (asset_spend, asset_receive),
-            Ordering::Equal => return Err(Error::InvalidAmmSwap),
-            Ordering::Greater => (asset_receive, asset_spend),
-        };
+        let amm_pair = AmmPair::new(asset_spend, asset_receive);
         let amm_pool_state =
-            self.amm_pools.get(rwtxn, &pair)?.unwrap_or_default();
+            self.amm_pools.get(rwtxn, &amm_pair)?.unwrap_or_default();
         let new_amm_pool_state;
         let amount_receive_after_fee;
         if asset_spend < asset_receive {
@@ -1434,7 +1440,7 @@ impl State {
         if amount_receive != amount_receive_after_fee {
             return Err(Error::InvalidAmmSwap);
         }
-        self.amm_pools.put(rwtxn, &pair, &new_amm_pool_state)?;
+        self.amm_pools.put(rwtxn, &amm_pair, &new_amm_pool_state)?;
         Ok(())
     }
 
