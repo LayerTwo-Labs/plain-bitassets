@@ -3,22 +3,27 @@ use eframe::egui;
 use crate::app::App;
 
 mod block_explorer;
+mod dutch_auction_explorer;
 mod mempool_explorer;
 
 use block_explorer::BlockExplorer;
+use dutch_auction_explorer::DutchAuctionExplorer;
 use mempool_explorer::MemPoolExplorer;
 
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Default, Eq, PartialEq)]
 enum Tab {
     #[default]
     BlockExplorer,
     MemPoolExplorer,
+    DutchAuctionExplorer,
 }
 
 pub struct Activity {
     tab: Tab,
     block_explorer: BlockExplorer,
     mempool_explorer: MemPoolExplorer,
+    dutch_auction_explorer: DutchAuctionExplorer,
 }
 
 impl Activity {
@@ -28,6 +33,7 @@ impl Activity {
             tab: Default::default(),
             block_explorer: BlockExplorer::new(height),
             mempool_explorer: Default::default(),
+            dutch_auction_explorer: Default::default(),
         }
     }
 
@@ -44,6 +50,11 @@ impl Activity {
                     Tab::MemPoolExplorer,
                     "mempool explorer",
                 );
+                ui.selectable_value(
+                    &mut self.tab,
+                    Tab::DutchAuctionExplorer,
+                    "Dutch auction explorer",
+                );
             });
         });
         egui::CentralPanel::default().show(ui.ctx(), |ui| match self.tab {
@@ -52,6 +63,9 @@ impl Activity {
             }
             Tab::MemPoolExplorer => {
                 self.mempool_explorer.show(app, ui);
+            }
+            Tab::DutchAuctionExplorer => {
+                self.dutch_auction_explorer.show(app, ui);
             }
         });
     }

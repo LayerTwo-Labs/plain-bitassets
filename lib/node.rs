@@ -191,6 +191,19 @@ impl Node {
         Ok(res)
     }
 
+    /// List all dutch auctions and their current state
+    pub fn dutch_auctions(
+        &self,
+    ) -> Result<Vec<(DutchAuctionId, DutchAuctionState)>, Error> {
+        let txn = self.env.read_txn()?;
+        let res = self
+            .state
+            .dutch_auctions
+            .iter(&txn)?
+            .collect::<Result<_, _>>()?;
+        Ok(res)
+    }
+
     pub fn try_get_dutch_auction_state(
         &self,
         auction_id: DutchAuctionId,

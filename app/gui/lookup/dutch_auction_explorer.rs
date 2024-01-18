@@ -20,48 +20,57 @@ pub struct DutchAuctionExplorer {
     last_query_result: Option<LastQueryResult>,
 }
 
-impl DutchAuctionExplorer {
-    fn show_auction_state(
+pub fn show_dutch_auction_state(
+    ui: &mut egui::Ui,
+    auction_state: &DutchAuctionState,
+) -> Response {
+    fn show_line(
         ui: &mut egui::Ui,
-        auction_state: &DutchAuctionState,
-    ) -> Response {
-        fn show_line(
-            ui: &mut egui::Ui,
-            value: &dyn Display,
-            descriptor: &str,
-        ) -> InnerResponse<Response> {
-            ui.horizontal(|ui| {
-                ui.monospace_selectable_singleline(format!(
-                    "{descriptor}: {value}"
-                ))
-            })
-        }
-        let DutchAuctionState {
-            start_block,
-            duration,
-            base_asset,
-            base_amount,
-            quote_asset,
-            quote_amount,
-            initial_price,
-            final_price,
-        } = auction_state;
-        [
-            (start_block as &dyn Display, "Start Block"),
-            (duration, "Duration"),
-            (base_asset, "Base Asset"),
-            (base_amount, "Base Amount"),
-            (quote_asset, "Quote Asset"),
-            (quote_amount, "Quote Amount"),
-            (initial_price, "Initial Price"),
-            (final_price, "Final Price"),
-        ]
-        .into_iter()
-        .map(|(value, descriptor)| show_line(ui, value, descriptor).join())
-        .reduce(|resp0, resp1| resp0 | resp1)
-        .unwrap()
+        value: &dyn Display,
+        descriptor: &str,
+    ) -> InnerResponse<Response> {
+        ui.horizontal(|ui| {
+            ui.monospace_selectable_singleline(format!("{descriptor}: {value}"))
+        })
     }
+    let DutchAuctionState {
+        start_block,
+        most_recent_bid_block,
+        duration,
+        base_asset,
+        initial_base_amount,
+        base_amount_remaining,
+        quote_asset,
+        quote_amount,
+        initial_price,
+        price_after_most_recent_bid,
+        initial_end_price,
+        end_price_after_most_recent_bid,
+    } = auction_state;
+    [
+        (start_block as &dyn Display, "Start Block"),
+        (most_recent_bid_block, "Most Recent Bid Block"),
+        (duration, "Duration"),
+        (base_asset, "Base Asset"),
+        (initial_base_amount, "Initial Base Amount"),
+        (base_amount_remaining, "Base Amount Remaining"),
+        (quote_asset, "Quote Asset"),
+        (quote_amount, "Quote Amount"),
+        (initial_price, "Initial Price"),
+        (price_after_most_recent_bid, "Price after most recent bid"),
+        (initial_end_price, "Initial End Price"),
+        (
+            end_price_after_most_recent_bid,
+            "End Price after most recent bid",
+        ),
+    ]
+    .into_iter()
+    .map(|(value, descriptor)| show_line(ui, value, descriptor).join())
+    .reduce(|resp0, resp1| resp0 | resp1)
+    .unwrap()
+}
 
+impl DutchAuctionExplorer {
     pub fn show(&mut self, app: &mut App, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show_inside(ui, |ui| {
             ui.heading("Dutch Auction Explorer");
@@ -96,7 +105,7 @@ impl DutchAuctionExplorer {
                         });
                     }
                     Ok(Some(auction_state)) => {
-                        let _resp: Response = Self::show_auction_state(ui, auction_state);
+                        let _resp: Response = show_dutch_auction_state(ui, auction_state);
                     }
                 }
             }

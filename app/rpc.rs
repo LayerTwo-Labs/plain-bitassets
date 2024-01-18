@@ -10,7 +10,7 @@ use jsonrpsee::{
 
 use plain_bitassets::{
     node,
-    state::{self, AmmPair, AmmPoolState},
+    state::{self, AmmPair, AmmPoolState, DutchAuctionState},
     types::{
         Address, AssetId, Block, BlockHash, DutchAuctionId, DutchAuctionParams,
         Transaction,
@@ -67,6 +67,12 @@ pub trait Rpc {
         asset_receive: AssetId,
         amount_spend: u64,
     ) -> RpcResult<u64>;
+
+    /// List all dutch auctions
+    #[method(name = "dutch_auctions")]
+    async fn dutch_auctions(
+        &self,
+    ) -> RpcResult<Vec<(DutchAuctionId, DutchAuctionState)>>;
 
     #[method(name = "dutch_auction_create")]
     async fn dutch_auction_create(
@@ -290,6 +296,12 @@ impl RpcServer for RpcServerImpl {
         Ok(amount_receive)
     }
 
+    async fn dutch_auctions(
+        &self,
+    ) -> RpcResult<Vec<(DutchAuctionId, DutchAuctionState)>> {
+        self.app.node.dutch_auctions().map_err(convert_node_err)
+    }
+
     async fn dutch_auction_bid(
         &self,
         auction_id: DutchAuctionId,
@@ -304,8 +316,8 @@ impl RpcServer for RpcServerImpl {
         let next_auction_state = auction_state
             .bid(bid_size, height)
             .map_err(|err| convert_node_err(err.into()))?;
-        let receive_quantity =
-            auction_state.base_amount - next_auction_state.base_amount;
+        let receive_quantity = auction_state.base_amount_remaining
+            - next_auction_state.base_amount_remaining;
         let mut tx = Transaction::default();
         let () = self
             .app
@@ -353,7 +365,7 @@ impl RpcServer for RpcServerImpl {
                 auction_id,
                 auction_state.base_asset,
                 auction_state.quote_asset,
-                auction_state.base_amount,
+                auction_state.base_amount_remaining,
                 auction_state.quote_amount,
             )
             .map_err(convert_wallet_err)?;
@@ -364,7 +376,10 @@ impl RpcServer for RpcServerImpl {
             .submit_transaction(&authorized_tx)
             .await
             .map_err(convert_node_err)?;
-        Ok((auction_state.base_amount, auction_state.quote_amount))
+        Ok((
+            auction_state.base_amount_remaining,
+            auction_state.quote_amount,
+        ))
     }
 
     async fn dutch_auction_create(

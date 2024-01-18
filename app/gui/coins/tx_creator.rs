@@ -344,8 +344,8 @@ impl TxCreator {
         let next_auction_state = auction_state
             .bid(bid_size, height)
             .map_err(anyhow::Error::new)?;
-        let receive_quantity =
-            auction_state.base_amount - next_auction_state.base_amount;
+        let receive_quantity = auction_state.base_amount_remaining
+            - next_auction_state.base_amount_remaining;
         let () = app.wallet.dutch_auction_bid(
             &mut tx,
             auction_id,
@@ -375,7 +375,7 @@ impl TxCreator {
             auction_id,
             auction_state.base_asset,
             auction_state.quote_asset,
-            auction_state.base_amount,
+            auction_state.base_amount_remaining,
             auction_state.quote_amount,
         )?;
         Ok(tx)
