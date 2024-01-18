@@ -20,59 +20,57 @@ pub struct BitAssetExplorer {
     last_query_result: Option<LastQueryResult>,
 }
 
-impl BitAssetExplorer {
-    fn show_bitasset_data(
-        ui: &mut egui::Ui,
-        bitasset_data: &BitAssetData,
-    ) -> Response {
-        let BitAssetData {
-            commitment,
-            ipv4_addr,
-            ipv6_addr,
-            encryption_pubkey,
-            signing_pubkey,
-        } = bitasset_data;
-        let commitment = commitment.map_or("Not set".to_owned(), hex::encode);
-        let ipv4_addr = ipv4_addr
-            .map_or("Not set".to_owned(), |ipv4_addr| ipv4_addr.to_string());
-        let ipv6_addr = ipv6_addr
-            .map_or("Not set".to_owned(), |ipv6_addr| ipv6_addr.to_string());
-        let encryption_pubkey = encryption_pubkey
-            .map_or("Not set".to_owned(), |epk| hex::encode(epk.0.as_bytes()));
-        let signing_pubkey = signing_pubkey
-            .map_or("Not set".to_owned(), |pk| hex::encode(pk.as_bytes()));
-        ui.horizontal(|ui| {
+pub fn show_bitasset_data(
+    ui: &mut egui::Ui,
+    bitasset_data: &BitAssetData,
+) -> Response {
+    let BitAssetData {
+        commitment,
+        ipv4_addr,
+        ipv6_addr,
+        encryption_pubkey,
+        signing_pubkey,
+    } = bitasset_data;
+    let commitment = commitment.map_or("Not set".to_owned(), hex::encode);
+    let ipv4_addr = ipv4_addr
+        .map_or("Not set".to_owned(), |ipv4_addr| ipv4_addr.to_string());
+    let ipv6_addr = ipv6_addr
+        .map_or("Not set".to_owned(), |ipv6_addr| ipv6_addr.to_string());
+    let encryption_pubkey = encryption_pubkey
+        .map_or("Not set".to_owned(), |epk| hex::encode(epk.0.as_bytes()));
+    let signing_pubkey = signing_pubkey
+        .map_or("Not set".to_owned(), |pk| hex::encode(pk.as_bytes()));
+    ui.horizontal(|ui| {
+        ui.monospace_selectable_singleline(format!("Commitment: {commitment}"))
+    })
+    .join()
+        | ui.horizontal(|ui| {
             ui.monospace_selectable_singleline(format!(
-                "Commitment: {commitment}"
+                "IPv4 Address: {ipv4_addr}"
             ))
         })
         .join()
-            | ui.horizontal(|ui| {
-                ui.monospace_selectable_singleline(format!(
-                    "IPv4 Address: {ipv4_addr}"
-                ))
-            })
-            .join()
-            | ui.horizontal(|ui| {
-                ui.monospace_selectable_singleline(format!(
-                    "IPv6 Address: {ipv6_addr}"
-                ))
-            })
-            .join()
-            | ui.horizontal(|ui| {
-                ui.monospace_selectable_singleline(format!(
-                    "Encryption Pubkey: {encryption_pubkey}"
-                ))
-            })
-            .join()
-            | ui.horizontal(|ui| {
-                ui.monospace_selectable_singleline(format!(
-                    "Signing Pubkey: {signing_pubkey}"
-                ))
-            })
-            .join()
-    }
+        | ui.horizontal(|ui| {
+            ui.monospace_selectable_singleline(format!(
+                "IPv6 Address: {ipv6_addr}"
+            ))
+        })
+        .join()
+        | ui.horizontal(|ui| {
+            ui.monospace_selectable_singleline(format!(
+                "Encryption Pubkey: {encryption_pubkey}"
+            ))
+        })
+        .join()
+        | ui.horizontal(|ui| {
+            ui.monospace_selectable_singleline(format!(
+                "Signing Pubkey: {signing_pubkey}"
+            ))
+        })
+        .join()
+}
 
+impl BitAssetExplorer {
     pub fn show(&mut self, app: &mut App, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show_inside(ui, |ui| {
             ui.heading("BitAsset Explorer");
@@ -101,7 +99,7 @@ impl BitAssetExplorer {
                         });
                     }
                     Ok(Some(bitasset_data)) => {
-                        let _resp: Response = Self::show_bitasset_data(ui, bitasset_data);
+                        let _resp: Response = show_bitasset_data(ui, bitasset_data);
                     }
                 }
             }

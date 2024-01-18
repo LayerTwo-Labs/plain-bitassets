@@ -12,8 +12,8 @@ use plain_bitassets::{
     node,
     state::{self, AmmPair, AmmPoolState, DutchAuctionState},
     types::{
-        Address, AssetId, Block, BlockHash, DutchAuctionId, DutchAuctionParams,
-        Transaction,
+        Address, AssetId, BitAssetData, BitAssetId, Block, BlockHash,
+        DutchAuctionId, DutchAuctionParams, Transaction,
     },
     wallet,
 };
@@ -68,7 +68,11 @@ pub trait Rpc {
         amount_spend: u64,
     ) -> RpcResult<u64>;
 
-    /// List all dutch auctions
+    /// List all BitAssets
+    #[method(name = "bitassets")]
+    async fn bitassets(&self) -> RpcResult<Vec<(BitAssetId, BitAssetData)>>;
+
+    /// List all Dutch auctions
     #[method(name = "dutch_auctions")]
     async fn dutch_auctions(
         &self,
@@ -294,6 +298,10 @@ impl RpcServer for RpcServerImpl {
             .await
             .map_err(convert_node_err)?;
         Ok(amount_receive)
+    }
+
+    async fn bitassets(&self) -> RpcResult<Vec<(BitAssetId, BitAssetData)>> {
+        self.app.node.bitassets().map_err(convert_node_err)
     }
 
     async fn dutch_auctions(

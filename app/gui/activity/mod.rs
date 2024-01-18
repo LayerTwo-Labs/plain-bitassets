@@ -2,10 +2,12 @@ use eframe::egui;
 
 use crate::app::App;
 
+mod bitasset_explorer;
 mod block_explorer;
 mod dutch_auction_explorer;
 mod mempool_explorer;
 
+use bitasset_explorer::BitAssetExplorer;
 use block_explorer::BlockExplorer;
 use dutch_auction_explorer::DutchAuctionExplorer;
 use mempool_explorer::MemPoolExplorer;
@@ -16,6 +18,7 @@ enum Tab {
     #[default]
     BlockExplorer,
     MemPoolExplorer,
+    BitAssetExplorer,
     DutchAuctionExplorer,
 }
 
@@ -23,6 +26,7 @@ pub struct Activity {
     tab: Tab,
     block_explorer: BlockExplorer,
     mempool_explorer: MemPoolExplorer,
+    bitasset_explorer: BitAssetExplorer,
     dutch_auction_explorer: DutchAuctionExplorer,
 }
 
@@ -33,6 +37,7 @@ impl Activity {
             tab: Default::default(),
             block_explorer: BlockExplorer::new(height),
             mempool_explorer: Default::default(),
+            bitasset_explorer: Default::default(),
             dutch_auction_explorer: Default::default(),
         }
     }
@@ -52,6 +57,11 @@ impl Activity {
                 );
                 ui.selectable_value(
                     &mut self.tab,
+                    Tab::BitAssetExplorer,
+                    "BitAsset explorer",
+                );
+                ui.selectable_value(
+                    &mut self.tab,
                     Tab::DutchAuctionExplorer,
                     "Dutch auction explorer",
                 );
@@ -63,6 +73,9 @@ impl Activity {
             }
             Tab::MemPoolExplorer => {
                 self.mempool_explorer.show(app, ui);
+            }
+            Tab::BitAssetExplorer => {
+                self.bitasset_explorer.show(app, ui);
             }
             Tab::DutchAuctionExplorer => {
                 self.dutch_auction_explorer.show(app, ui);

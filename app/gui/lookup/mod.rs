@@ -8,6 +8,7 @@ mod dutch_auction_explorer;
 use bitasset_explorer::BitAssetExplorer;
 use dutch_auction_explorer::DutchAuctionExplorer;
 
+pub use bitasset_explorer::show_bitasset_data;
 pub use dutch_auction_explorer::show_dutch_auction_state;
 
 #[derive(Debug, Default, Eq, PartialEq)]

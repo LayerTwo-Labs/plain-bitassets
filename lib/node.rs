@@ -191,6 +191,22 @@ impl Node {
         Ok(res)
     }
 
+    /// List all BitAssets and their current data
+    pub fn bitassets(&self) -> Result<Vec<(BitAssetId, BitAssetData)>, Error> {
+        let txn = self.env.read_txn()?;
+        let res = self
+            .state
+            .bitassets
+            .iter(&txn)?
+            .map(|res| {
+                res.map(|(bitasset_id, bitasset_data)| {
+                    (bitasset_id, bitasset_data.current())
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(res)
+    }
+
     /// List all dutch auctions and their current state
     pub fn dutch_auctions(
         &self,
