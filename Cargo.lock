@@ -3337,7 +3337,7 @@ checksum = "26072860ba924cbfa98ea39c8c19b4dd6a4a25423dbdf219c1eca91aa0cf6964"
 
 [[package]]
 name = "plain_bitassets"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "addr",
  "async_zmq",
@@ -3374,7 +3374,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitassets_app"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async_zmq",
