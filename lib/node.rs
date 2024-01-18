@@ -17,7 +17,10 @@ use tokio::{sync::mpsc, task::JoinHandle};
 use crate::{
     authorization::Authorization,
     net::{PeerState, Request, Response},
-    state::{AmmPair, AmmPoolState, DutchAuctionBidError, DutchAuctionState},
+    state::{
+        self, AmmPair, AmmPoolState, BitAssetSeqId, DutchAuctionBidError,
+        DutchAuctionState,
+    },
     types::*,
 };
 
@@ -192,9 +195,11 @@ impl Node {
     }
 
     /// List all BitAssets and their current data
-    pub fn bitassets(&self) -> Result<Vec<(BitAssetId, BitAssetData)>, Error> {
+    pub fn bitassets(
+        &self,
+    ) -> Result<Vec<(BitAssetSeqId, BitAssetId, BitAssetData)>, Error> {
         let txn = self.env.read_txn()?;
-        let res = self
+        let bitasset_ids_to_data: HashMap<_, _> = self
             .state
             .bitassets
             .iter(&txn)?
@@ -202,6 +207,28 @@ impl Node {
                 res.map(|(bitasset_id, bitasset_data)| {
                     (bitasset_id, bitasset_data.current())
                 })
+            })
+            .collect::<Result<_, _>>()?;
+        let res = self
+            .state
+            .bitasset_seq_to_bitasset
+            .iter(&txn)?
+            .map(|res| {
+                res.map_err(Error::Heed).and_then(
+                    |(bitasset_seq_id, bitasset_id)| {
+                        let bitasset_data =
+                            bitasset_ids_to_data.get(&bitasset_id).ok_or(
+                                Error::State(state::Error::MissingBitAsset {
+                                    name_hash: bitasset_id.0,
+                                }),
+                            )?;
+                        Ok((
+                            bitasset_seq_id,
+                            bitasset_id,
+                            bitasset_data.clone(),
+                        ))
+                    },
+                )
             })
             .collect::<Result<_, _>>()?;
         Ok(res)

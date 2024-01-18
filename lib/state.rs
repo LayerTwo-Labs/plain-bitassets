@@ -31,6 +31,13 @@ struct TxidStamped<T> {
 #[serde(transparent)]
 struct RollBack<T>(NonEmpty<TxidStamped<T>>);
 
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+)]
+#[repr(transparent)]
+#[serde(transparent)]
+pub struct BitAssetSeqId(pub u32);
+
 /// Representation of BitAsset data that supports rollbacks.
 /// The most recent datum is the element at the back of the vector.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -549,10 +556,10 @@ pub struct State {
     pub bitasset_reservations: Database<SerdeBincode<Txid>, SerdeBincode<Hash>>,
     /// Associates BitAsset sequence numbers with BitAsset IDs (name hashes)
     pub bitasset_seq_to_bitasset:
-        Database<OwnedType<u32>, SerdeBincode<BitAssetId>>,
+        Database<SerdeBincode<BitAssetSeqId>, SerdeBincode<BitAssetId>>,
     /// Associates BitAsset IDs (name hashes) with BitAsset sequence numbers
     pub bitasset_to_bitasset_seq:
-        Database<SerdeBincode<BitAssetId>, OwnedType<u32>>,
+        Database<SerdeBincode<BitAssetId>, SerdeBincode<BitAssetSeqId>>,
     /// Associates BitAsset IDs (name hashes) with BitAsset data
     pub bitassets:
         Database<SerdeBincode<BitAssetId>, SerdeBincode<BitAssetData>>,
@@ -748,7 +755,10 @@ impl State {
 
     /** The sequence number of the last registered BitAsset.
      * Returns `None` if no BitAssets have been registered. */
-    pub fn last_bitasset_seq(&self, txn: &RoTxn) -> Result<Option<u32>, Error> {
+    pub fn last_bitasset_seq(
+        &self,
+        txn: &RoTxn,
+    ) -> Result<Option<BitAssetSeqId>, Error> {
         match self.bitasset_seq_to_bitasset.last(txn)? {
             Some((seq, _)) => Ok(Some(seq)),
             None => Ok(None),
@@ -756,10 +766,13 @@ impl State {
     }
 
     /// The sequence number that the next registered BitAsset will take.
-    pub fn next_bitasset_seq(&self, txn: &RoTxn) -> Result<u32, Error> {
+    pub fn next_bitasset_seq(
+        &self,
+        txn: &RoTxn,
+    ) -> Result<BitAssetSeqId, Error> {
         match self.last_bitasset_seq(txn)? {
-            Some(seq) => Ok(seq + 1),
-            None => Ok(0),
+            Some(BitAssetSeqId(seq)) => Ok(BitAssetSeqId(seq + 1)),
+            None => Ok(BitAssetSeqId(0)),
         }
     }
 

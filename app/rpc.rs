@@ -10,7 +10,7 @@ use jsonrpsee::{
 
 use plain_bitassets::{
     node,
-    state::{self, AmmPair, AmmPoolState, DutchAuctionState},
+    state::{self, AmmPair, AmmPoolState, BitAssetSeqId, DutchAuctionState},
     types::{
         Address, AssetId, BitAssetData, BitAssetId, Block, BlockHash,
         DutchAuctionId, DutchAuctionParams, Transaction,
@@ -70,7 +70,9 @@ pub trait Rpc {
 
     /// List all BitAssets
     #[method(name = "bitassets")]
-    async fn bitassets(&self) -> RpcResult<Vec<(BitAssetId, BitAssetData)>>;
+    async fn bitassets(
+        &self,
+    ) -> RpcResult<Vec<(BitAssetSeqId, BitAssetId, BitAssetData)>>;
 
     /// List all Dutch auctions
     #[method(name = "dutch_auctions")]
@@ -300,7 +302,9 @@ impl RpcServer for RpcServerImpl {
         Ok(amount_receive)
     }
 
-    async fn bitassets(&self) -> RpcResult<Vec<(BitAssetId, BitAssetData)>> {
+    async fn bitassets(
+        &self,
+    ) -> RpcResult<Vec<(BitAssetSeqId, BitAssetId, BitAssetData)>> {
         self.app.node.bitassets().map_err(convert_node_err)
     }
 
