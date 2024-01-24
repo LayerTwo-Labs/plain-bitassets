@@ -17,7 +17,7 @@ impl BitAssetExplorer {
                     ui.monospace_selectable_multiline(node_err.to_string());
                 Some(resp)
             }
-            Ok(auctions) => auctions
+            Ok(bitassets) => bitassets
                 .into_iter()
                 .map(|(bitasset_seq_id, bitasset_id, bitasset_data)| {
                     {
