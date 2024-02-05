@@ -1,7 +1,16 @@
 use serde::{Deserialize, Serialize};
+use serde_with::{DeserializeAs, DisplayFromStr};
 
-#[derive(Clone, Copy, Deserialize, Eq, PartialEq, Hash, Serialize)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash)]
 pub struct Address(pub [u8; 20]);
+
+#[derive(Debug, thiserror::Error)]
+pub enum AddressParseError {
+    #[error("bs58 error")]
+    Bs58(#[from] bs58::decode::Error),
+    #[error("wrong address length {0} != 20")]
+    WrongLength(usize),
+}
 
 impl Address {
     pub fn to_base58(self) -> String {
@@ -43,10 +52,28 @@ impl std::str::FromStr for Address {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum AddressParseError {
-    #[error("bs58 error")]
-    Bs58(#[from] bs58::decode::Error),
-    #[error("wrong address length {0} != 20")]
-    WrongLength(usize),
+impl<'de> Deserialize<'de> for Address {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        if deserializer.is_human_readable() {
+            DisplayFromStr::deserialize_as(deserializer)
+        } else {
+            <[u8; 20]>::deserialize(deserializer).map(Self)
+        }
+    }
+}
+
+impl Serialize for Address {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        if serializer.is_human_readable() {
+            self.to_base58().serialize(serializer)
+        } else {
+            self.0.serialize(serializer)
+        }
+    }
 }

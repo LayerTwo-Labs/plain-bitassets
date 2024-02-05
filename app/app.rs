@@ -31,7 +31,7 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("jsonrpsee error")]
     Jsonrpsee(#[from] jsonrpsee::core::Error),
-    #[error("miner error")]
+    #[error("miner error: {0}")]
     Miner(#[from] miner::Error),
     #[error("node error")]
     Node(#[from] node::Error),
@@ -62,7 +62,7 @@ impl App {
                 config.main_addr,
                 &config.main_password,
                 &config.main_user,
-                #[cfg(not(target_os = "windows"))]
+                #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
                 config.zmq_addr,
             ) {
                 Ok(node) => node,
@@ -116,19 +116,23 @@ impl App {
         Ok(address)
     }
 
-    const EMPTY_BLOCK_BMM_BRIBE: u64 = 1000;
-    pub async fn mine(&self) -> Result<(), Error> {
+    const EMPTY_BLOCK_BMM_BRIBE: bip300301::bitcoin::Amount =
+        bip300301::bitcoin::Amount::from_sat(1000);
+
+    pub async fn mine(
+        &self,
+        fee: Option<bip300301::bitcoin::Amount>,
+    ) -> Result<(), Error> {
         const NUM_TRANSACTIONS: usize = 1000;
-        let (transactions, fee) =
-            self.node.get_transactions(NUM_TRANSACTIONS)?;
-        let coinbase = match fee {
+        let (txs, tx_fees) = self.node.get_transactions(NUM_TRANSACTIONS)?;
+        let coinbase = match tx_fees {
             0 => vec![],
             _ => vec![types::Output::new(
                 self.wallet.get_new_address()?,
-                types::OutputContent::Value(fee),
+                types::OutputContent::Value(tx_fees),
             )],
         };
-        let body = types::Body::new(transactions, coinbase);
+        let body = types::Body::new(txs, coinbase);
         let prev_side_hash = self.node.get_best_hash()?;
         let prev_main_hash = self
             .miner
@@ -142,18 +146,20 @@ impl App {
             prev_side_hash,
             prev_main_hash,
         };
-        let bribe = if fee > 0 {
-            fee
-        } else {
-            Self::EMPTY_BLOCK_BMM_BRIBE
-        };
-        let bribe = bitcoin::Amount::from_sat(bribe);
+        let bribe = fee.unwrap_or_else(|| {
+            if tx_fees > 0 {
+                bip300301::bitcoin::Amount::from_sat(tx_fees)
+            } else {
+                Self::EMPTY_BLOCK_BMM_BRIBE
+            }
+        });
         let mut miner_write = self.miner.write().await;
         miner_write
             .attempt_bmm(bribe.to_sat(), 0, header, body)
             .await?;
-        miner_write.generate().await?;
-        if let Ok(Some((header, body))) = miner_write.confirm_bmm().await {
+        tracing::trace!("confirming bmm...");
+        if let Some((header, body)) = miner_write.confirm_bmm().await? {
+            tracing::trace!("confirmed bmm, submitting block");
             self.node.submit_block(&header, &body).await?;
         }
         self.update_wallet()?;

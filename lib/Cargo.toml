@@ -1,6 +1,6 @@
 [package]
 name = "plain_bitassets"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 authors = [ "Ash Manning <ash@layertwolabs.com>" ]
 
@@ -8,7 +8,6 @@ authors = [ "Ash Manning <ash@layertwolabs.com>" ]
 addr = "0.15.6"
 bech32 = "0.9.1"
 bincode = "1.3.3"
-bip300301 = { git = "https://github.com/nchashch/bip300301", rev = "cf917605ab1937c57f19f72311f96ac0b4832de0" }
 blake3 = "1.4.1"
 borsh = {version = "1.3.0", features = ["derive"] }
 bs58 = { version = "0.5.0", features = ["check"] }
@@ -30,14 +29,26 @@ rayon = "1.7.0"
 rcgen = "0.11.1"
 rustls = { version = "0.21.5", features = ["dangerous_configuration"] }
 serde = { version = "1.0.179", features = ["derive"] }
+serde_json = "1.0.113"
 serde_with = "3.4.0"
 sha256 = "1.2.2"
 thiserror = "1.0.44"
 tokio = { version = "1.29.1", features = ["sync"] }
+tracing = "0.1.40"
 x25519-dalek = { version = "2.0.0", features = ["serde"] }
 
-[target.'cfg(not(target_os = "windows"))'.dependencies]
-async_zmq = "0.4.0"
+[dependencies.bip300301]
+git = "https://github.com/Ash-L2L/bip300301.git"
+rev = "be8056c14aa74424556f07489b8942926294263b"
+features = ["tracing"]
+
+[target.'cfg(not(target_os = "windows"))'.dependencies.async_zmq]
+git = "https://github.com/Ash-L2L/async-zmq.git"
+rev = "61748742c2a91be4be24a227d109fd93492f7484"
+optional = true
+
+[features]
+zmq = ["dep:async_zmq"]
 
 [lib]
 name = "plain_bitassets"

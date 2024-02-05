@@ -10,6 +10,9 @@ pub struct Cli {
     /// If specified, the gui will not launch.
     #[arg(long)]
     pub headless: bool,
+    /// Log level, defaults to [`tracing::Level::Info`]
+    #[arg(default_value_t = tracing::Level::INFO, long)]
+    pub log_level: tracing::Level,
     /// address to connect to mainchain node RPC server, defaults to 127.0.0.1:18443
     #[arg(short, long)]
     pub main_addr: Option<String>,
@@ -27,7 +30,7 @@ pub struct Cli {
     #[arg(short, long)]
     pub user_main: Option<String>,
     /// Address to use for ZMQ pub/sub, defaults to 127.0.0.1:28332
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
     #[arg(short, long)]
     pub zmq_addr: Option<String>,
 }
@@ -35,12 +38,13 @@ pub struct Cli {
 pub struct Config {
     pub datadir: PathBuf,
     pub headless: bool,
+    pub log_level: tracing::Level,
     pub main_addr: SocketAddr,
     pub main_password: String,
     pub main_user: String,
     pub net_addr: SocketAddr,
     pub rpc_addr: SocketAddr,
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
     pub zmq_addr: SocketAddr,
 }
 
@@ -55,6 +59,7 @@ impl Cli {
             })
             .join("plain_bitassets");
         let headless = self.headless;
+        let log_level = self.log_level;
         const DEFAULT_MAIN_ADDR: &str = "127.0.0.1:18443";
         let main_addr: SocketAddr = self
             .main_addr
@@ -78,9 +83,9 @@ impl Cli {
             .clone()
             .unwrap_or(DEFAULT_RPC_ADDR.to_string())
             .parse()?;
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
         const DEFAULT_ZMQ_ADDR: &str = "127.0.0.1:28332";
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
         let zmq_addr: SocketAddr = self
             .zmq_addr
             .clone()
@@ -89,12 +94,13 @@ impl Cli {
         Ok(Config {
             datadir,
             headless,
+            log_level,
             main_addr,
             main_password,
             main_user,
             net_addr,
             rpc_addr,
-            #[cfg(not(target_os = "windows"))]
+            #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
             zmq_addr,
         })
     }

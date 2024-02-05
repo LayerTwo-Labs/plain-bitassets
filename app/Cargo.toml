@@ -1,6 +1,6 @@
 [package]
 name = "plain_bitassets_app"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 authors = [ "Ash Manning <ash@layertwolabs.com>" ]
 
@@ -18,7 +18,7 @@ fraction = { version = "0.14.0", features = ["with-serde-support"] }
 hex = "0.4.3"
 human-size = "0.4.3"
 itertools = "0.11.0"
-jsonrpsee = { version = "0.20.0", features = ["server", "macros"] }
+jsonrpsee = { version = "0.20.0", features = ["macros", "server"] }
 parking_lot = "0.12.1"
 plain_bitassets = { path = "../lib" }
 serde = { version = "1.0.179", features = ["derive"] }
@@ -26,13 +26,25 @@ strum = { version = "0.25.0", features = ["derive"] }
 thiserror = "1.0.44"
 tiny-bip39 = "1.0.0"
 tokio = { version = "1.29.1", features = ["rt-multi-thread", "macros"] }
+tracing = "0.1.40"
+tracing-subscriber = "0.3.18"
+
+[dependencies.bip300301]
+git = "https://github.com/Ash-L2L/bip300301.git"
+rev = "be8056c14aa74424556f07489b8942926294263b"
 
 [dependencies.libes]
 version = "0.9.1"
 features = ["AES256-GCM", "ECIES-MAC", "HMAC-SHA256", "x25519"]
 
-[target.'cfg(not(target_os = "windows"))'.dependencies]
-async_zmq = "0.4.0"
+[target.'cfg(not(target_os = "windows"))'.dependencies.async_zmq]
+git = "https://github.com/Ash-L2L/async-zmq.git"
+rev = "61748742c2a91be4be24a227d109fd93492f7484"
+optional = true
+
+[features]
+default = ["zmq"]
+zmq = ["dep:async_zmq", "plain_bitassets/zmq"]
 
 [[bin]]
 name = "plain_bitassets_app"
