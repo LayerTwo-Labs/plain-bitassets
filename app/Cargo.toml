@@ -4,6 +4,14 @@ version = "0.4.0"
 edition = "2021"
 authors = [ "Ash Manning <ash@layertwolabs.com>" ]
 
+[dev-dependencies]
+base64 = "0.21.2"
+futures = { version = "0.3.30", default-features = false }
+jsonrpsee = { version = "0.20.0", features = ["http-client"] }
+tempfile = "3.10.0"
+test-log = { version = "0.2.14", features = ["trace"] }
+tokio = { version = "1.29.1", features = ["process", "rt-multi-thread"] }
+
 [dependencies]
 anyhow = { version = "1.0.72", features = ["backtrace"] }
 bincode = "1.3.3"
@@ -18,20 +26,20 @@ fraction = { version = "0.14.0", features = ["with-serde-support"] }
 hex = "0.4.3"
 human-size = "0.4.3"
 itertools = "0.11.0"
-jsonrpsee = { version = "0.20.0", features = ["macros", "server"] }
+jsonrpsee = { version = "0.20.0", features = ["client-core", "macros", "server"] }
 parking_lot = "0.12.1"
 plain_bitassets = { path = "../lib" }
 serde = { version = "1.0.179", features = ["derive"] }
 strum = { version = "0.25.0", features = ["derive"] }
 thiserror = "1.0.44"
 tiny-bip39 = "1.0.0"
-tokio = { version = "1.29.1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.29.1", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
 
 [dependencies.bip300301]
 git = "https://github.com/Ash-L2L/bip300301.git"
-rev = "be8056c14aa74424556f07489b8942926294263b"
+rev = "4ca8c801f25ae826ba6b74f288147e29b35bb74c"
 
 [dependencies.libes]
 version = "0.9.1"
@@ -45,6 +53,10 @@ optional = true
 [features]
 default = ["zmq"]
 zmq = ["dep:async_zmq", "plain_bitassets/zmq"]
+
+[lib]
+name = "plain_bitassets_app_rpc_api"
+path = "rpc_api.rs"
 
 [[bin]]
 name = "plain_bitassets_app"

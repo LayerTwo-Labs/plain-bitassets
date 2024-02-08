@@ -6,7 +6,7 @@ use tracing_subscriber::{filter as tracing_filter, layer::SubscriberExt};
 mod app;
 mod cli;
 mod gui;
-mod rpc;
+mod rpc_server;
 
 // Configure logger
 fn set_tracing_subscriber(log_level: tracing::Level) {
@@ -33,7 +33,7 @@ fn main() -> anyhow::Result<()> {
     // spawn rpc server
     app.runtime.spawn({
         let app = app.clone();
-        async move { rpc::run_server(app, config.rpc_addr).await.unwrap() }
+        async move { rpc_server::run_server(app, config.rpc_addr).await.unwrap() }
     });
 
     if config.headless {

@@ -9,8 +9,11 @@ use itertools::Itertools;
 use nonempty::{nonempty, NonEmpty};
 use serde::{Deserialize, Serialize};
 
-use bip300301::TwoWayPegData;
-use bip300301::{bitcoin, WithdrawalBundleStatus};
+use bip300301::{
+    bitcoin::Amount as BitcoinAmount,
+    bitcoin::{self, transaction::Version as BitcoinTxVersion},
+    TwoWayPegData, WithdrawalBundleStatus,
+};
 
 use crate::authorization::{Authorization, PublicKey};
 use crate::types::{self, *};
@@ -951,8 +954,11 @@ impl State {
                 break;
             }
             let bundle_output = bitcoin::TxOut {
-                value: aggregated.value,
-                script_pubkey: aggregated.main_address.payload.script_pubkey(),
+                value: BitcoinAmount::from_sat(aggregated.value),
+                script_pubkey: aggregated
+                    .main_address
+                    .payload()
+                    .script_pubkey(),
             };
             spend_utxos.extend(aggregated.spend_utxos.clone());
             bundle_outputs.push(bundle_output);
@@ -972,7 +978,7 @@ impl State {
             .push_slice([68; 1])
             .into_script();
         let return_dest_txout = bitcoin::TxOut {
-            value: 0,
+            value: BitcoinAmount::ZERO,
             script_pubkey: script,
         };
         // Create mainchain fee output.
@@ -981,7 +987,7 @@ impl State {
             .push_slice(fee.to_le_bytes())
             .into_script();
         let mainchain_fee_txout = bitcoin::TxOut {
-            value: 0,
+            value: BitcoinAmount::ZERO,
             script_pubkey: script,
         };
         // Create inputs commitment.
@@ -1001,11 +1007,11 @@ impl State {
             .push_slice(commitment)
             .into_script();
         let inputs_commitment_txout = bitcoin::TxOut {
-            value: 0,
+            value: BitcoinAmount::ZERO,
             script_pubkey: script,
         };
         let transaction = bitcoin::Transaction {
-            version: 2,
+            version: BitcoinTxVersion::TWO,
             lock_time: bitcoin::blockdata::locktime::absolute::LockTime::ZERO,
             input: vec![txin],
             output: [

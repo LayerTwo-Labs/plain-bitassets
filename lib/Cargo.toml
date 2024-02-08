@@ -39,7 +39,7 @@ x25519-dalek = { version = "2.0.0", features = ["serde"] }
 
 [dependencies.bip300301]
 git = "https://github.com/Ash-L2L/bip300301.git"
-rev = "be8056c14aa74424556f07489b8942926294263b"
+rev = "4ca8c801f25ae826ba6b74f288147e29b35bb74c"
 features = ["tracing"]
 
 [target.'cfg(not(target_os = "windows"))'.dependencies.async_zmq]
