@@ -2,7 +2,7 @@ use std::borrow::Borrow;
 
 use borsh::BorshDeserialize;
 use eframe::egui::{self, InnerResponse, Response, Ui};
-use libes::{self, auth::HmacSha256, enc::Aes256Gcm, key::X25519};
+use libes::{auth::HmacSha256, enc::Aes256Gcm, key::X25519};
 
 /// ecies crypto scheme over x25519
 pub type Ecies = libes::Ecies<X25519, Aes256Gcm, HmacSha256>;

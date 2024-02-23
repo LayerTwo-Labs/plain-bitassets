@@ -4,7 +4,7 @@ use parking_lot::RwLock;
 use tokio::sync::RwLock as TokioRwLock;
 
 use plain_bitassets::{
-    bip300301::{self, bitcoin, jsonrpsee, MainClient},
+    bip300301::{bitcoin, MainClient},
     format_deposit_address,
     miner::{self, Miner},
     node::{self, Node, THIS_SIDECHAIN},
