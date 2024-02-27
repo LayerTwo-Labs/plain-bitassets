@@ -65,7 +65,7 @@ impl EguiApp {
         Self {
             app,
             set_seed: SetSeed::default(),
-            miner: Miner,
+            miner: Miner::default(),
             deposit: Deposit::default(),
             lookup: Lookup::default(),
             tab: Tab::Coins,
@@ -97,7 +97,7 @@ impl eframe::App for EguiApp {
             });
             egui::TopBottomPanel::bottom("util").show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    self.miner.show(&mut self.app, ui);
+                    self.miner.show(&self.app, ui);
                     ui.separator();
                     self.deposit.show(&mut self.app, ui);
                 });
