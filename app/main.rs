@@ -12,8 +12,8 @@ mod rpc_server;
 fn set_tracing_subscriber(log_level: tracing::Level) {
     let targets_filter = tracing_filter::Targets::new().with_targets([
         ("jsonrpsee_core::tracing", log_level),
-        ("plain_bitnames", log_level),
-        ("plain_bitnames_app", log_level),
+        ("plain_bitassets", log_level),
+        ("plain_bitassets_app", log_level),
     ]);
     let fmt_layer = tracing_subscriber::fmt::layer()
         .compact()
