@@ -370,18 +370,9 @@ impl RpcServer for RpcServerImpl {
     }
 
     async fn set_seed_from_mnemonic(&self, mnemonic: String) -> RpcResult<()> {
-        let mnemonic =
-            bip39::Mnemonic::from_phrase(&mnemonic, bip39::Language::English)
-                .map_err(|err| custom_err(err.to_string()))?;
-        let seed = bip39::Seed::new(&mnemonic, "");
-        let seed_bytes: [u8; 64] = seed.as_bytes().try_into().map_err(
-            |err: <[u8; 64] as TryFrom<&[u8]>>::Error| {
-                custom_err(err.to_string())
-            },
-        )?;
         self.app
             .wallet
-            .set_seed(&seed_bytes)
+            .set_seed_from_mnemonic(mnemonic.as_str())
             .map_err(convert_wallet_err)
     }
 

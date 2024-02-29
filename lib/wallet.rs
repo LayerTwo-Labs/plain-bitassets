@@ -41,6 +41,10 @@ pub enum Error {
     NotEnoughFunds,
     #[error("utxo doesn't exist")]
     NoUtxo,
+    #[error("failed to parse mnemonic seed phrase")]
+    ParseMnemonic(#[source] anyhow::Error),
+    #[error("seed has already been set")]
+    SeedAlreadyExists,
 }
 
 #[derive(Clone)]
@@ -139,7 +143,8 @@ impl Wallet {
         Ok(address)
     }
 
-    pub fn set_seed(&self, seed: &[u8; 64]) -> Result<(), Error> {
+    /// Overwrite the seed, or set it if it does not already exist.
+    pub fn overwrite_seed(&self, seed: &[u8; 64]) -> Result<(), Error> {
         let mut txn = self.env.write_txn()?;
         self.seed.put(&mut txn, &0, seed)?;
         self.address_to_index.clear(&mut txn)?;
@@ -154,6 +159,26 @@ impl Wallet {
     pub fn has_seed(&self) -> Result<bool, Error> {
         let txn = self.env.read_txn()?;
         Ok(self.seed.get(&txn, &0)?.is_some())
+    }
+
+    /// Set the seed, if it does not already exist
+    pub fn set_seed(&self, seed: &[u8; 64]) -> Result<(), Error> {
+        if self.has_seed()? {
+            Err(Error::SeedAlreadyExists)
+        } else {
+            self.overwrite_seed(seed)
+        }
+    }
+
+    /// Set the seed from a mnemonic seed phrase,
+    /// if the seed does not already exist
+    pub fn set_seed_from_mnemonic(&self, mnemonic: &str) -> Result<(), Error> {
+        let mnemonic =
+            bip39::Mnemonic::from_phrase(mnemonic, bip39::Language::English)
+                .map_err(Error::ParseMnemonic)?;
+        let seed = bip39::Seed::new(&mnemonic, "");
+        let seed_bytes: [u8; 64] = seed.as_bytes().try_into().unwrap();
+        self.set_seed(&seed_bytes)
     }
 
     pub fn create_withdrawal(
