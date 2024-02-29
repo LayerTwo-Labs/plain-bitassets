@@ -6,8 +6,11 @@ use std::{
 
 use bip300301::bitcoin;
 use byteorder::{BigEndian, ByteOrder};
-use ed25519_dalek_bip32::*;
-use heed::{types::*, Database, RoTxn};
+use ed25519_dalek_bip32::{ChildIndex, DerivationPath, ExtendedSigningKey};
+use heed::{
+    types::{OwnedType, SerdeBincode, Str},
+    Database, RoTxn,
+};
 
 use crate::{
     authorization::{get_address, Authorization},
@@ -91,39 +94,38 @@ impl Wallet {
         })
     }
 
-    fn get_keypair(
+    fn get_signing_key(
         &self,
         txn: &RoTxn,
         index: u32,
-    ) -> Result<ed25519_dalek::Keypair, Error> {
+    ) -> Result<ed25519_dalek::SigningKey, Error> {
         let seed = self.seed.get(txn, &0)?.ok_or(Error::NoSeed)?;
-        let xpriv = ExtendedSecretKey::from_seed(&seed)?;
+        let xpriv = ExtendedSigningKey::from_seed(&seed)?;
         let derivation_path = DerivationPath::new([
             ChildIndex::Hardened(1),
             ChildIndex::Hardened(0),
             ChildIndex::Hardened(0),
             ChildIndex::Hardened(index),
         ]);
-        let child = xpriv.derive(&derivation_path)?;
-        let public = child.public_key();
-        let secret = child.secret_key;
-        Ok(ed25519_dalek::Keypair { secret, public })
+        let xsigning_key = xpriv.derive(&derivation_path)?;
+        Ok(xsigning_key.signing_key)
     }
 
-    // get the keypair that corresponds to the provided address
-    fn get_keypair_for_addr(
+    // get the signing key that corresponds to the provided address
+    fn get_signing_key_for_addr(
         &self,
         rotxn: &RoTxn,
         address: &Address,
-    ) -> Result<ed25519_dalek::Keypair, Error> {
+    ) -> Result<ed25519_dalek::SigningKey, Error> {
         let addr_idx = self
             .address_to_index
             .get(rotxn, address)?
             .ok_or(Error::AddressDoesNotExist { address: *address })?;
-        let keypair = self.get_keypair(rotxn, u32::from_be_bytes(addr_idx))?;
-        // sanity check that keypair corresponds to address
-        assert_eq!(*address, get_address(&keypair.public));
-        Ok(keypair)
+        let signing_key =
+            self.get_signing_key(rotxn, u32::from_be_bytes(addr_idx))?;
+        // sanity check that signing key corresponds to address
+        assert_eq!(*address, get_address(&signing_key.verifying_key()));
+        Ok(signing_key)
     }
 
     pub fn get_new_address(&self) -> Result<Address, Error> {
@@ -134,8 +136,8 @@ impl Wallet {
             .unwrap_or(([0; 4], [0; 20].into()));
         let last_index = BigEndian::read_u32(&last_index);
         let index = last_index + 1;
-        let keypair = self.get_keypair(&txn, index)?;
-        let address = get_address(&keypair.public);
+        let signing_key = self.get_signing_key(&txn, index)?;
+        let address = get_address(&signing_key.verifying_key());
         let index = index.to_be_bytes();
         self.index_to_address.put(&mut txn, &index, &address)?;
         self.address_to_index.put(&mut txn, &address, &index)?;
@@ -261,16 +263,14 @@ impl Wallet {
                 self.get_new_address()?
             };
         let rotxn = self.env.read_txn()?;
-        let reservation_keypair =
-            self.get_keypair_for_addr(&rotxn, &reservation_addr)?;
+        let reservation_signing_key =
+            self.get_signing_key_for_addr(&rotxn, &reservation_addr)?;
         let name_hash: Hash = blake3::hash(plain_name.as_bytes()).into();
         let bitasset_id = BitAssetId(name_hash);
         // hmac(secret, name_hash)
-        let nonce = blake3::keyed_hash(
-            reservation_keypair.secret.as_bytes(),
-            &name_hash,
-        )
-        .into();
+        let nonce =
+            blake3::keyed_hash(reservation_signing_key.as_bytes(), &name_hash)
+                .into();
         // hmac(nonce, name_hash)
         let commitment = blake3::keyed_hash(&nonce, &name_hash).into();
         // store reservation data
@@ -323,7 +323,7 @@ impl Wallet {
         let bitasset_id = BitAssetId(name_hash);
         /* Search for reservation utxo by the following procedure:
         For each reservation:
-        * Get the corresponding keypair
+        * Get the corresponding signing key
         * Compute a reservation commitment for the bitasset to be registered
         * If the computed commitment is the same as the reservation commitment,
           then use this utxo. Otherwise, continue */
@@ -333,14 +333,14 @@ impl Wallet {
             if let Some(reservation_commitment) =
                 filled_output.reservation_commitment()
             {
-                // for each reservation, get the keypair, and
+                // for each reservation, get the signing key, and
                 let reservation_addr = filled_output.address;
                 let rotxn = self.env.read_txn()?;
-                let reservation_keypair =
-                    self.get_keypair_for_addr(&rotxn, &reservation_addr)?;
+                let reservation_signing_key =
+                    self.get_signing_key_for_addr(&rotxn, &reservation_addr)?;
                 // hmac(secret, name_hash)
                 let nonce = blake3::keyed_hash(
-                    reservation_keypair.secret.as_bytes(),
+                    reservation_signing_key.as_bytes(),
                     &name_hash,
                 )
                 .into();
@@ -1034,10 +1034,11 @@ impl Wallet {
                 address: spent_utxo.address,
             })?;
             let index = BigEndian::read_u32(&index);
-            let keypair = self.get_keypair(&txn, index)?;
-            let signature = crate::authorization::sign(&keypair, &transaction)?;
+            let signing_key = self.get_signing_key(&txn, index)?;
+            let signature =
+                crate::authorization::sign(&signing_key, &transaction)?;
             authorizations.push(Authorization {
-                public_key: keypair.public,
+                verifying_key: signing_key.verifying_key(),
                 signature,
             });
         }

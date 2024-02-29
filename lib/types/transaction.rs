@@ -18,7 +18,7 @@ use super::{
     serde_display_fromstr_human_readable, serde_hexstr_human_readable,
     EncryptionPubKey, GetBitcoinValue,
 };
-use crate::authorization::{Authorization, PublicKey};
+use crate::authorization::{Authorization, VerifyingKey};
 
 #[derive(Hash, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OutPoint {
@@ -74,12 +74,12 @@ pub type TxInputs = Vec<OutPoint>;
 
 pub type TxOutputs = Vec<Output>;
 
-fn hash_option_public_key<H>(pk: &Option<PublicKey>, state: &mut H)
+fn hash_option_verifying_key<H>(vk: &Option<VerifyingKey>, state: &mut H)
 where
     H: Hasher,
 {
     use std::hash::Hash;
-    pk.map(|pk| pk.to_bytes()).hash(state)
+    vk.map(|vk| vk.to_bytes()).hash(state)
 }
 
 #[derive(
@@ -96,8 +96,8 @@ pub struct BitAssetData {
     /// Optional pubkey used for encryption
     pub encryption_pubkey: Option<EncryptionPubKey>,
     /// Optional pubkey used for signing messages
-    #[educe(Hash(method = "hash_option_public_key"))]
-    pub signing_pubkey: Option<PublicKey>,
+    #[educe(Hash(method = "hash_option_verifying_key"))]
+    pub signing_pubkey: Option<VerifyingKey>,
 }
 
 /// Delete, retain, or set a value
@@ -120,7 +120,7 @@ pub struct BitAssetDataUpdates {
     /// Optional pubkey used for encryption
     pub encryption_pubkey: Update<EncryptionPubKey>,
     /// Optional pubkey used for signing messages
-    pub signing_pubkey: Update<PublicKey>,
+    pub signing_pubkey: Update<VerifyingKey>,
 }
 
 /// Identifier for a BitAsset

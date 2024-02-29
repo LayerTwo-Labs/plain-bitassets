@@ -9,7 +9,7 @@ use eframe::egui::{self, InnerResponse, Response, TextBuffer};
 use hex::FromHex;
 
 use plain_bitassets::{
-    authorization::PublicKey,
+    authorization::VerifyingKey,
     bip300301::bitcoin,
     state::AmmPair,
     types::{
@@ -40,7 +40,7 @@ pub struct TrySetBitAssetData {
     /// optional pubkey used for encryption
     pub encryption_pubkey: TrySetOption<EncryptionPubKey>,
     /// optional pubkey used for signing messages
-    pub signing_pubkey: TrySetOption<PublicKey>,
+    pub signing_pubkey: TrySetOption<VerifyingKey>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -575,12 +575,12 @@ impl TxCreator {
         });
         let signing_pubkey_resp = ui.horizontal(|ui| {
             let default_pubkey =
-                PublicKey::from_bytes(&<[u8; 32] as Default>::default())
+                VerifyingKey::from_bytes(&<[u8; 32] as Default>::default())
                     .unwrap();
             let try_from_str = |s: String| {
                 <[u8; 32]>::from_hex(s).map_err(either::Left).and_then(
                     |bytes| {
-                        PublicKey::from_bytes(&bytes).map_err(either::Right)
+                        VerifyingKey::from_bytes(&bytes).map_err(either::Right)
                     },
                 )
             };

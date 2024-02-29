@@ -3,20 +3,31 @@ use std::{
     net::{Ipv4Addr, Ipv6Addr},
 };
 
-use heed::types::*;
-use heed::{Database, RoTxn, RwTxn};
-use itertools::Itertools;
-use nonempty::{nonempty, NonEmpty};
-use serde::{Deserialize, Serialize};
-
 use bip300301::{
     bitcoin::Amount as BitcoinAmount,
     bitcoin::{self, transaction::Version as BitcoinTxVersion},
     TwoWayPegData, WithdrawalBundleStatus,
 };
+use heed::{
+    types::{OwnedType, SerdeBincode},
+    Database, RoTxn, RwTxn,
+};
+use itertools::Itertools;
+use nonempty::{nonempty, NonEmpty};
+use serde::{Deserialize, Serialize};
 
-use crate::authorization::{Authorization, PublicKey};
-use crate::types::{self, *};
+use crate::{
+    authorization::{Authorization, VerifyingKey},
+    types::{
+        self, hashes, Address, AggregatedWithdrawal, AmmBurn, AmmMint, AmmSwap,
+        AssetId, BitAssetDataUpdates, BitAssetId, Body, DutchAuctionBid,
+        DutchAuctionCollect, DutchAuctionId, DutchAuctionParams,
+        EncryptionPubKey, FilledOutput, FilledOutputContent, FilledTransaction,
+        GetAddress as _, GetBitcoinValue as _, Hash, InPoint, OutPoint,
+        OutputContent, SpentOutput, Transaction, TxData, Txid, Update,
+        Verify as _, WithdrawalBundle,
+    },
+};
 
 /** Data of type `T` paired with
  *  * the txid at which it was last updated
@@ -54,7 +65,7 @@ pub struct BitAssetData {
     /// Optional pubkey used for encryption
     encryption_pubkey: RollBack<Option<EncryptionPubKey>>,
     /// Optional pubkey used for signing messages
-    signing_pubkey: RollBack<Option<PublicKey>>,
+    signing_pubkey: RollBack<Option<VerifyingKey>>,
     /// Total supply
     total_supply: RollBack<u64>,
 }

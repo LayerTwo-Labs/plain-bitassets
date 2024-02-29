@@ -1,6 +1,6 @@
 [package]
 name = "plain_bitassets"
-version = "0.4.5"
+version = "0.4.6"
 edition = "2021"
 authors = [ "Ash Manning <ash@layertwolabs.com>" ]
 
@@ -14,8 +14,8 @@ borsh = {version = "1.3.0", features = ["derive"] }
 bs58 = { version = "0.5.0", features = ["check"] }
 byteorder = "1.4.3"
 bytes = "1.4.0"
-ed25519-dalek = { version = "1.0.1", features = ["batch", "serde"] }
-ed25519-dalek-bip32 = "0.2.0"
+ed25519-dalek = { version = "2.1.1", features = ["batch", "serde"] }
+ed25519-dalek-bip32 = "0.3.0"
 educe = { version = "0.4.23", features = ["Hash"] }
 fraction = "0.14.0"
 heed = { git = "https://github.com/meilisearch/heed", tag = "v0.12.4", version = "0.12.4" }
