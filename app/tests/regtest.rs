@@ -75,8 +75,8 @@ fn bitassetsd(
     mainchaind_addr: SocketAddr,
     rpc_addr: SocketAddr,
 ) -> tokio::process::Command {
-    const BITNAMESD: &str = "../target/debug/plain_bitassets_app";
-    let mut cmd = tokio::process::Command::new(BITNAMESD);
+    const BITASSETSD: &str = "../target/debug/plain_bitassets_app";
+    let mut cmd = tokio::process::Command::new(BITASSETSD);
     cmd.arg("--datadir")
         .arg(data_dir)
         .args(
