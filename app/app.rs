@@ -108,15 +108,17 @@ impl App {
             let miner = self.miner.clone();
             async move {
                 let miner_read = miner.read().await;
-                miner_read
-                    .drivechain
-                    .client
+                let drivechain_client = &miner_read.drivechain.client;
+                let mainchain_info =
+                    drivechain_client.get_blockchain_info().await?;
+                let res = drivechain_client
                     .getnewaddress("", "legacy")
-                    .await
+                    .await?
+                    .require_network(mainchain_info.chain)
+                    .unwrap();
+                Result::<_, Error>::Ok(res)
             }
         })?;
-        let address: bitcoin::Address<bitcoin::address::NetworkChecked> =
-            address.require_network(bitcoin::Network::Regtest).unwrap();
         Ok(address)
     }
 
