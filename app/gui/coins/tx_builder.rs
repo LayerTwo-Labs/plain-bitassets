@@ -1,10 +1,12 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use eframe::egui;
 
 use plain_bitassets::{
     bip300301::bitcoin,
-    types::{GetBitcoinValue, Transaction},
+    types::{
+        AssetId, AssetOutputContent, BitAssetId, GetBitcoinValue, Transaction,
+    },
 };
 
 use super::{
@@ -12,7 +14,7 @@ use super::{
     utxo_creator::UtxoCreator,
     utxo_selector::{show_utxo, UtxoSelector},
 };
-use crate::app::App;
+use crate::{app::App, gui::util::UiExt};
 
 #[derive(Debug, Default)]
 pub struct TxBuilder {
@@ -33,38 +35,92 @@ impl TxBuilder {
             .iter()
             .filter(|(outpoint, _)| selected.contains(outpoint))
             .collect();
-        let bitcoin_value_in: u64 = spent_utxos
+        let mut bitcoin_value_in: u64 = 0;
+        let mut bitasset_values_in = BTreeMap::<BitAssetId, u64>::new();
+        let mut bitasset_controls_in = BTreeSet::<BitAssetId>::new();
+        spent_utxos
             .iter()
-            .map(|(_, output)| output.get_bitcoin_value())
-            .sum();
+            .for_each(|(_, output)| match output.asset_value() {
+                None => (),
+                Some((AssetId::Bitcoin, value)) => {
+                    bitcoin_value_in += value;
+                }
+                Some((AssetId::BitAsset(bitasset_id), value)) => {
+                    *bitasset_values_in.entry(bitasset_id).or_default() +=
+                        value;
+                }
+                Some((AssetId::BitAssetControl(bitasset_id), value)) => {
+                    assert_eq!(value, 1);
+                    bitasset_controls_in.insert(bitasset_id);
+                }
+            });
         self.tx_creator.bitcoin_value_in = bitcoin_value_in;
         spent_utxos.sort_by_key(|(outpoint, _)| format!("{outpoint}"));
         ui.separator();
-        ui.monospace(format!(
-            "Total: {}",
-            bitcoin::Amount::from_sat(bitcoin_value_in)
-        ));
-        ui.separator();
-        egui::Grid::new("utxos").striped(true).show(ui, |ui| {
-            ui.monospace("kind");
-            ui.monospace("outpoint");
-            ui.monospace("value");
-            ui.end_row();
-            let mut remove = None;
-            for (vout, outpoint) in self.base_tx.inputs.iter().enumerate() {
-                let output = &utxos_read[outpoint];
-                if output.get_bitcoin_value() != 0 {
-                    show_utxo(ui, outpoint, output);
-                    if ui.button("remove").clicked() {
-                        remove = Some(vout);
-                    }
+        egui::Grid::new("totals")
+            .striped(true)
+            .num_columns(2)
+            .show(ui, |ui| {
+                ui.monospace_selectable_singleline(false, "Asset");
+                ui.monospace_selectable_singleline(false, "Amount");
+                ui.end_row();
+
+                ui.monospace_selectable_singleline(false, "Bitcoin");
+                ui.monospace_selectable_singleline(
+                    false,
+                    format!("{}", bitcoin::Amount::from_sat(bitcoin_value_in)),
+                );
+                ui.end_row();
+
+                for bitasset_control_id in bitasset_controls_in {
+                    ui.monospace_selectable_singleline(
+                        true,
+                        format!(
+                            "BitAsset Control {}",
+                            hex::encode(bitasset_control_id.0)
+                        ),
+                    );
+                    ui.monospace_selectable_singleline(false, "1");
                     ui.end_row();
                 }
-            }
-            if let Some(vout) = remove {
-                self.base_tx.inputs.remove(vout);
-            }
-        });
+
+                for (bitasset_id, value) in bitasset_values_in {
+                    ui.monospace_selectable_singleline(
+                        true,
+                        format!("BitAsset {}", hex::encode(bitasset_id.0)),
+                    );
+                    ui.monospace_selectable_singleline(
+                        false,
+                        format!("{value}"),
+                    );
+                    ui.end_row();
+                }
+            });
+        ui.separator();
+        egui::Grid::new("utxos")
+            .striped(true)
+            .num_columns(4)
+            .show(ui, |ui| {
+                ui.monospace_selectable_singleline(false, "Kind");
+                ui.monospace_selectable_singleline(false, "Outpoint");
+                ui.monospace_selectable_singleline(false, "Asset ID");
+                ui.monospace_selectable_singleline(false, "Value");
+                ui.end_row();
+                let mut remove = None;
+                for (vout, outpoint) in self.base_tx.inputs.iter().enumerate() {
+                    let output = &utxos_read[outpoint];
+                    if output.get_bitcoin_value() != 0 {
+                        show_utxo(ui, outpoint, output, true);
+                        if ui.button("remove").clicked() {
+                            remove = Some(vout);
+                        }
+                        ui.end_row();
+                    }
+                }
+                if let Some(vout) = remove {
+                    self.base_tx.inputs.remove(vout);
+                }
+            });
     }
 
     pub fn show_value_out(&mut self, ui: &mut egui::Ui) {
@@ -82,33 +138,52 @@ impl TxBuilder {
             bitcoin::Amount::from_sat(bitcoin_value_out)
         ));
         ui.separator();
-        egui::Grid::new("outputs").striped(true).show(ui, |ui| {
-            let mut remove = None;
-            ui.monospace("vout");
-            ui.monospace("address");
-            ui.monospace("value");
-            ui.end_row();
-            for (vout, output) in self.base_tx.indexed_bitcoin_value_outputs() {
-                let address = &format!("{}", output.address)[0..8];
-                let value =
-                    bitcoin::Amount::from_sat(output.get_bitcoin_value());
-                ui.monospace(format!("{vout}"));
-                ui.monospace(address.to_string());
-                ui.with_layout(
-                    egui::Layout::right_to_left(egui::Align::Max),
-                    |ui| {
-                        ui.monospace(format!("₿{value}"));
-                    },
-                );
-                if ui.button("remove").clicked() {
-                    remove = Some(vout);
-                }
+        egui::Grid::new("outputs")
+            .striped(true)
+            .num_columns(4)
+            .show(ui, |ui| {
+                let mut remove = None;
+                ui.monospace_selectable_singleline(false, "Kind");
+                ui.monospace_selectable_singleline(false, "vout");
+                ui.monospace_selectable_singleline(false, "Address");
+                ui.monospace_selectable_singleline(false, "Value");
                 ui.end_row();
-            }
-            if let Some(vout) = remove {
-                self.base_tx.outputs.remove(vout);
-            }
-        });
+                for (vout, output) in self.base_tx.indexed_asset_outputs() {
+                    let address = &format!("{}", output.address)[0..8];
+                    let (asset_kind, value) = match output.content {
+                        AssetOutputContent::Value(value)
+                        | AssetOutputContent::Withdrawal { value, .. } => {
+                            let bitcoin_value = format!(
+                                "₿{}",
+                                bitcoin::Amount::from_sat(value)
+                            );
+                            ("Bitcoin", bitcoin_value)
+                        }
+                        AssetOutputContent::BitAsset(value) => {
+                            ("BitAsset", format!("{value}"))
+                        }
+                        AssetOutputContent::BitAssetControl => {
+                            ("BitAsset Control", "1".to_owned())
+                        }
+                    };
+                    ui.monospace_selectable_singleline(false, asset_kind);
+                    ui.monospace(format!("{vout}"));
+                    ui.monospace(address.to_string());
+                    ui.with_layout(
+                        egui::Layout::right_to_left(egui::Align::Max),
+                        |ui| {
+                            ui.monospace(value);
+                        },
+                    );
+                    if ui.button("remove").clicked() {
+                        remove = Some(vout);
+                    }
+                    ui.end_row();
+                }
+                if let Some(vout) = remove {
+                    self.base_tx.outputs.remove(vout);
+                }
+            });
     }
 
     pub fn show(

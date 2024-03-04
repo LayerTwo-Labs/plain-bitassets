@@ -2,14 +2,18 @@ use eframe::egui;
 
 use plain_bitassets::{
     bip300301::bitcoin,
-    types::{self, Output, OutputContent, Transaction},
+    types::{self, AssetId, Output, OutputContent, Transaction},
 };
 
-use crate::{app::App, gui::util::InnerResponseExt};
+use super::utxo_selector::AssetInput;
+use crate::{
+    app::App,
+    gui::util::{InnerResponseExt, UiExt as _},
+};
 
 #[derive(Debug, Eq, PartialEq)]
 enum UtxoType {
-    Regular,
+    Regular { asset_input: AssetInput },
     Withdrawal,
 }
 
@@ -40,7 +44,7 @@ pub struct UtxoCreator {
 impl std::fmt::Display for UtxoType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Regular => write!(f, "regular"),
+            Self::Regular { .. } => write!(f, "regular"),
             Self::Withdrawal => write!(f, "withdrawal"),
         }
     }
@@ -62,7 +66,9 @@ impl Default for UtxoCreator {
             address: "".into(),
             main_address: "".into(),
             main_fee: "".into(),
-            utxo_type: UtxoType::Regular,
+            utxo_type: UtxoType::Regular {
+                asset_input: Default::default(),
+            },
             memo_encoding: None,
             memo_user_input: None,
             memo_encoded: None,
@@ -106,7 +112,9 @@ impl UtxoCreator {
                 .show_ui(ui, |ui| {
                     ui.selectable_value(
                         &mut self.utxo_type,
-                        UtxoType::Regular,
+                        UtxoType::Regular {
+                            asset_input: Default::default(),
+                        },
                         "regular",
                     );
                     ui.selectable_value(
@@ -117,11 +125,28 @@ impl UtxoCreator {
                 });
             ui.heading("UTXO");
         });
+        let asset_id = match &mut self.utxo_type {
+            UtxoType::Regular { asset_input } => {
+                ui.horizontal(|ui| asset_input.show(ui));
+                match asset_input.asset_id() {
+                    Ok(asset_id) => asset_id,
+                    Err(err) => {
+                        ui.monospace_selectable_multiline(format!("{err:#}"));
+                        return;
+                    }
+                }
+            }
+            UtxoType::Withdrawal => AssetId::Bitcoin,
+        };
         ui.separator();
         ui.horizontal(|ui| {
-            ui.monospace("Value:       ");
-            ui.add(egui::TextEdit::singleline(&mut self.value));
-            ui.monospace("BTC");
+            if !matches!(asset_id, AssetId::BitAssetControl(_)) {
+                ui.monospace("Value:       ");
+                ui.add(egui::TextEdit::singleline(&mut self.value));
+            }
+            if asset_id == AssetId::Bitcoin {
+                ui.monospace("BTC");
+            }
         });
         ui.horizontal(|ui| {
             ui.monospace("Address:     ");
@@ -224,18 +249,28 @@ impl UtxoCreator {
         }
         ui.horizontal(|ui| {
             match self.utxo_type {
-                UtxoType::Regular => {
+                UtxoType::Regular { .. } => {
                     let address: Option<types::Address> =
                         self.address.parse().ok();
-                    let value: Option<bitcoin::Amount> =
-                        bitcoin::Amount::from_str_in(
+                    let output_content: Option<OutputContent> = match asset_id {
+                        AssetId::Bitcoin => bitcoin::Amount::from_str_in(
                             &self.value,
                             bitcoin::Denomination::Bitcoin,
                         )
-                        .ok();
+                        .ok()
+                        .map(|bitcoin_amount| {
+                            OutputContent::Value(bitcoin_amount.to_sat())
+                        }),
+                        AssetId::BitAsset(_) => {
+                            self.value.parse().ok().map(OutputContent::BitAsset)
+                        }
+                        AssetId::BitAssetControl(_) => {
+                            Some(OutputContent::BitAssetControl)
+                        }
+                    };
                     if ui
                         .add_enabled(
-                            address.is_some() && value.is_some(),
+                            address.is_some() && output_content.is_some(),
                             egui::Button::new("create"),
                         )
                         .clicked()
@@ -251,9 +286,7 @@ impl UtxoCreator {
                             .unwrap_or_default();
                         let utxo = Output {
                             address: address.expect("should not happen"),
-                            content: OutputContent::Value(
-                                value.expect("should not happen").to_sat(),
-                            ),
+                            content: output_content.expect("should not happen"),
                             memo,
                         };
                         tx.outputs.push(utxo);

@@ -16,11 +16,12 @@ mod transaction;
 pub use address::*;
 pub use hashes::{BlockHash, Hash, MerkleRoot, Txid};
 pub use transaction::{
-    AmmBurn, AmmMint, AmmSwap, AssetId, AuthorizedTransaction, BitAssetData,
-    BitAssetDataUpdates, BitAssetId, Content as OutputContent, DutchAuctionBid,
-    DutchAuctionCollect, DutchAuctionId, DutchAuctionParams,
+    AmmBurn, AmmMint, AmmSwap, AssetId, AssetOutputContent,
+    AuthorizedTransaction, BitAssetData, BitAssetDataUpdates, BitAssetId,
+    DutchAuctionBid, DutchAuctionCollect, DutchAuctionId, DutchAuctionParams,
     FilledContent as FilledOutputContent, FilledOutput, FilledTransaction,
-    InPoint, OutPoint, Output, SpentOutput, Transaction, TxData, Update,
+    InPoint, OutPoint, Output, OutputContent, SpentOutput, Transaction, TxData,
+    Update,
 };
 
 /// (de)serialize as Display/FromStr for human-readable forms like json,

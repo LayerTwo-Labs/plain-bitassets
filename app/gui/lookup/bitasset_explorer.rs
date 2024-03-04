@@ -41,31 +41,38 @@ pub fn show_bitasset_data(
     let signing_pubkey = signing_pubkey
         .map_or("Not set".to_owned(), |pk| hex::encode(pk.as_bytes()));
     ui.horizontal(|ui| {
-        ui.monospace_selectable_singleline(format!("Commitment: {commitment}"))
+        ui.monospace_selectable_singleline(
+            false,
+            format!("Commitment: {commitment}"),
+        )
     })
     .join()
         | ui.horizontal(|ui| {
-            ui.monospace_selectable_singleline(format!(
-                "IPv4 Address: {ipv4_addr}"
-            ))
+            ui.monospace_selectable_singleline(
+                false,
+                format!("IPv4 Address: {ipv4_addr}"),
+            )
         })
         .join()
         | ui.horizontal(|ui| {
-            ui.monospace_selectable_singleline(format!(
-                "IPv6 Address: {ipv6_addr}"
-            ))
+            ui.monospace_selectable_singleline(
+                false,
+                format!("IPv6 Address: {ipv6_addr}"),
+            )
         })
         .join()
         | ui.horizontal(|ui| {
-            ui.monospace_selectable_singleline(format!(
-                "Encryption Pubkey: {encryption_pubkey}"
-            ))
+            ui.monospace_selectable_singleline(
+                false,
+                format!("Encryption Pubkey: {encryption_pubkey}"),
+            )
         })
         .join()
         | ui.horizontal(|ui| {
-            ui.monospace_selectable_singleline(format!(
-                "Signing Pubkey: {signing_pubkey}"
-            ))
+            ui.monospace_selectable_singleline(
+                false,
+                format!("Signing Pubkey: {signing_pubkey}"),
+            )
         })
         .join()
 }

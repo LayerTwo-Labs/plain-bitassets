@@ -22,13 +22,19 @@ impl BitAssetExplorer {
                 .map(|(bitasset_seq_id, bitasset_id, bitasset_data)| {
                     {
                         ui.horizontal(|ui| {
-                            ui.monospace_selectable_singleline(format!(
-                                "BitAsset Seq ID: {}",
-                                bitasset_seq_id.0
-                            )) | ui.monospace_selectable_singleline(format!(
-                                "BitAsset ID: {}",
-                                hex::encode(bitasset_id.0)
-                            )) | crate::gui::lookup::show_bitasset_data(
+                            ui.monospace_selectable_singleline(
+                                false,
+                                format!(
+                                    "BitAsset Seq ID: {}",
+                                    bitasset_seq_id.0
+                                ),
+                            ) | ui.monospace_selectable_singleline(
+                                false,
+                                format!(
+                                    "BitAsset ID: {}",
+                                    hex::encode(bitasset_id.0)
+                                ),
+                            ) | crate::gui::lookup::show_bitasset_data(
                                 ui,
                                 &bitasset_data,
                             )

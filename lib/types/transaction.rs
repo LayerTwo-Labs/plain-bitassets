@@ -45,8 +45,8 @@ pub enum InPoint {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Content {
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum OutputContent {
     AmmLpToken(u64),
     BitAsset(u64),
     BitAssetControl,
@@ -61,13 +61,67 @@ pub enum Content {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Output {
+// The subset of output contents that correspond to assets
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AssetOutputContent {
+    BitAsset(u64),
+    BitAssetControl,
+    Value(u64),
+    Withdrawal {
+        value: u64,
+        main_fee: u64,
+        main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
+    },
+}
+
+impl From<OutputContent> for Option<AssetOutputContent> {
+    fn from(content: OutputContent) -> Option<AssetOutputContent> {
+        match content {
+            OutputContent::BitAsset(value) => {
+                Some(AssetOutputContent::BitAsset(value))
+            }
+            OutputContent::BitAssetControl => {
+                Some(AssetOutputContent::BitAssetControl)
+            }
+            OutputContent::Value(value) => {
+                Some(AssetOutputContent::Value(value))
+            }
+            OutputContent::Withdrawal {
+                value,
+                main_fee,
+                main_address,
+            } => Some(AssetOutputContent::Withdrawal {
+                value,
+                main_fee,
+                main_address,
+            }),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Output<Content = OutputContent> {
     #[serde(with = "serde_display_fromstr_human_readable")]
     pub address: Address,
     pub content: Content,
     #[serde(with = "serde_hexstr_human_readable")]
     pub memo: Vec<u8>,
+}
+
+pub type TxOutput = Output;
+
+pub type AssetOutput = Output<AssetOutputContent>;
+
+impl From<TxOutput> for Option<AssetOutput> {
+    fn from(output: Output) -> Option<AssetOutput> {
+        let content: Option<AssetOutputContent> = output.content.into();
+        Some(AssetOutput {
+            address: output.address,
+            content: content?,
+            memo: output.memo,
+        })
+    }
 }
 
 pub type TxInputs = Vec<OutPoint>;
@@ -435,7 +489,7 @@ impl std::fmt::Display for OutPoint {
     }
 }
 
-impl Content {
+impl OutputContent {
     /// `true` if the output content corresponds to a BitAsset
     pub fn is_bitasset(&self) -> bool {
         matches!(self, Self::BitAsset(_))
@@ -457,9 +511,20 @@ impl Content {
     pub fn is_withdrawal(&self) -> bool {
         matches!(self, Self::Withdrawal { .. })
     }
+
+    /// `true` if the output corresponds to an asset output
+    pub fn is_asset(&self) -> bool {
+        matches!(
+            self,
+            Self::BitAsset(_)
+                | Self::BitAssetControl
+                | Self::Value(_)
+                | Self::Withdrawal { .. }
+        )
+    }
 }
 
-impl GetBitcoinValue for Content {
+impl GetBitcoinValue for OutputContent {
     #[inline(always)]
     fn get_bitcoin_value(&self) -> u64 {
         match self {
@@ -474,7 +539,7 @@ impl GetBitcoinValue for Content {
     }
 }
 
-impl Output {
+impl<Content> Output<Content> {
     pub fn new(address: Address, content: Content) -> Self {
         Self {
             address,
@@ -482,7 +547,9 @@ impl Output {
             memo: Vec::new(),
         }
     }
+}
 
+impl Output<OutputContent> {
     /// `true` if the output content corresponds to a BitAsset
     pub fn is_bitasset(&self) -> bool {
         self.content.is_bitasset()
@@ -496,6 +563,11 @@ impl Output {
     /// `true` if the output content corresponds to a reservation
     pub fn is_reservation(&self) -> bool {
         self.content.is_reservation()
+    }
+
+    /// `true` if the output corresponds to an asset output
+    pub fn is_asset(&self) -> bool {
+        self.content.is_asset()
     }
 }
 
@@ -563,14 +635,15 @@ impl Transaction {
         }
     }
 
-    /// Return an iterator over Bitcoin outputs with index
-    pub fn indexed_bitcoin_value_outputs(
+    /// Return an iterator over asset outputs with index
+    pub fn indexed_asset_outputs(
         &self,
-    ) -> impl Iterator<Item = (usize, &Output)> {
-        self.outputs
-            .iter()
-            .enumerate()
-            .filter(|(_, output)| output.get_bitcoin_value() != 0)
+    ) -> impl Iterator<Item = (usize, AssetOutput)> + '_ {
+        self.outputs.iter().enumerate().filter_map(|(idx, output)| {
+            let asset_output: AssetOutput =
+                Option::<AssetOutput>::from(output.clone())?;
+            Some((idx, asset_output))
+        })
     }
 
     /// Return an iterator over BitAsset outputs
@@ -830,31 +903,31 @@ impl FilledContent {
     }
 }
 
-impl From<FilledContent> for Content {
+impl From<FilledContent> for OutputContent {
     fn from(filled: FilledContent) -> Self {
         match filled {
             FilledContent::AmmLpToken {
                 asset0: _,
                 asset1: _,
                 amount,
-            } => Content::AmmLpToken(amount),
-            FilledContent::Bitcoin(value) => Content::Value(value),
+            } => OutputContent::AmmLpToken(amount),
+            FilledContent::Bitcoin(value) => OutputContent::Value(value),
             FilledContent::BitcoinWithdrawal {
                 value,
                 main_fee,
                 main_address,
-            } => Content::Withdrawal {
+            } => OutputContent::Withdrawal {
                 value,
                 main_fee,
                 main_address,
             },
-            FilledContent::BitAsset(_, value) => Content::BitAsset(value),
-            FilledContent::BitAssetControl(_) => Content::BitAssetControl,
+            FilledContent::BitAsset(_, value) => OutputContent::BitAsset(value),
+            FilledContent::BitAssetControl(_) => OutputContent::BitAssetControl,
             FilledContent::BitAssetReservation { .. } => {
-                Content::BitAssetReservation
+                OutputContent::BitAssetReservation
             }
             FilledContent::DutchAuctionReceipt(_) => {
-                Content::DutchAuctionReceipt
+                OutputContent::DutchAuctionReceipt
             }
         }
     }
@@ -862,7 +935,7 @@ impl From<FilledContent> for Content {
 
 impl GetBitcoinValue for FilledContent {
     fn get_bitcoin_value(&self) -> u64 {
-        Content::from(self.clone()).get_bitcoin_value()
+        OutputContent::from(self.clone()).get_bitcoin_value()
     }
 }
 
@@ -1784,7 +1857,7 @@ impl FilledTransaction {
             .iter()
             .map(|output| {
                 let content = match output.content.clone() {
-                    Content::AmmLpToken(amount) => {
+                    OutputContent::AmmLpToken(amount) => {
                         let (asset0, asset1, remaining_amount) =
                             output_lp_token_total_amounts.peek_mut()?;
                         let remaining_amount = remaining_amount.as_mut()?;
@@ -1809,7 +1882,7 @@ impl FilledTransaction {
                         }
                         filled_content
                     }
-                    Content::BitAsset(value) => {
+                    OutputContent::BitAsset(value) => {
                         let (bitasset, remaining_value) =
                             output_bitasset_total_values.peek_mut()?;
                         let remaining_value = remaining_value.as_mut()?;
@@ -1831,21 +1904,21 @@ impl FilledTransaction {
                         }
                         filled_content
                     }
-                    Content::BitAssetControl => {
+                    OutputContent::BitAssetControl => {
                         filled_bitasset_control_output_content.next()?.clone()
                     }
-                    Content::BitAssetReservation => {
+                    OutputContent::BitAssetReservation => {
                         filled_reservation_output_content.next()?.clone()
                     }
-                    Content::DutchAuctionReceipt => {
+                    OutputContent::DutchAuctionReceipt => {
                         filled_dutch_auction_receipts.next()?
                     }
-                    Content::Value(value) => {
+                    OutputContent::Value(value) => {
                         output_bitcoin_max_value =
                             output_bitcoin_max_value.checked_sub(value)?;
                         FilledContent::Bitcoin(value)
                     }
-                    Content::Withdrawal {
+                    OutputContent::Withdrawal {
                         value,
                         main_fee,
                         main_address,

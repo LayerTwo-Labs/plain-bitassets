@@ -14,7 +14,11 @@ pub trait InnerResponseExt {
 
 /// extension trait for egui::Ui
 pub trait UiExt {
-    fn monospace_selectable_singleline<Text>(&mut self, text: Text) -> Response
+    fn monospace_selectable_singleline<Text>(
+        &mut self,
+        clip_text: bool,
+        text: Text,
+    ) -> Response
     where
         Text: Borrow<str>;
 
@@ -39,7 +43,11 @@ impl InnerResponseExt for InnerResponse<Option<Response>> {
 }
 
 impl UiExt for Ui {
-    fn monospace_selectable_singleline<Text>(&mut self, text: Text) -> Response
+    fn monospace_selectable_singleline<Text>(
+        &mut self,
+        clip_text: bool,
+        text: Text,
+    ) -> Response
     where
         Text: Borrow<str>,
     {
@@ -47,6 +55,7 @@ impl UiExt for Ui {
         let mut text: &str = text.borrow();
         TextEdit::singleline(&mut text)
             .font(TextStyle::Monospace)
+            .clip_text(clip_text)
             .ui(self)
     }
 

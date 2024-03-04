@@ -56,15 +56,18 @@ impl MyBitassets {
                             let txid = hex::encode(txid.0);
                             let commitment = hex::encode(commitment);
                             ui.vertical(|ui| {
-                                ui.monospace_selectable_singleline(format!(
-                                    "plaintext name: {plaintext_name}"
-                                ));
-                                ui.monospace_selectable_singleline(format!(
-                                    "txid: {txid}"
-                                ));
-                                ui.monospace_selectable_singleline(format!(
-                                    "commitment: {commitment}"
-                                ));
+                                ui.monospace_selectable_singleline(
+                                    true,
+                                    format!("plaintext name: {plaintext_name}"),
+                                );
+                                ui.monospace_selectable_singleline(
+                                    false,
+                                    format!("txid: {txid}"),
+                                );
+                                ui.monospace_selectable_singleline(
+                                    false,
+                                    format!("commitment: {commitment}"),
+                                );
                             });
                             ui.end_row()
                         }
@@ -74,12 +77,14 @@ impl MyBitassets {
                             let txid = hex::encode(txid.0);
                             let commitment = hex::encode(commitment);
                             ui.vertical(|ui| {
-                                ui.monospace_selectable_singleline(format!(
-                                    "txid: {txid}"
-                                ));
-                                ui.monospace_selectable_singleline(format!(
-                                    "commitment: {commitment}"
-                                ));
+                                ui.monospace_selectable_singleline(
+                                    false,
+                                    format!("txid: {txid}"),
+                                );
+                                ui.monospace_selectable_singleline(
+                                    false,
+                                    format!("commitment: {commitment}"),
+                                );
                             });
                             ui.end_row()
                         }
@@ -124,21 +129,28 @@ impl MyBitassets {
                     .show(ui, |ui| {
                         for (bitasset, plaintext_name) in known_name_bitassets {
                             ui.vertical(|ui| {
-                                ui.monospace_selectable_singleline(format!(
-                                    "plaintext name: {plaintext_name}"
-                                ));
-                                ui.monospace_selectable_singleline(format!(
-                                    "bitasset: {}",
-                                    hex::encode(bitasset.0)
-                                ));
+                                ui.monospace_selectable_singleline(
+                                    true,
+                                    format!("plaintext name: {plaintext_name}"),
+                                );
+                                ui.monospace_selectable_singleline(
+                                    false,
+                                    format!(
+                                        "bitasset: {}",
+                                        hex::encode(bitasset.0)
+                                    ),
+                                );
                             });
                             ui.end_row()
                         }
                         for bitasset in unknown_name_bitassets {
-                            ui.monospace_selectable_singleline(format!(
-                                "bitasset: {}",
-                                hex::encode(bitasset.0)
-                            ));
+                            ui.monospace_selectable_singleline(
+                                false,
+                                format!(
+                                    "bitasset: {}",
+                                    hex::encode(bitasset.0)
+                                ),
+                            );
                             ui.end_row()
                         }
                     });

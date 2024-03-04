@@ -30,7 +30,10 @@ pub fn show_dutch_auction_state(
         descriptor: &str,
     ) -> InnerResponse<Response> {
         ui.horizontal(|ui| {
-            ui.monospace_selectable_singleline(format!("{descriptor}: {value}"))
+            ui.monospace_selectable_singleline(
+                false,
+                format!("{descriptor}: {value}"),
+            )
         })
     }
     let DutchAuctionState {
