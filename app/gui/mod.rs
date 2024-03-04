@@ -1,11 +1,12 @@
 use eframe::egui::{self, Color32};
 
-use crate::app::App;
+use crate::{app::App, logs::LogsCapture};
 
 mod activity;
 mod coins;
 mod deposit;
 mod encrypt_message;
+mod logs;
 mod lookup;
 mod miner;
 mod seed;
@@ -15,6 +16,7 @@ use activity::Activity;
 use coins::Coins;
 use deposit::Deposit;
 use encrypt_message::EncryptMessage;
+use logs::Logs;
 use lookup::Lookup;
 use miner::Miner;
 use seed::SetSeed;
@@ -29,6 +31,7 @@ pub struct EguiApp {
     activity: Activity,
     coins: Coins,
     encrypt_message: EncryptMessage,
+    logs: Logs,
 }
 
 #[derive(Eq, PartialEq)]
@@ -37,10 +40,15 @@ enum Tab {
     Lookup,
     EncryptMessage,
     Activity,
+    Logs,
 }
 
 impl EguiApp {
-    pub fn new(app: App, cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(
+        app: App,
+        cc: &eframe::CreationContext<'_>,
+        logs_capture: LogsCapture,
+    ) -> Self {
         // Customize egui here with cc.egui_ctx.set_fonts and cc.egui_ctx.set_visuals.
         // Restore app state using cc.storage (requires the "persistence" feature).
         // Use the cc.gl (a glow::Context) to create graphics shaders and buffers that you can use
@@ -72,6 +80,7 @@ impl EguiApp {
             activity,
             coins: Coins::default(),
             encrypt_message: EncryptMessage::new(),
+            logs: Logs::new(logs_capture),
         }
     }
 
@@ -114,18 +123,19 @@ impl eframe::App for EguiApp {
         if self.app.wallet.has_seed().unwrap_or(false) {
             egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.tab, Tab::Coins, "coins");
-                    ui.selectable_value(&mut self.tab, Tab::Lookup, "lookup");
+                    ui.selectable_value(&mut self.tab, Tab::Coins, "Coins");
+                    ui.selectable_value(&mut self.tab, Tab::Lookup, "Lookup");
                     ui.selectable_value(
                         &mut self.tab,
                         Tab::EncryptMessage,
-                        "messaging",
+                        "Messaging",
                     );
                     ui.selectable_value(
                         &mut self.tab,
                         Tab::Activity,
-                        "activity",
+                        "Activity",
                     );
+                    ui.selectable_value(&mut self.tab, Tab::Logs, "Logs");
                 });
             });
             egui::TopBottomPanel::bottom("util")
@@ -142,6 +152,9 @@ impl eframe::App for EguiApp {
                 }
                 Tab::Activity => {
                     self.activity.show(&mut self.app, ui);
+                }
+                Tab::Logs => {
+                    self.logs.show(ui);
                 }
             });
         } else {
