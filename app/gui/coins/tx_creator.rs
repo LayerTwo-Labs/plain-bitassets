@@ -64,8 +64,8 @@ pub struct DutchAuctionParams {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct BitAssetRegistration {
     plaintext_name: String,
-    bitasset_data: Box<TrySetBitAssetData>,
     initial_supply: String,
+    bitasset_data: Box<TrySetBitAssetData>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -610,18 +610,18 @@ impl TxCreator {
             &mut bitasset_registration.plaintext_name,
             "Plaintext Name",
         );
-        let bitasset_options_resp = Self::show_bitasset_options(
-            ui,
-            bitasset_registration.bitasset_data.as_mut(),
-        );
         let initial_supply_resp = show_monospace_single_line_input(
             ui,
             &mut bitasset_registration.initial_supply,
             "Initial Supply",
         );
+        let bitasset_options_resp = Self::show_bitasset_options(
+            ui,
+            bitasset_registration.bitasset_data.as_mut(),
+        );
         let resp = plaintext_name_resp.join()
-            | bitasset_options_resp
-            | initial_supply_resp.join();
+            | initial_supply_resp.join()
+            | bitasset_options_resp;
         Some(resp)
     }
 
