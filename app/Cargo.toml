@@ -1,6 +1,6 @@
 [package]
 name = "plain_bitassets_app"
-version = "0.5.2"
+version = "0.5.3"
 edition = "2021"
 authors = [ "Ash Manning <ash@layertwolabs.com>" ]
 
