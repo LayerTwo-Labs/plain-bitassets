@@ -8,7 +8,9 @@ use plain_bitassets::{
     format_deposit_address,
     miner::{self, Miner},
     node::{self, Node, THIS_SIDECHAIN},
-    types::{self, FilledOutput, OutPoint, Transaction},
+    types::{
+        self, BitcoinOutputContent, FilledOutput, OutPoint, Output, Transaction,
+    },
     wallet::{self, Wallet},
 };
 
@@ -20,6 +22,7 @@ pub struct App {
     pub wallet: Arc<Wallet>,
     pub miner: Arc<TokioRwLock<Miner>>,
     pub utxos: Arc<RwLock<HashMap<OutPoint, FilledOutput>>>,
+    pub unconfirmed_utxos: Arc<RwLock<HashMap<OutPoint, Output>>>,
     pub runtime: Arc<tokio::runtime::Runtime>,
 }
 
@@ -74,20 +77,25 @@ impl App {
             };
             Ok(node)
         })?;
-        let utxos = {
+        let (unconfirmed_utxos, utxos) = {
             let mut utxos = wallet.get_utxos()?;
+            let mut unconfirmed_utxos = wallet.get_unconfirmed_utxos()?;
             let transactions = node.get_all_transactions()?;
             for transaction in &transactions {
                 for input in &transaction.transaction.inputs {
                     utxos.remove(input);
+                    unconfirmed_utxos.remove(input);
                 }
             }
-            Arc::new(RwLock::new(utxos))
+            let unconfirmed_utxos = Arc::new(RwLock::new(unconfirmed_utxos));
+            let utxos = Arc::new(RwLock::new(utxos));
+            (unconfirmed_utxos, utxos)
         };
         Ok(Self {
             node: Arc::new(node),
             wallet: Arc::new(wallet),
             miner: Arc::new(TokioRwLock::new(miner)),
+            unconfirmed_utxos,
             utxos,
             runtime: Arc::new(runtime),
         })
@@ -135,7 +143,7 @@ impl App {
             0 => vec![],
             _ => vec![types::Output::new(
                 self.wallet.get_new_address()?,
-                types::OutputContent::Value(tx_fees),
+                types::OutputContent::Value(BitcoinOutputContent(tx_fees)),
             )],
         };
         let body = types::Body::new(txs, coinbase);
@@ -175,27 +183,43 @@ impl App {
 
     fn update_wallet(&self) -> Result<(), Error> {
         let addresses = self.wallet.get_addresses()?;
+        let unconfirmed_utxos =
+            self.node.get_unconfirmed_utxos_by_addresses(&addresses)?;
         let utxos = self.node.get_utxos_by_addresses(&addresses)?;
-        let outpoints: Vec<_> = self.wallet.get_utxos()?.into_keys().collect();
-        let spent: Vec<_> = self
+        let confirmed_outpoints: Vec<_> =
+            self.wallet.get_utxos()?.into_keys().collect();
+        let confirmed_spent = self
             .node
-            .get_spent_utxos(&outpoints)?
+            .get_spent_utxos(&confirmed_outpoints)?
             .into_iter()
-            .map(|(outpoint, spent_output)| (outpoint, spent_output.inpoint))
-            .collect();
+            .map(|(outpoint, spent_output)| (outpoint, spent_output.inpoint));
+        let unconfirmed_outpoints: Vec<_> =
+            self.wallet.get_unconfirmed_utxos()?.into_keys().collect();
+        let unconfirmed_spent = self
+            .node
+            .get_unconfirmed_spent_utxos(
+                confirmed_outpoints.iter().chain(&unconfirmed_outpoints),
+            )?
+            .into_iter();
+        let spent: Vec<_> = confirmed_spent.chain(unconfirmed_spent).collect();
         self.wallet.put_utxos(&utxos)?;
+        self.wallet.put_unconfirmed_utxos(&unconfirmed_utxos)?;
         self.wallet.spend_utxos(&spent)?;
         Ok(())
     }
 
+    /// Update all UTXOs, including unconfirmed UTXOs
     fn update_utxos(&self) -> Result<(), Error> {
+        let mut unconfirmed_utxos = self.wallet.get_unconfirmed_utxos()?;
         let mut utxos = self.wallet.get_utxos()?;
         let transactions = self.node.get_all_transactions()?;
         for transaction in &transactions {
             for input in &transaction.transaction.inputs {
+                unconfirmed_utxos.remove(input);
                 utxos.remove(input);
             }
         }
+        *self.unconfirmed_utxos.write() = unconfirmed_utxos;
         *self.utxos.write() = utxos;
         Ok(())
     }

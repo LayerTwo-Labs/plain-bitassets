@@ -358,10 +358,13 @@ impl Node {
         Ok(())
     }
 
-    pub fn get_spent_utxos(
+    pub fn get_spent_utxos<'a, OutPoints>(
         &self,
-        outpoints: &[OutPoint],
-    ) -> Result<Vec<(OutPoint, SpentOutput)>, Error> {
+        outpoints: OutPoints,
+    ) -> Result<Vec<(OutPoint, SpentOutput)>, Error>
+    where
+        OutPoints: IntoIterator<Item = &'a OutPoint>,
+    {
         let txn = self.env.read_txn()?;
         let mut spent = vec![];
         for outpoint in outpoints {
@@ -370,6 +373,39 @@ impl Node {
             }
         }
         Ok(spent)
+    }
+
+    pub fn get_unconfirmed_spent_utxos<'a, OutPoints>(
+        &self,
+        outpoints: OutPoints,
+    ) -> Result<Vec<(OutPoint, InPoint)>, Error>
+    where
+        OutPoints: IntoIterator<Item = &'a OutPoint>,
+    {
+        let txn = self.env.read_txn()?;
+        let mut spent = vec![];
+        for outpoint in outpoints {
+            if let Some(inpoint) =
+                self.mempool.spent_utxos.get(&txn, outpoint)?
+            {
+                spent.push((*outpoint, inpoint));
+            }
+        }
+        Ok(spent)
+    }
+
+    pub fn get_unconfirmed_utxos_by_addresses(
+        &self,
+        addresses: &HashSet<Address>,
+    ) -> Result<HashMap<OutPoint, Output>, Error> {
+        let txn = self.env.read_txn()?;
+        let mut res = HashMap::new();
+        let () = addresses.iter().try_for_each(|addr| {
+            let utxos = self.mempool.get_unconfirmed_utxos(&txn, addr)?;
+            res.extend(utxos);
+            Result::<(), Error>::Ok(())
+        })?;
+        Ok(res)
     }
 
     pub fn get_utxos_by_addresses(

@@ -1,51 +1,184 @@
-use crate::types::{AuthorizedTransaction, OutPoint, Txid};
-use heed::types::*;
-use heed::{Database, RoTxn, RwTxn};
+use std::collections::{HashMap, HashSet};
+
+use heed::{
+    types::{OwnedType, SerdeBincode},
+    Database, RoTxn, RwTxn,
+};
+
+use crate::types::{
+    Address, AuthorizedTransaction, InPoint, OutPoint, Output, Txid,
+};
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("heed error")]
+    Heed(#[from] heed::Error),
+    #[error("Missing transaction {0}")]
+    MissingTransaction(Txid),
+    #[error("can't add transaction, utxo double spent")]
+    UtxoDoubleSpent,
+}
 
 #[derive(Clone)]
 pub struct MemPool {
     pub transactions:
-        Database<OwnedType<[u8; 32]>, SerdeBincode<AuthorizedTransaction>>,
-    pub spent_utxos: Database<SerdeBincode<OutPoint>, Unit>,
+        Database<OwnedType<Txid>, SerdeBincode<AuthorizedTransaction>>,
+    pub spent_utxos: Database<SerdeBincode<OutPoint>, SerdeBincode<InPoint>>,
+    /// Associates relevant txs to each address
+    address_to_txs:
+        Database<SerdeBincode<Address>, SerdeBincode<HashSet<Txid>>>,
 }
 
 impl MemPool {
-    pub const NUM_DBS: u32 = 2;
+    pub const NUM_DBS: u32 = 3;
 
     pub fn new(env: &heed::Env) -> Result<Self, Error> {
         let transactions = env.create_database(Some("transactions"))?;
         let spent_utxos = env.create_database(Some("spent_utxos"))?;
+        let address_to_txs = env.create_database(Some("address_to_txs"))?;
         Ok(Self {
             transactions,
             spent_utxos,
+            address_to_txs,
+        })
+    }
+
+    /// Stores STXOs, checking for double spends
+    fn put_stxos<Iter>(
+        &self,
+        rwtxn: &mut RwTxn,
+        stxos: Iter,
+    ) -> Result<(), Error>
+    where
+        Iter: IntoIterator<Item = (OutPoint, InPoint)>,
+    {
+        stxos.into_iter().try_for_each(|(outpoint, inpoint)| {
+            if self.spent_utxos.get(rwtxn, &outpoint)?.is_some() {
+                Err(Error::UtxoDoubleSpent)
+            } else {
+                self.spent_utxos.put(rwtxn, &outpoint, &inpoint)?;
+                Ok(())
+            }
+        })
+    }
+
+    /// Delete STXOs
+    fn delete_stxos<'a, Iter>(
+        &self,
+        rwtxn: &mut RwTxn,
+        stxos: Iter,
+    ) -> Result<(), Error>
+    where
+        Iter: IntoIterator<Item = &'a OutPoint>,
+    {
+        stxos.into_iter().try_for_each(|stxo| {
+            let _ = self.spent_utxos.delete(rwtxn, stxo)?;
+            Ok(())
+        })
+    }
+
+    /// Associates the [`Txid`] with the [`Address`],
+    /// by inserting into `address_to_txs`.
+    fn assoc_txid_with_address(
+        &self,
+        rwtxn: &mut RwTxn,
+        txid: Txid,
+        address: &Address,
+    ) -> Result<(), Error> {
+        let mut associated_txs =
+            self.address_to_txs.get(rwtxn, address)?.unwrap_or_default();
+        associated_txs.insert(txid);
+        self.address_to_txs.put(rwtxn, address, &associated_txs)?;
+        Ok(())
+    }
+
+    /// Associates the [`Transaction`]'s [`Txid`] with all relevant
+    /// [`Address`]es, by inserting into `address_to_txs`.
+    fn assoc_tx_with_relevant_addresses(
+        &self,
+        rwtxn: &mut RwTxn,
+        tx: &AuthorizedTransaction,
+    ) -> Result<(), Error> {
+        let txid = tx.transaction.txid();
+        tx.relevant_addresses().into_iter().try_for_each(|addr| {
+            self.assoc_txid_with_address(rwtxn, txid, &addr)
+        })
+    }
+
+    /// Unassociates the [`Txid`] with the [`Address`],
+    /// by deleting from `address_to_txs`.
+    fn unassoc_txid_with_address(
+        &self,
+        rwtxn: &mut RwTxn,
+        txid: &Txid,
+        address: &Address,
+    ) -> Result<(), Error> {
+        let Some(mut associated_txs) =
+            self.address_to_txs.get(rwtxn, address)?
+        else {
+            return Ok(());
+        };
+        associated_txs.remove(txid);
+        if !associated_txs.is_empty() {
+            self.address_to_txs.put(rwtxn, address, &associated_txs)?;
+        } else {
+            let _ = self.address_to_txs.delete(rwtxn, address)?;
+        }
+        Ok(())
+    }
+
+    /// Unassociates the [`Transaction`]'s [`Txid`] with all relevant
+    /// [`Address`]es, by deleting from `address_to_txs`.
+    fn unassoc_tx_with_relevant_addresses(
+        &self,
+        rwtxn: &mut RwTxn,
+        tx: &AuthorizedTransaction,
+    ) -> Result<(), Error> {
+        let txid = tx.transaction.txid();
+        tx.relevant_addresses().into_iter().try_for_each(|addr| {
+            self.unassoc_txid_with_address(rwtxn, &txid, &addr)
         })
     }
 
     pub fn put(
         &self,
-        txn: &mut RwTxn,
+        rwtxn: &mut RwTxn,
         transaction: &AuthorizedTransaction,
     ) -> Result<(), Error> {
         println!(
             "adding transaction {} to mempool",
             transaction.transaction.txid()
         );
-        for input in &transaction.transaction.inputs {
-            if self.spent_utxos.get(txn, input)?.is_some() {
-                return Err(Error::UtxoDoubleSpent);
-            }
-            self.spent_utxos.put(txn, input, &())?;
-        }
+        let stxos = {
+            let txid = transaction.transaction.txid();
+            transaction.transaction.inputs.iter().enumerate().map(
+                move |(vin, outpoint)| {
+                    (
+                        *outpoint,
+                        InPoint::Regular {
+                            txid,
+                            vin: vin as u32,
+                        },
+                    )
+                },
+            )
+        };
+        let () = self.put_stxos(rwtxn, stxos)?;
         self.transactions.put(
-            txn,
-            &transaction.transaction.txid().into(),
+            rwtxn,
+            &transaction.transaction.txid(),
             transaction,
         )?;
+        let () = self.assoc_tx_with_relevant_addresses(rwtxn, transaction)?;
         Ok(())
     }
 
-    pub fn delete(&self, txn: &mut RwTxn, txid: &Txid) -> Result<(), Error> {
-        self.transactions.delete(txn, txid.into())?;
+    pub fn delete(&self, rwtxn: &mut RwTxn, txid: &Txid) -> Result<(), Error> {
+        if let Some(tx) = self.transactions.get(rwtxn, txid)? {
+            let () = self.delete_stxos(rwtxn, &tx.transaction.inputs)?;
+            let () = self.unassoc_tx_with_relevant_addresses(rwtxn, &tx)?;
+            self.transactions.delete(rwtxn, txid)?;
+        }
         Ok(())
     }
 
@@ -73,12 +206,61 @@ impl MemPool {
         }
         Ok(transactions)
     }
-}
 
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("heed error")]
-    Heed(#[from] heed::Error),
-    #[error("can't add transaction, utxo double spent")]
-    UtxoDoubleSpent,
+    /// Get [`Txid`]s relevant to a particular address
+    fn get_txids_relevant_to_address(
+        &self,
+        rotxn: &RoTxn,
+        addr: &Address,
+    ) -> Result<HashSet<Txid>, Error> {
+        let res = self.address_to_txs.get(rotxn, addr)?.unwrap_or_default();
+        Ok(res)
+    }
+
+    /// Get [`Transaction`]s relevant to a particular address
+    fn get_txs_relevant_to_address(
+        &self,
+        rotxn: &RoTxn,
+        addr: &Address,
+    ) -> Result<Vec<AuthorizedTransaction>, Error> {
+        self.get_txids_relevant_to_address(rotxn, addr)?
+            .into_iter()
+            .map(|txid| {
+                self.transactions
+                    .get(rotxn, &txid)?
+                    .ok_or(Error::MissingTransaction(txid))
+            })
+            .collect()
+    }
+
+    /// Get unconfirmed UTXOs relevant to a particular address
+    pub fn get_unconfirmed_utxos(
+        &self,
+        rotxn: &RoTxn,
+        addr: &Address,
+    ) -> Result<HashMap<OutPoint, Output>, Error> {
+        let relevant_txs = self.get_txs_relevant_to_address(rotxn, addr)?;
+        let res = relevant_txs
+            .into_iter()
+            .flat_map(|tx| {
+                let txid = tx.transaction.txid();
+                tx.transaction.outputs.into_iter().enumerate().filter_map(
+                    move |(vout, output)| {
+                        if output.address == *addr {
+                            Some((
+                                OutPoint::Regular {
+                                    txid,
+                                    vout: vout as u32,
+                                },
+                                output,
+                            ))
+                        } else {
+                            None
+                        }
+                    },
+                )
+            })
+            .collect();
+        Ok(res)
+    }
 }

@@ -12,7 +12,8 @@ use plain_bitassets::{
     state::{self, AmmPair, AmmPoolState, BitAssetSeqId, DutchAuctionState},
     types::{
         Address, AssetId, BitAssetData, BitAssetId, Block, BlockHash,
-        DutchAuctionId, DutchAuctionParams, FilledOutput, Transaction,
+        DutchAuctionId, DutchAuctionParams, FilledOutput, OutPoint, Output,
+        Transaction,
     },
     wallet,
 };
@@ -341,6 +342,20 @@ impl RpcServer for RpcServerImpl {
     async fn mine(&self, fee: Option<u64>) -> RpcResult<()> {
         let fee = fee.map(bip300301::bitcoin::Amount::from_sat);
         self.app.mine(fee).await.map_err(convert_app_err)
+    }
+
+    async fn my_unconfirmed_utxos(&self) -> RpcResult<Vec<(OutPoint, Output)>> {
+        let addresses = self
+            .app
+            .wallet
+            .get_addresses()
+            .map_err(convert_wallet_err)?;
+        let utxos = self
+            .app
+            .node
+            .get_unconfirmed_utxos_by_addresses(&addresses)
+            .map_err(convert_node_err)?;
+        Ok(Vec::from_iter(utxos))
     }
 
     async fn my_utxos(&self) -> RpcResult<Vec<FilledOutput>> {

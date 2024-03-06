@@ -11,17 +11,23 @@ use crate::authorization::Authorization;
 mod address;
 pub mod constants;
 pub mod hashes;
+pub mod output;
 mod transaction;
 
 pub use address::*;
-pub use hashes::{BlockHash, Hash, MerkleRoot, Txid};
+pub use hashes::{
+    AssetId, BitAssetId, BlockHash, DutchAuctionId, Hash, MerkleRoot, Txid,
+};
+pub use output::{
+    AssetOutput, AssetOutputContent, BitcoinOutput, BitcoinOutputContent,
+    FilledContent as FilledOutputContent, FilledOutput, Output, OutputContent,
+    SpentOutput,
+};
 pub use transaction::{
-    AmmBurn, AmmMint, AmmSwap, AssetId, AssetOutputContent,
-    AuthorizedTransaction, BitAssetData, BitAssetDataUpdates, BitAssetId,
-    DutchAuctionBid, DutchAuctionCollect, DutchAuctionId, DutchAuctionParams,
-    FilledContent as FilledOutputContent, FilledOutput, FilledTransaction,
-    InPoint, OutPoint, Output, OutputContent, SpentOutput, Transaction, TxData,
-    Update,
+    AmmBurn, AmmMint, AmmSwap, AuthorizedTransaction, BitAssetData,
+    BitAssetDataUpdates, DutchAuctionBid, DutchAuctionCollect,
+    DutchAuctionParams, FilledTransaction, InPoint, OutPoint, Transaction,
+    TxData, TxInputs, Update,
 };
 
 /// (de)serialize as Display/FromStr for human-readable forms like json,

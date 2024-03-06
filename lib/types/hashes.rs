@@ -1,12 +1,25 @@
 use bip300301::bitcoin;
 use bitcoin::hashes::Hash as _;
 use borsh::{BorshDeserialize, BorshSerialize};
+use heed::zerocopy::{self, AsBytes, FromBytes};
 use hex::FromHex;
 use serde::{Deserialize, Serialize};
 
+use super::serde_hexstr_human_readable;
+
 pub type Hash = [u8; blake3::OUT_LEN];
 
-use super::serde_hexstr_human_readable;
+pub fn hash<T: serde::Serialize>(data: &T) -> Hash {
+    let data_serialized = bincode::serialize(data)
+        .expect("failed to serialize a type to compute a hash");
+    blake3::hash(&data_serialized).into()
+}
+
+pub fn update<T: serde::Serialize>(hasher: &mut blake3::Hasher, data: &T) {
+    let data_serialized = bincode::serialize(data)
+        .expect("failed to serialize a type to compute a hash");
+    let _hasher = hasher.update(&data_serialized);
+}
 
 #[derive(Default, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct BlockHash(#[serde(with = "serde_hexstr_human_readable")] pub Hash);
@@ -84,19 +97,23 @@ impl std::fmt::Debug for MerkleRoot {
 }
 
 #[derive(
+    AsBytes,
     BorshDeserialize,
     BorshSerialize,
     Clone,
     Copy,
     Default,
+    Deserialize,
     Eq,
+    FromBytes,
     Hash,
     Ord,
     PartialEq,
     PartialOrd,
     Serialize,
-    Deserialize,
 )]
+#[repr(transparent)]
+#[serde(transparent)]
 pub struct Txid(#[serde(with = "serde_hexstr_human_readable")] pub Hash);
 
 impl Txid {
@@ -135,14 +152,83 @@ impl std::fmt::Debug for Txid {
     }
 }
 
-pub fn hash<T: serde::Serialize>(data: &T) -> Hash {
-    let data_serialized = bincode::serialize(data)
-        .expect("failed to serialize a type to compute a hash");
-    blake3::hash(&data_serialized).into()
+/// Identifier for a BitAsset
+#[derive(
+    BorshDeserialize,
+    BorshSerialize,
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+)]
+#[repr(transparent)]
+pub struct BitAssetId(#[serde(with = "serde_hexstr_human_readable")] pub Hash);
+
+/// Identifier for an arbitrary asset (Bitcoin, BitAsset, or BitAsset control)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    BorshDeserialize,
+    BorshSerialize,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+)]
+pub enum AssetId {
+    Bitcoin,
+    BitAsset(BitAssetId),
+    BitAssetControl(BitAssetId),
 }
 
-pub fn update<T: serde::Serialize>(hasher: &mut blake3::Hasher, data: &T) {
-    let data_serialized = bincode::serialize(data)
-        .expect("failed to serialize a type to compute a hash");
-    let _hasher = hasher.update(&data_serialized);
+impl<'de> Deserialize<'de> for AssetId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let bytes: Vec<u8> =
+            serde_hexstr_human_readable::deserialize(deserializer)?;
+        borsh::from_slice(&bytes).map_err(serde::de::Error::custom)
+    }
 }
+
+impl Serialize for AssetId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let bytes = borsh::to_vec(self).map_err(serde::ser::Error::custom)?;
+        serde_hexstr_human_readable::serialize(bytes, serializer)
+    }
+}
+
+impl std::fmt::Display for AssetId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let bytes = borsh::to_vec(self).unwrap();
+        hex::encode(bytes).fmt(f)
+    }
+}
+
+/// Unique identifier for each Dutch auction
+#[derive(
+    BorshDeserialize,
+    BorshSerialize,
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Serialize,
+)]
+#[repr(transparent)]
+#[serde(transparent)]
+pub struct DutchAuctionId(pub Txid);

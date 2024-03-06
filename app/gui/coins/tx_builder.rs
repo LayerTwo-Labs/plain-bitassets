@@ -5,7 +5,8 @@ use eframe::egui;
 use plain_bitassets::{
     bip300301::bitcoin,
     types::{
-        AssetId, AssetOutputContent, BitAssetId, GetBitcoinValue, Transaction,
+        AssetId, AssetOutputContent, BitAssetId, BitcoinOutputContent,
+        GetBitcoinValue, Transaction,
     },
 };
 
@@ -151,7 +152,9 @@ impl TxBuilder {
                 for (vout, output) in self.base_tx.indexed_asset_outputs() {
                     let address = &format!("{}", output.address)[0..8];
                     let (asset_kind, value) = match output.content {
-                        AssetOutputContent::Value(value)
+                        AssetOutputContent::Value(BitcoinOutputContent(
+                            value,
+                        ))
                         | AssetOutputContent::Withdrawal { value, .. } => {
                             let bitcoin_value = format!(
                                 "₿{}",

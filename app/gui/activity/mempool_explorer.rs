@@ -138,7 +138,7 @@ impl MemPoolExplorer {
                 .show_inside(ui, |ui| {
                     ui.heading("Outputs");
                     ui.separator();
-                    egui::Grid::new("inputs").striped(true).show(ui, |ui| {
+                    egui::Grid::new("outputs").striped(true).show(ui, |ui| {
                         ui.monospace("vout");
                         ui.monospace("address");
                         ui.monospace("value");

@@ -16,9 +16,9 @@ use crate::{
     authorization::{get_address, Authorization},
     types::{
         Address, AssetId, AuthorizedTransaction, BitAssetData, BitAssetId,
-        DutchAuctionId, DutchAuctionParams, FilledOutput, GetBitcoinValue,
-        Hash, InPoint, OutPoint, Output, OutputContent, SpentOutput,
-        Transaction, TxData,
+        BitcoinOutputContent, DutchAuctionId, DutchAuctionParams, FilledOutput,
+        GetBitcoinValue, Hash, InPoint, OutPoint, Output, OutputContent,
+        SpentOutput, Transaction, TxData,
     },
 };
 
@@ -57,8 +57,14 @@ pub struct Wallet {
     seed: Database<OwnedType<u8>, OwnedType<[u8; 64]>>,
     pub address_to_index: Database<SerdeBincode<Address>, OwnedType<[u8; 4]>>,
     pub index_to_address: Database<OwnedType<[u8; 4]>, SerdeBincode<Address>>,
+    pub unconfirmed_utxos:
+        Database<SerdeBincode<OutPoint>, SerdeBincode<Output>>,
     pub utxos: Database<SerdeBincode<OutPoint>, SerdeBincode<FilledOutput>>,
     pub stxos: Database<SerdeBincode<OutPoint>, SerdeBincode<SpentOutput>>,
+    pub spent_unconfirmed_utxos: Database<
+        SerdeBincode<OutPoint>,
+        SerdeBincode<SpentOutput<OutputContent>>,
+    >,
     /// Associates reservation commitments with plaintext BitAsset names
     pub bitasset_reservations: Database<OwnedType<[u8; 32]>, Str>,
     /// Associates BitAssets with plaintext names
@@ -66,7 +72,7 @@ pub struct Wallet {
 }
 
 impl Wallet {
-    pub const NUM_DBS: u32 = 7;
+    pub const NUM_DBS: u32 = 9;
 
     pub fn new(path: &Path) -> Result<Self, Error> {
         std::fs::create_dir_all(path)?;
@@ -77,8 +83,12 @@ impl Wallet {
         let seed_db = env.create_database(Some("seed"))?;
         let address_to_index = env.create_database(Some("address_to_index"))?;
         let index_to_address = env.create_database(Some("index_to_address"))?;
+        let unconfirmed_utxos =
+            env.create_database(Some("unconfirmed_utxos"))?;
         let utxos = env.create_database(Some("utxos"))?;
         let stxos = env.create_database(Some("stxos"))?;
+        let spent_unconfirmed_utxos =
+            env.create_database(Some("spent_unconfirmed_utxos"))?;
         let bitasset_reservations =
             env.create_database(Some("bitasset_reservations"))?;
         let known_bitassets = env.create_database(Some("known_bitassets"))?;
@@ -87,8 +97,10 @@ impl Wallet {
             seed: seed_db,
             address_to_index,
             index_to_address,
+            unconfirmed_utxos,
             utxos,
             stxos,
+            spent_unconfirmed_utxos,
             bitasset_reservations,
             known_bitassets,
         })
@@ -151,8 +163,10 @@ impl Wallet {
         self.seed.put(&mut txn, &0, seed)?;
         self.address_to_index.clear(&mut txn)?;
         self.index_to_address.clear(&mut txn)?;
+        self.unconfirmed_utxos.clear(&mut txn)?;
         self.utxos.clear(&mut txn)?;
         self.stxos.clear(&mut txn)?;
+        self.spent_unconfirmed_utxos.clear(&mut txn)?;
         self.bitasset_reservations.clear(&mut txn)?;
         txn.commit()?;
         Ok(())
@@ -202,7 +216,10 @@ impl Wallet {
                     main_address,
                 },
             ),
-            Output::new(self.get_new_address()?, OutputContent::Value(change)),
+            Output::new(
+                self.get_new_address()?,
+                OutputContent::Value(BitcoinOutputContent(change)),
+            ),
         ];
         Ok(Transaction::new(inputs, outputs))
     }
@@ -220,10 +237,15 @@ impl Wallet {
         let outputs = vec![
             Output {
                 address,
-                content: OutputContent::Value(bitcoin_value),
+                content: OutputContent::Value(BitcoinOutputContent(
+                    bitcoin_value,
+                )),
                 memo: memo.unwrap_or_default(),
             },
-            Output::new(self.get_new_address()?, OutputContent::Value(change)),
+            Output::new(
+                self.get_new_address()?,
+                OutputContent::Value(BitcoinOutputContent(change)),
+            ),
         ];
         Ok(Transaction::new(inputs, outputs))
     }
@@ -386,21 +408,32 @@ impl Wallet {
     pub fn select_bitcoins(
         &self,
         value: u64,
-    ) -> Result<(u64, HashMap<OutPoint, FilledOutput>), Error> {
+    ) -> Result<(u64, HashMap<OutPoint, Output>), Error> {
         let txn = self.env.read_txn()?;
-        let mut bitcoin_utxos = vec![];
+        let mut bitcoin_utxos = Vec::<(_, Output)>::new();
         for item in self.utxos.iter(&txn)? {
             let (outpoint, output) = item?;
             if output.is_bitcoin() {
-                bitcoin_utxos.push((outpoint, output));
+                bitcoin_utxos.push((outpoint, output.into()));
             }
         }
         bitcoin_utxos
             .sort_unstable_by_key(|(_, output)| output.get_bitcoin_value());
+        let mut unconfirmed_bitcoin_utxos = Vec::new();
+        for item in self.unconfirmed_utxos.iter(&txn)? {
+            let (outpoint, output) = item?;
+            if output.is_bitcoin() {
+                unconfirmed_bitcoin_utxos.push((outpoint, output));
+            }
+        }
+        unconfirmed_bitcoin_utxos
+            .sort_unstable_by_key(|(_, output)| output.get_bitcoin_value());
 
         let mut selected = HashMap::new();
         let mut total_sats: u64 = 0;
-        for (outpoint, output) in &bitcoin_utxos {
+        for (outpoint, output) in
+            bitcoin_utxos.into_iter().chain(unconfirmed_bitcoin_utxos)
+        {
             if output.content.is_withdrawal() {
                 continue;
             }
@@ -408,12 +441,13 @@ impl Wallet {
                 break;
             }
             total_sats += output.get_bitcoin_value();
-            selected.insert(*outpoint, output.clone());
+            selected.insert(outpoint, output.clone());
         }
-        if total_sats < value {
-            return Err(Error::NotEnoughFunds);
+        if total_sats >= value {
+            Ok((total_sats, selected))
+        } else {
+            Err(Error::NotEnoughFunds)
         }
-        Ok((total_sats, selected))
     }
 
     // Select UTXOs for the specified BitAsset
@@ -421,7 +455,7 @@ impl Wallet {
         &self,
         bitasset: BitAssetId,
         value: u64,
-    ) -> Result<(u64, HashMap<OutPoint, FilledOutput>), Error> {
+    ) -> Result<(u64, HashMap<OutPoint, Output>), Error> {
         let txn = self.env.read_txn()?;
         let mut bitasset_utxos = vec![];
         for item in self.utxos.iter(&txn)? {
@@ -449,7 +483,7 @@ impl Wallet {
             }
             let (_, bitasset_value) = output.bitasset_value().unwrap();
             total_value += bitasset_value;
-            selected.insert(*outpoint, output.clone());
+            selected.insert(*outpoint, output.clone().into());
         }
         if total_value < value {
             return Err(Error::NotEnoughFunds);
@@ -461,7 +495,7 @@ impl Wallet {
     pub fn select_bitasset_control(
         &self,
         bitasset: BitAssetId,
-    ) -> Result<(OutPoint, FilledOutput), Error> {
+    ) -> Result<(OutPoint, Output), Error> {
         let txn = self.env.read_txn()?;
         let mut bitasset_utxo = None;
         for item in self.utxos.iter(&txn)? {
@@ -469,7 +503,7 @@ impl Wallet {
             if let Some(output_bitasset) = output.bitasset()
                 && bitasset == *output_bitasset
             {
-                bitasset_utxo = Some((outpoint, output));
+                bitasset_utxo = Some((outpoint, output.into()));
                 break;
             }
         }
@@ -480,7 +514,7 @@ impl Wallet {
         &self,
         asset: AssetId,
         amount: u64,
-    ) -> Result<(u64, HashMap<OutPoint, FilledOutput>), Error> {
+    ) -> Result<(u64, HashMap<OutPoint, Output>), Error> {
         match asset {
             AssetId::Bitcoin => self.select_bitcoins(amount),
             AssetId::BitAsset(bitasset) => {
@@ -579,7 +613,9 @@ impl Wallet {
         let change_output0 = if change_amount0 != 0 {
             let address = self.get_new_address()?;
             let content = match asset0 {
-                AssetId::Bitcoin => OutputContent::Value(change_amount0),
+                AssetId::Bitcoin => {
+                    OutputContent::Value(BitcoinOutputContent(change_amount0))
+                }
                 AssetId::BitAsset(_) => OutputContent::BitAsset(change_amount0),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
             };
@@ -594,7 +630,9 @@ impl Wallet {
         let change_output1 = if change_amount1 != 0 {
             let address = self.get_new_address()?;
             let content = match asset1 {
-                AssetId::Bitcoin => OutputContent::Value(change_amount1),
+                AssetId::Bitcoin => {
+                    OutputContent::Value(BitcoinOutputContent(change_amount1))
+                }
                 AssetId::BitAsset(_) => OutputContent::BitAsset(change_amount1),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
             };
@@ -665,7 +703,9 @@ impl Wallet {
             address: asset0_addr,
             memo: Vec::new(),
             content: match asset0 {
-                AssetId::Bitcoin => OutputContent::Value(amount0),
+                AssetId::Bitcoin => {
+                    OutputContent::Value(BitcoinOutputContent(amount0))
+                }
                 AssetId::BitAsset(_) => OutputContent::BitAsset(amount0),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
             },
@@ -674,7 +714,9 @@ impl Wallet {
             address: asset1_addr,
             memo: Vec::new(),
             content: match asset1 {
-                AssetId::Bitcoin => OutputContent::Value(amount1),
+                AssetId::Bitcoin => {
+                    OutputContent::Value(BitcoinOutputContent(amount1))
+                }
                 AssetId::BitAsset(_) => OutputContent::BitAsset(amount1),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
             },
@@ -715,7 +757,9 @@ impl Wallet {
         let change_output = if amount_change != 0 {
             let address = self.get_new_address()?;
             let content = match asset_spend {
-                AssetId::Bitcoin => OutputContent::Value(amount_change),
+                AssetId::Bitcoin => {
+                    OutputContent::Value(BitcoinOutputContent(amount_change))
+                }
                 AssetId::BitAsset(_) => OutputContent::BitAsset(amount_change),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
             };
@@ -731,7 +775,9 @@ impl Wallet {
             address: receive_addr,
             memo: Vec::new(),
             content: match asset_receive {
-                AssetId::Bitcoin => OutputContent::Value(amount_receive),
+                AssetId::Bitcoin => {
+                    OutputContent::Value(BitcoinOutputContent(amount_receive))
+                }
                 AssetId::BitAsset(_) => OutputContent::BitAsset(amount_receive),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
             },
@@ -765,7 +811,9 @@ impl Wallet {
         let change_output = if change_amount != 0 {
             let address = self.get_new_address()?;
             let content = match dutch_auction_params.base_asset {
-                AssetId::Bitcoin => OutputContent::Value(change_amount),
+                AssetId::Bitcoin => {
+                    OutputContent::Value(BitcoinOutputContent(change_amount))
+                }
                 AssetId::BitAsset(_) => OutputContent::BitAsset(change_amount),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
             };
@@ -806,7 +854,9 @@ impl Wallet {
         let change_output = if change_amount != 0 {
             let address = self.get_new_address()?;
             let content = match quote_asset {
-                AssetId::Bitcoin => OutputContent::Value(change_amount),
+                AssetId::Bitcoin => {
+                    OutputContent::Value(BitcoinOutputContent(change_amount))
+                }
                 AssetId::BitAsset(_) => OutputContent::BitAsset(change_amount),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
             };
@@ -820,7 +870,9 @@ impl Wallet {
         };
         let base_output = {
             let content = match base_asset {
-                AssetId::Bitcoin => OutputContent::Value(change_amount),
+                AssetId::Bitcoin => {
+                    OutputContent::Value(BitcoinOutputContent(change_amount))
+                }
                 AssetId::BitAsset(_) => OutputContent::BitAsset(change_amount),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
             };
@@ -862,7 +914,9 @@ impl Wallet {
         let base_output = if amount_base != 0 {
             let address = self.get_new_address()?;
             let content = match base_asset {
-                AssetId::Bitcoin => OutputContent::Value(amount_base),
+                AssetId::Bitcoin => {
+                    OutputContent::Value(BitcoinOutputContent(amount_base))
+                }
                 AssetId::BitAsset(_) => OutputContent::BitAsset(amount_base),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
             };
@@ -877,7 +931,9 @@ impl Wallet {
         let quote_output = if amount_quote != 0 {
             let address = self.get_new_address()?;
             let content = match quote_asset {
-                AssetId::Bitcoin => OutputContent::Value(amount_quote),
+                AssetId::Bitcoin => {
+                    OutputContent::Value(BitcoinOutputContent(amount_quote))
+                }
                 AssetId::BitAsset(_) => OutputContent::BitAsset(amount_quote),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
             };
@@ -912,15 +968,41 @@ impl Wallet {
     ) -> Result<(), Error> {
         let mut txn = self.env.write_txn()?;
         for (outpoint, inpoint) in spent {
-            let output = self.utxos.get(&txn, outpoint)?;
-            if let Some(output) = output {
+            if let Some(output) = self.utxos.get(&txn, outpoint)? {
                 self.utxos.delete(&mut txn, outpoint)?;
                 let spent_output = SpentOutput {
                     output,
                     inpoint: *inpoint,
                 };
                 self.stxos.put(&mut txn, outpoint, &spent_output)?;
+            } else if let Some(output) =
+                self.unconfirmed_utxos.get(&txn, outpoint)?
+            {
+                self.unconfirmed_utxos.delete(&mut txn, outpoint)?;
+                let spent_output = SpentOutput {
+                    output,
+                    inpoint: *inpoint,
+                };
+                self.spent_unconfirmed_utxos.put(
+                    &mut txn,
+                    outpoint,
+                    &spent_output,
+                )?;
+            } else {
+                continue;
             }
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
+    pub fn put_unconfirmed_utxos(
+        &self,
+        utxos: &HashMap<OutPoint, Output>,
+    ) -> Result<(), Error> {
+        let mut txn = self.env.write_txn()?;
+        for (outpoint, output) in utxos {
+            self.unconfirmed_utxos.put(&mut txn, outpoint, output)?;
         }
         txn.commit()?;
         Ok(())
@@ -980,10 +1062,34 @@ impl Wallet {
         Ok(utxos)
     }
 
+    pub fn get_unconfirmed_utxos(
+        &self,
+    ) -> Result<HashMap<OutPoint, Output>, Error> {
+        let txn = self.env.read_txn()?;
+        let mut utxos = HashMap::new();
+        for item in self.unconfirmed_utxos.iter(&txn)? {
+            let (outpoint, output) = item?;
+            utxos.insert(outpoint, output);
+        }
+        Ok(utxos)
+    }
+
     pub fn get_stxos(&self) -> Result<HashMap<OutPoint, SpentOutput>, Error> {
         let txn = self.env.read_txn()?;
         let mut stxos = HashMap::new();
         for item in self.stxos.iter(&txn)? {
+            let (outpoint, spent_output) = item?;
+            stxos.insert(outpoint, spent_output);
+        }
+        Ok(stxos)
+    }
+
+    pub fn get_spent_unconfirmed_utxos(
+        &self,
+    ) -> Result<HashMap<OutPoint, SpentOutput<OutputContent>>, Error> {
+        let txn = self.env.read_txn()?;
+        let mut stxos = HashMap::new();
+        for item in self.spent_unconfirmed_utxos.iter(&txn)? {
             let (outpoint, spent_output) = item?;
             stxos.insert(outpoint, spent_output);
         }
@@ -1025,8 +1131,15 @@ impl Wallet {
         let txn = self.env.read_txn()?;
         let mut authorizations = vec![];
         for input in &transaction.inputs {
-            let spent_utxo =
-                self.utxos.get(&txn, input)?.ok_or(Error::NoUtxo)?;
+            let spent_utxo = if let Some(utxo) = self.utxos.get(&txn, input)? {
+                utxo.into()
+            } else if let Some(utxo) =
+                self.unconfirmed_utxos.get(&txn, input)?
+            {
+                utxo
+            } else {
+                return Err(Error::NoUtxo);
+            };
             let index = self
                 .address_to_index
                 .get(&txn, &spent_utxo.address)?

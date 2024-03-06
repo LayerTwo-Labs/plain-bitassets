@@ -20,12 +20,13 @@ use crate::{
     authorization::{Authorization, VerifyingKey},
     types::{
         self, hashes, Address, AggregatedWithdrawal, AmmBurn, AmmMint, AmmSwap,
-        AssetId, BitAssetDataUpdates, BitAssetId, Body, DutchAuctionBid,
-        DutchAuctionCollect, DutchAuctionId, DutchAuctionParams,
-        EncryptionPubKey, FilledOutput, FilledOutputContent, FilledTransaction,
-        GetAddress as _, GetBitcoinValue as _, Hash, InPoint, OutPoint,
-        OutputContent, SpentOutput, Transaction, TxData, Txid, Update,
-        Verify as _, WithdrawalBundle,
+        AssetId, BitAssetDataUpdates, BitAssetId, BitcoinOutputContent, Body,
+        DutchAuctionBid, DutchAuctionCollect, DutchAuctionId,
+        DutchAuctionParams, EncryptionPubKey, FilledOutput,
+        FilledOutputContent, FilledTransaction, GetAddress as _,
+        GetBitcoinValue as _, Hash, InPoint, OutPoint, OutputContent,
+        SpentOutput, Transaction, TxData, Txid, Update, Verify as _,
+        WithdrawalBundle,
     },
 };
 
@@ -1352,7 +1353,9 @@ impl State {
                 let outpoint = OutPoint::Deposit(*outpoint);
                 let output = FilledOutput::new(
                     address,
-                    FilledOutputContent::Bitcoin(deposit.value),
+                    FilledOutputContent::Bitcoin(BitcoinOutputContent(
+                        deposit.value,
+                    )),
                 );
                 self.utxos.put(txn, &outpoint, &output)?;
             }

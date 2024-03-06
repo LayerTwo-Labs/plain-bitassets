@@ -2,7 +2,9 @@ use eframe::egui;
 
 use plain_bitassets::{
     bip300301::bitcoin,
-    types::{self, AssetId, Output, OutputContent, Transaction},
+    types::{
+        self, AssetId, BitcoinOutputContent, Output, OutputContent, Transaction,
+    },
 };
 
 use super::utxo_selector::AssetInput;
@@ -259,7 +261,9 @@ impl UtxoCreator {
                         )
                         .ok()
                         .map(|bitcoin_amount| {
-                            OutputContent::Value(bitcoin_amount.to_sat())
+                            OutputContent::Value(BitcoinOutputContent(
+                                bitcoin_amount.to_sat(),
+                            ))
                         }),
                         AssetId::BitAsset(_) => {
                             self.value.parse().ok().map(OutputContent::BitAsset)

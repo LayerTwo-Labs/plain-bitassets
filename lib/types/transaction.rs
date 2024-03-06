@@ -1,26 +1,27 @@
 use std::{
     cmp::Ordering,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     hash::Hasher,
     net::{Ipv4Addr, Ipv6Addr},
 };
 
-use borsh::{BorshDeserialize, BorshSerialize};
+use bip300301::bitcoin;
 use educe::Educe;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
-use bip300301::bitcoin;
-
 use super::{
     address::Address,
-    hashes::{self, Hash, MerkleRoot, Txid},
-    serde_display_fromstr_human_readable, serde_hexstr_human_readable,
-    EncryptionPubKey, GetBitcoinValue,
+    hashes::{
+        self, AssetId, BitAssetId, DutchAuctionId, Hash, MerkleRoot, Txid,
+    },
+    output::FilledContent,
+    serde_hexstr_human_readable, AssetOutput, EncryptionPubKey, FilledOutput,
+    GetAddress, GetBitcoinValue, Output, OutputContent,
 };
 use crate::authorization::{Authorization, VerifyingKey};
 
-#[derive(Hash, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum OutPoint {
     // Created by transactions.
     Regular { txid: Txid, vout: u32 },
@@ -43,85 +44,6 @@ pub enum InPoint {
     Withdrawal {
         txid: bitcoin::Txid,
     },
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum OutputContent {
-    AmmLpToken(u64),
-    BitAsset(u64),
-    BitAssetControl,
-    BitAssetReservation,
-    /// Receipt used to redeem the proceeds of an auction
-    DutchAuctionReceipt,
-    Value(u64),
-    Withdrawal {
-        value: u64,
-        main_fee: u64,
-        main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
-    },
-}
-
-// The subset of output contents that correspond to assets
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum AssetOutputContent {
-    BitAsset(u64),
-    BitAssetControl,
-    Value(u64),
-    Withdrawal {
-        value: u64,
-        main_fee: u64,
-        main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
-    },
-}
-
-impl From<OutputContent> for Option<AssetOutputContent> {
-    fn from(content: OutputContent) -> Option<AssetOutputContent> {
-        match content {
-            OutputContent::BitAsset(value) => {
-                Some(AssetOutputContent::BitAsset(value))
-            }
-            OutputContent::BitAssetControl => {
-                Some(AssetOutputContent::BitAssetControl)
-            }
-            OutputContent::Value(value) => {
-                Some(AssetOutputContent::Value(value))
-            }
-            OutputContent::Withdrawal {
-                value,
-                main_fee,
-                main_address,
-            } => Some(AssetOutputContent::Withdrawal {
-                value,
-                main_fee,
-                main_address,
-            }),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Output<Content = OutputContent> {
-    #[serde(with = "serde_display_fromstr_human_readable")]
-    pub address: Address,
-    pub content: Content,
-    #[serde(with = "serde_hexstr_human_readable")]
-    pub memo: Vec<u8>,
-}
-
-pub type TxOutput = Output;
-
-pub type AssetOutput = Output<AssetOutputContent>;
-
-impl From<TxOutput> for Option<AssetOutput> {
-    fn from(output: Output) -> Option<AssetOutput> {
-        let content: Option<AssetOutputContent> = output.content.into();
-        Some(AssetOutput {
-            address: output.address,
-            content: content?,
-            memo: output.memo,
-        })
-    }
 }
 
 pub type TxInputs = Vec<OutPoint>;
@@ -175,71 +97,6 @@ pub struct BitAssetDataUpdates {
     pub encryption_pubkey: Update<EncryptionPubKey>,
     /// Optional pubkey used for signing messages
     pub signing_pubkey: Update<VerifyingKey>,
-}
-
-/// Identifier for a BitAsset
-#[derive(
-    BorshDeserialize,
-    BorshSerialize,
-    Clone,
-    Copy,
-    Debug,
-    Deserialize,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-)]
-#[repr(transparent)]
-pub struct BitAssetId(#[serde(with = "serde_hexstr_human_readable")] pub Hash);
-
-/// Identifier for an arbitrary asset (Bitcoin, BitAsset, or BitAsset control)
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    BorshDeserialize,
-    BorshSerialize,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-)]
-pub enum AssetId {
-    Bitcoin,
-    BitAsset(BitAssetId),
-    BitAssetControl(BitAssetId),
-}
-
-impl<'de> Deserialize<'de> for AssetId {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let bytes: Vec<u8> =
-            serde_hexstr_human_readable::deserialize(deserializer)?;
-        borsh::from_slice(&bytes).map_err(serde::de::Error::custom)
-    }
-}
-
-impl Serialize for AssetId {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let bytes = borsh::to_vec(self).map_err(serde::ser::Error::custom)?;
-        serde_hexstr_human_readable::serialize(bytes, serializer)
-    }
-}
-
-impl std::fmt::Display for AssetId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let bytes = borsh::to_vec(self).unwrap();
-        hex::encode(bytes).fmt(f)
-    }
 }
 
 /// Parameters of a Dutch Auction
@@ -344,63 +201,6 @@ pub struct Transaction {
     pub data: Option<TransactionData>,
 }
 
-/// Unique identifier for each Dutch auction
-#[derive(
-    BorshDeserialize,
-    BorshSerialize,
-    Clone,
-    Copy,
-    Debug,
-    Deserialize,
-    Eq,
-    PartialEq,
-    Serialize,
-)]
-#[repr(transparent)]
-#[serde(transparent)]
-pub struct DutchAuctionId(pub Txid);
-
-/** Representation of Output Content that includes asset type and/or
- *  reservation commitment */
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum FilledContent {
-    AmmLpToken {
-        asset0: AssetId,
-        asset1: AssetId,
-        amount: u64,
-    },
-    Bitcoin(u64),
-    BitcoinWithdrawal {
-        value: u64,
-        main_fee: u64,
-        main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
-    },
-    /// BitAsset ID and coin value
-    BitAsset(BitAssetId, u64),
-    BitAssetControl(BitAssetId),
-    /// Reservation txid and commitment
-    BitAssetReservation(Txid, Hash),
-    /// Auction ID
-    DutchAuctionReceipt(DutchAuctionId),
-}
-
-/// Representation of output that includes asset type
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct FilledOutput {
-    #[serde(with = "serde_display_fromstr_human_readable")]
-    pub address: Address,
-    pub content: FilledContent,
-    #[serde(with = "serde_hexstr_human_readable")]
-    pub memo: Vec<u8>,
-}
-
-/// Representation of a spent output
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct SpentOutput {
-    pub output: FilledOutput,
-    pub inpoint: InPoint,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FilledTransaction {
     pub transaction: Transaction,
@@ -475,6 +275,17 @@ pub struct AuthorizedTransaction {
     pub authorizations: Vec<Authorization>,
 }
 
+impl AuthorizedTransaction {
+    /// Return an iterator over all addresses relevant to the transaction
+    pub fn relevant_addresses(&self) -> HashSet<Address> {
+        let input_addrs =
+            self.authorizations.iter().map(|auth| auth.get_address());
+        let output_addrs =
+            self.transaction.outputs.iter().map(|output| output.address);
+        input_addrs.chain(output_addrs).collect()
+    }
+}
+
 impl std::fmt::Display for OutPoint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -486,95 +297,6 @@ impl std::fmt::Display for OutPoint {
                 write!(f, "deposit {txid} {vout}")
             }
         }
-    }
-}
-
-impl OutputContent {
-    /// `true` if the output content corresponds to a BitAsset
-    pub fn is_bitasset(&self) -> bool {
-        matches!(self, Self::BitAsset(_))
-    }
-
-    /// `true` if the output content corresponds to a BitAsset control coin
-    pub fn is_bitasset_control(&self) -> bool {
-        matches!(self, Self::BitAssetControl)
-    }
-
-    /// `true`` if the output content corresponds to a reservation
-    pub fn is_reservation(&self) -> bool {
-        matches!(self, Self::BitAssetReservation)
-    }
-
-    pub fn is_bitcoin(&self) -> bool {
-        matches!(self, Self::Value(_))
-    }
-    pub fn is_withdrawal(&self) -> bool {
-        matches!(self, Self::Withdrawal { .. })
-    }
-
-    /// `true` if the output corresponds to an asset output
-    pub fn is_asset(&self) -> bool {
-        matches!(
-            self,
-            Self::BitAsset(_)
-                | Self::BitAssetControl
-                | Self::Value(_)
-                | Self::Withdrawal { .. }
-        )
-    }
-}
-
-impl GetBitcoinValue for OutputContent {
-    #[inline(always)]
-    fn get_bitcoin_value(&self) -> u64 {
-        match self {
-            Self::AmmLpToken(_)
-            | Self::BitAsset(_)
-            | Self::BitAssetControl
-            | Self::BitAssetReservation
-            | Self::DutchAuctionReceipt => 0,
-            Self::Value(value) => *value,
-            Self::Withdrawal { value, .. } => *value,
-        }
-    }
-}
-
-impl<Content> Output<Content> {
-    pub fn new(address: Address, content: Content) -> Self {
-        Self {
-            address,
-            content,
-            memo: Vec::new(),
-        }
-    }
-}
-
-impl Output<OutputContent> {
-    /// `true` if the output content corresponds to a BitAsset
-    pub fn is_bitasset(&self) -> bool {
-        self.content.is_bitasset()
-    }
-
-    /// `true` if the output content corresponds to a BitAsset control coin
-    pub fn is_bitasset_control(&self) -> bool {
-        self.content.is_bitasset_control()
-    }
-
-    /// `true` if the output content corresponds to a reservation
-    pub fn is_reservation(&self) -> bool {
-        self.content.is_reservation()
-    }
-
-    /// `true` if the output corresponds to an asset output
-    pub fn is_asset(&self) -> bool {
-        self.content.is_asset()
-    }
-}
-
-impl GetBitcoinValue for Output {
-    #[inline(always)]
-    fn get_bitcoin_value(&self) -> u64 {
-        self.content.get_bitcoin_value()
     }
 }
 
@@ -781,271 +503,6 @@ impl Transaction {
             }
             _ => None,
         }
-    }
-}
-
-impl FilledContent {
-    /** Returns the BitAsset ID, if the filled
-     * output content corresponds to a BitAsset. */
-    pub fn bitasset(&self) -> Option<&BitAssetId> {
-        match self {
-            Self::BitAsset(bitasset_id, _) => Some(bitasset_id),
-            _ => None,
-        }
-    }
-
-    /** Returns the BitAsset ID (name hash) and if the filled
-     * output content corresponds to a BitAsset or BitAsset control coin. */
-    pub fn get_bitasset(&self) -> Option<BitAssetId> {
-        match self {
-            Self::BitAsset(bitasset_id, _)
-            | Self::BitAssetControl(bitasset_id) => Some(*bitasset_id),
-            _ => None,
-        }
-    }
-
-    /** Returns the BitAsset ID and coin value, if the filled
-     *  output content corresponds to a BitAsset output. */
-    pub fn bitasset_value(&self) -> Option<(BitAssetId, u64)> {
-        match self {
-            Self::BitAsset(bitasset_id, value) => Some((*bitasset_id, *value)),
-            _ => None,
-        }
-    }
-
-    /** Returns the [`AssetId`] and coin value, if the filled
-     *  output content corresponds to an asset output. */
-    pub fn asset_value(&self) -> Option<(AssetId, u64)> {
-        match self {
-            Self::BitAsset(bitasset_id, value) => {
-                Some((AssetId::BitAsset(*bitasset_id), *value))
-            }
-            Self::BitAssetControl(bitasset_id) => {
-                Some((AssetId::BitAssetControl(*bitasset_id), 1))
-            }
-            Self::Bitcoin(value) => Some((AssetId::Bitcoin, *value)),
-            _ => None,
-        }
-    }
-
-    /** Returns the Dutch auction ID, if the filled output content corresponds
-     *  to a Dutch auction receipt output. */
-    pub fn dutch_auction_receipt(&self) -> Option<DutchAuctionId> {
-        match self {
-            Self::DutchAuctionReceipt(auction_id) => Some(*auction_id),
-            _ => None,
-        }
-    }
-
-    /** Returns the LP token's corresponding asset pair and amount,
-     *  if the filled output content corresponds to an LP token output. */
-    pub fn lp_token_amount(&self) -> Option<(AssetId, AssetId, u64)> {
-        match self {
-            Self::AmmLpToken {
-                asset0,
-                asset1,
-                amount,
-            } => Some((*asset0, *asset1, *amount)),
-            _ => None,
-        }
-    }
-
-    /// `true` if the output content corresponds to a BitAsset
-    pub fn is_bitasset(&self) -> bool {
-        matches!(self, Self::BitAsset(_, _))
-    }
-
-    /// `true` if the output content corresponds to a BitAsset control coin
-    pub fn is_bitasset_control(&self) -> bool {
-        matches!(self, Self::BitAssetControl(_))
-    }
-
-    /// `true` if the output content corresponds to a Bitcoin
-    pub fn is_bitcoin(&self) -> bool {
-        matches!(self, Self::Bitcoin(_))
-    }
-
-    /// `true` if the output content corresponds to a Dutch auction receipt
-    pub fn is_dutch_auction_receipt(&self) -> bool {
-        matches!(self, Self::DutchAuctionReceipt(_))
-    }
-
-    /// `true` if the output content corresponds to an LP token
-    pub fn is_lp_token(&self) -> bool {
-        matches!(self, Self::AmmLpToken { .. })
-    }
-
-    /// `true` if the output content corresponds to a reservation
-    pub fn is_reservation(&self) -> bool {
-        matches!(self, Self::BitAssetReservation { .. })
-    }
-
-    /// `true` if the output content corresponds to a withdrawal
-    pub fn is_withdrawal(&self) -> bool {
-        matches!(self, Self::BitcoinWithdrawal { .. })
-    }
-
-    /** Returns the reservation txid and commitment if the filled output
-     * content corresponds to a BitAsset reservation output. */
-    pub fn reservation_data(&self) -> Option<(&Txid, &Hash)> {
-        match self {
-            Self::BitAssetReservation(txid, commitment) => {
-                Some((txid, commitment))
-            }
-            _ => None,
-        }
-    }
-
-    /** Returns the reservation commitment if the filled output content
-     *  corresponds to a BitAsset reservation output. */
-    pub fn reservation_commitment(&self) -> Option<&Hash> {
-        self.reservation_data().map(|(_, commitment)| commitment)
-    }
-}
-
-impl From<FilledContent> for OutputContent {
-    fn from(filled: FilledContent) -> Self {
-        match filled {
-            FilledContent::AmmLpToken {
-                asset0: _,
-                asset1: _,
-                amount,
-            } => OutputContent::AmmLpToken(amount),
-            FilledContent::Bitcoin(value) => OutputContent::Value(value),
-            FilledContent::BitcoinWithdrawal {
-                value,
-                main_fee,
-                main_address,
-            } => OutputContent::Withdrawal {
-                value,
-                main_fee,
-                main_address,
-            },
-            FilledContent::BitAsset(_, value) => OutputContent::BitAsset(value),
-            FilledContent::BitAssetControl(_) => OutputContent::BitAssetControl,
-            FilledContent::BitAssetReservation { .. } => {
-                OutputContent::BitAssetReservation
-            }
-            FilledContent::DutchAuctionReceipt(_) => {
-                OutputContent::DutchAuctionReceipt
-            }
-        }
-    }
-}
-
-impl GetBitcoinValue for FilledContent {
-    fn get_bitcoin_value(&self) -> u64 {
-        OutputContent::from(self.clone()).get_bitcoin_value()
-    }
-}
-
-impl FilledOutput {
-    /// Construct a new filled output
-    pub fn new(address: Address, content: FilledContent) -> Self {
-        Self {
-            address,
-            content,
-            memo: Vec::new(),
-        }
-    }
-
-    /** Returns the BitAsset ID if the filled output content
-     * corresponds to a BitAsset */
-    pub fn bitasset(&self) -> Option<&BitAssetId> {
-        self.content.bitasset()
-    }
-
-    /** Returns the BitAsset ID if the filled output content
-     * corresponds to a BitAsset or BitAsset control coin. */
-    pub fn get_bitasset(&self) -> Option<BitAssetId> {
-        self.content.get_bitasset()
-    }
-
-    /** Returns the BitAsset ID and coin value
-     * if the filled output content corresponds to a BitAsset output. */
-    pub fn bitasset_value(&self) -> Option<(BitAssetId, u64)> {
-        self.content.bitasset_value()
-    }
-
-    /** Returns the [`AssetId`] and coin value
-     * if the filled output content corresponds to an asset output. */
-    pub fn asset_value(&self) -> Option<(AssetId, u64)> {
-        self.content.asset_value()
-    }
-
-    /** Returns the Dutch auction ID, if the filled output content corresponds
-     *  to a Dutch auction receipt output. */
-    pub fn dutch_auction_receipt(&self) -> Option<DutchAuctionId> {
-        self.content.dutch_auction_receipt()
-    }
-
-    /** Returns the LP token's corresponding asset pair and amount,
-     *  if the filled output content corresponds to an LP token output. */
-    pub fn lp_token_amount(&self) -> Option<(AssetId, AssetId, u64)> {
-        self.content.lp_token_amount()
-    }
-
-    /// Accessor for content
-    pub fn content(&self) -> &FilledContent {
-        &self.content
-    }
-
-    /// `true` if the output content corresponds to a BitAsset
-    pub fn is_bitasset(&self) -> bool {
-        self.content.is_bitasset()
-    }
-
-    /// `true` if the output content corresponds to a BitAsset control coin
-    pub fn is_bitasset_control(&self) -> bool {
-        self.content.is_bitasset_control()
-    }
-
-    /// `true` if the output content corresponds to a Bitcoin
-    pub fn is_bitcoin(&self) -> bool {
-        self.content.is_bitcoin()
-    }
-
-    /// `true` if the output content corresponds to a Dutch auction receipt
-    pub fn is_dutch_auction_receipt(&self) -> bool {
-        self.content.is_dutch_auction_receipt()
-    }
-
-    /// `true` if the output content corresponds to an LP token
-    pub fn is_lp_token(&self) -> bool {
-        self.content.is_lp_token()
-    }
-
-    /// True if the output content corresponds to a reservation
-    pub fn is_reservation(&self) -> bool {
-        self.content.is_reservation()
-    }
-
-    /** Returns the reservation txid and commitment if the filled output
-     *  content corresponds to a BitAsset reservation output. */
-    pub fn reservation_data(&self) -> Option<(&Txid, &Hash)> {
-        self.content.reservation_data()
-    }
-
-    /** Returns the reservation commitment if the filled output content
-     *  corresponds to a BitAsset reservation output. */
-    pub fn reservation_commitment(&self) -> Option<&Hash> {
-        self.content.reservation_commitment()
-    }
-}
-
-impl From<FilledOutput> for Output {
-    fn from(filled: FilledOutput) -> Self {
-        Self {
-            address: filled.address,
-            content: filled.content.into(),
-            memo: filled.memo,
-        }
-    }
-}
-
-impl GetBitcoinValue for FilledOutput {
-    fn get_bitcoin_value(&self) -> u64 {
-        self.content.get_bitcoin_value()
     }
 }
 
@@ -1915,7 +1372,7 @@ impl FilledTransaction {
                     }
                     OutputContent::Value(value) => {
                         output_bitcoin_max_value =
-                            output_bitcoin_max_value.checked_sub(value)?;
+                            output_bitcoin_max_value.checked_sub(value.0)?;
                         FilledContent::Bitcoin(value)
                     }
                     OutputContent::Withdrawal {

@@ -7,7 +7,7 @@ use plain_bitassets::{
     state::{AmmPoolState, BitAssetSeqId, DutchAuctionState},
     types::{
         Address, AssetId, BitAssetData, BitAssetId, Block, BlockHash,
-        DutchAuctionId, DutchAuctionParams, FilledOutput,
+        DutchAuctionId, DutchAuctionParams, FilledOutput, OutPoint, Output,
     },
 };
 
@@ -110,6 +110,14 @@ pub trait Rpc {
 
     #[method(name = "mine")]
     async fn mine(&self, fee: Option<u64>) -> RpcResult<()>;
+
+    /*
+    #[method(name = "my_unconfirmed_stxos")]
+    async fn my_unconfirmed_stxos(&self) -> RpcResult<Vec<InPoint>>;
+    */
+
+    #[method(name = "my_unconfirmed_utxos")]
+    async fn my_unconfirmed_utxos(&self) -> RpcResult<Vec<(OutPoint, Output)>>;
 
     #[method(name = "my_utxos")]
     async fn my_utxos(&self) -> RpcResult<Vec<FilledOutput>>;
