@@ -1,11 +1,18 @@
 [workspace]
-
+resolver = "2"
 members = [
     "lib",
     "app",
 ]
 
-resolver = "2"
+[workspace.package]
+authors = [ "Ash Manning <ash@layertwolabs.com>" ]
+edition = "2021"
+version = "0.5.5"
+
+[workspace.dependencies.bip300301]
+git = "https://github.com/Ash-L2L/bip300301.git"
+rev = "1bd864165a8cd1beaa1c7816b845d766ae563a3f"
 
 [profile.release]
 # lto = "fat"
