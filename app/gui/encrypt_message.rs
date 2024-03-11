@@ -96,7 +96,7 @@ impl EncryptMessage {
                 "Encrypted message: \n{ciphertext}"
             ));
             if ui.button("📋").on_hover_text("Click to copy").clicked() {
-                ui.output_mut(|po| po.copied_text = ciphertext.clone());
+                ui.output_mut(|po| po.copied_text.clone_from(ciphertext));
             };
         });
     }
