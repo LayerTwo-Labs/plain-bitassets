@@ -9,6 +9,8 @@ jobs:
   check-lint-build-stable:
     name: Check, Lint, Build (ubuntu stable)
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     timeout-minutes: 20
     # env:
     #  RUSTFLAGS: -D warnings
@@ -48,22 +50,39 @@ jobs:
           command: build
           args: --release
 
+      - name: 'Set environment variables: version number and output filename'
+        run: |
+          BITASSETS_APP_VERSION=$(cargo metadata --format-version 1 | \
+            jq -er '.packages | map(select(.name == "plain_bitassets_app") | .version) | .[0]')
+          OUTPUT_FILENAME="bitassets-${BITASSETS_APP_VERSION}-x86_64-unknown-linux-gnu"
+          echo "BITASSETS_APP_VERSION=$BITASSETS_APP_VERSION" >> "$GITHUB_ENV"
+          echo "OUTPUT_FILENAME=$OUTPUT_FILENAME" >> "$GITHUB_ENV"
+
       - name: 'Set filename for release binary'
         run: |
           pushd "target/release"
-          mv "plain_bitassets_app" "bitassets-gui-x86_64-unknown-linux-gnu"
+          ln -fs "plain_bitassets_app" "${OUTPUT_FILENAME}"
           popd
 
-      - name: 'Upload Artifacts (bitassets-gui)'
+      - name: 'Upload Artifacts (bitassets)'
         uses: actions/upload-artifact@v2
         with:
-          name: bitassets-gui-x86_64-unknown-linux-gnu
-          path: target/release/bitassets-gui-x86_64-unknown-linux-gnu
+          name: ${{ env.OUTPUT_FILENAME }}
+          path: target/release/${{ env.OUTPUT_FILENAME }}
           if-no-files-found: error
+
+      - name: Release
+        uses: softprops/action-gh-release@v2.0.2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: target/release/${{ env.OUTPUT_FILENAME }}
+          fail_on_unmatched_files: true
   
   build-macos:
     name: Build (macos-x86_64)
     runs-on: macos-latest
+    permissions:
+      contents: write
     timeout-minutes: 20
     # env:
     #  RUSTFLAGS: -D warnings
@@ -85,22 +104,39 @@ jobs:
           command: build
           args: --release
 
+      - name: 'Set environment variables: version number and output filename'
+        run: |
+          BITASSETS_APP_VERSION=$(cargo metadata --format-version 1 | \
+            jq -er '.packages | map(select(.name == "plain_bitassets_app") | .version) | .[0]')
+          OUTPUT_FILENAME="bitassets-${BITASSETS_APP_VERSION}-x86_64-apple-darwin"
+          echo "BITASSETS_APP_VERSION=$BITASSETS_APP_VERSION" >> "$GITHUB_ENV"
+          echo "OUTPUT_FILENAME=$OUTPUT_FILENAME" >> "$GITHUB_ENV"
+
       - name: 'set filename for release binary'
         run: |
           pushd "target/release"
-          mv "plain_bitassets_app" "bitassets-gui-x86_64-apple-darwin"
+          ln -fs "plain_bitassets_app" "${OUTPUT_FILENAME}"
           popd
 
-      - name: 'Upload Artifacts (bitassets-gui)'
+      - name: 'Upload Artifacts (bitassets)'
         uses: actions/upload-artifact@v2
         with:
-          name: bitassets-gui-x86_64-apple-darwin
-          path: target/release/bitassets-gui-x86_64-apple-darwin
+          name: ${{ env.OUTPUT_FILENAME }}
+          path: target/release/${{ env.OUTPUT_FILENAME }}
           if-no-files-found: error
+
+      - name: Release
+        uses: softprops/action-gh-release@v2.0.2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: target/release/${{ env.OUTPUT_FILENAME }}
+          fail_on_unmatched_files: true
 
   build-windows:
     name: Build (x86_64-pc-windows-gnu)
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     timeout-minutes: 20
     # env:
     #  RUSTFLAGS: -D warnings
@@ -128,17 +164,32 @@ jobs:
         env:
           RUSTFLAGS: "-C linker=/usr/bin/x86_64-w64-mingw32-gcc"
 
+      - name: 'Set environment variables: version number and output filename'
+        run: |
+          BITASSETS_APP_VERSION=$(cargo metadata --format-version 1 | \
+            jq -er '.packages | map(select(.name == "plain_bitassets_app") | .version) | .[0]')
+          OUTPUT_FILENAME="bitassets-${BITASSETS_APP_VERSION}-x86_64-pc-windows-gnu"
+          echo "BITASSETS_APP_VERSION=$BITASSETS_APP_VERSION" >> "$GITHUB_ENV"
+          echo "OUTPUT_FILENAME=$OUTPUT_FILENAME" >> "$GITHUB_ENV"
+
       - name: 'set filename for release binary'
         run: |
           pushd "target/x86_64-pc-windows-gnu/release"
-          mv "plain_bitassets_app.exe" "bitassets-gui-x86_64-pc-windows-gnu.exe"
+          ln -fs "plain_bitassets_app.exe" "${OUTPUT_FILENAME}"
           popd
 
-      - name: 'Upload Artifacts (bitassets-gui)'
+      - name: 'Upload Artifacts (bitassets)'
         uses: actions/upload-artifact@v2
         with:
-          name: bitassets-gui-x86_64-pc-windows-gnu.exe
-          path: target/x86_64-pc-windows-gnu/release/bitassets-gui-x86_64-pc-windows-gnu.exe
+          name: ${{ env.OUTPUT_FILENAME }}
+          path: target/x86_64-pc-windows-gnu/release/${{ env.OUTPUT_FILENAME }}
           if-no-files-found: error
+
+      - name: Release
+        uses: softprops/action-gh-release@v2.0.2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: target/x86_64-pc-windows-gnu/release/${{ env.OUTPUT_FILENAME }}
+          fail_on_unmatched_files: true
   
   
