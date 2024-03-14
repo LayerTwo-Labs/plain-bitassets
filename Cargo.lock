@@ -635,7 +635,7 @@ dependencies = [
 [[package]]
 name = "bip300301"
 version = "0.1.1"
-source = "git+https://github.com/Ash-L2L/bip300301.git?rev=1bd864165a8cd1beaa1c7816b845d766ae563a3f#1bd864165a8cd1beaa1c7816b845d766ae563a3f"
+source = "git+https://github.com/Ash-L2L/bip300301.git?rev=c6e410e702f3d22f5801f21ffdf39edece3985df#c6e410e702f3d22f5801f21ffdf39edece3985df"
 dependencies = [
  "base64 0.21.7",
  "bitcoin",
@@ -3648,7 +3648,7 @@ checksum = "d231b230927b5e4ad203db57bbcbee2802f6bce620b1e4a9024a07d94e2907ec"
 
 [[package]]
 name = "plain_bitassets"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "addr",
  "anyhow",
@@ -3689,7 +3689,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitassets_app"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "async_zmq",

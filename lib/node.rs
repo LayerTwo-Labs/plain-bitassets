@@ -8,6 +8,7 @@ use std::{
 
 #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
 use async_zmq::SinkExt;
+use bip300301::bitcoin;
 use fraction::Fraction;
 use heed::RoTxn;
 use tokio::sync::RwLock;
@@ -153,6 +154,23 @@ impl Node {
             #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
             zmq_pub_handler,
         })
+    }
+
+    pub fn drivechain(&self) -> &bip300301::Drivechain {
+        &self.drivechain
+    }
+
+    pub async fn get_best_parentchain_hash(
+        &self,
+    ) -> Result<bitcoin::BlockHash, Error> {
+        use bip300301::MainClient;
+        let res = self
+            .drivechain
+            .client
+            .getbestblockhash()
+            .await
+            .map_err(bip300301::Error::Jsonrpsee)?;
+        Ok(res)
     }
 
     pub fn get_height(&self) -> Result<u32, Error> {
@@ -439,6 +457,12 @@ impl Node {
         let txn = self.env.read_txn()?;
         let transactions = self.mempool.take_all(&txn)?;
         Ok(transactions)
+    }
+
+    /// Get total sidechain wealth in Bitcoin
+    pub fn get_sidechain_wealth(&self) -> Result<bitcoin::Amount, Error> {
+        let txn = self.env.read_txn()?;
+        Ok(self.state.sidechain_wealth(&txn)?)
     }
 
     pub fn get_transactions(

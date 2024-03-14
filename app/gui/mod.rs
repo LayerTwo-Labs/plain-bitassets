@@ -1,4 +1,5 @@
 use eframe::egui::{self, Color32};
+use strum::{EnumIter, IntoEnumIterator};
 
 use crate::{app::App, logs::LogsCapture};
 
@@ -9,6 +10,7 @@ mod encrypt_message;
 mod logs;
 mod lookup;
 mod miner;
+mod parent_chain;
 mod seed;
 mod util;
 
@@ -19,27 +21,36 @@ use encrypt_message::EncryptMessage;
 use logs::Logs;
 use lookup::Lookup;
 use miner::Miner;
+use parent_chain::ParentChain;
 use seed::SetSeed;
 
 pub struct EguiApp {
-    app: App,
-    set_seed: SetSeed,
-    miner: Miner,
-    deposit: Deposit,
-    lookup: Lookup,
-    tab: Tab,
     activity: Activity,
+    app: App,
     coins: Coins,
+    deposit: Deposit,
     encrypt_message: EncryptMessage,
     logs: Logs,
+    lookup: Lookup,
+    miner: Miner,
+    parent_chain: ParentChain,
+    set_seed: SetSeed,
+    tab: Tab,
 }
 
-#[derive(Eq, PartialEq)]
+#[derive(EnumIter, Eq, PartialEq, strum::Display)]
 enum Tab {
+    #[strum(to_string = "Coins")]
     Coins,
+    #[strum(to_string = "Lookup")]
     Lookup,
+    #[strum(to_string = "Messaging")]
     EncryptMessage,
+    #[strum(to_string = "Activity")]
     Activity,
+    #[strum(to_string = "Parent Chain")]
+    ParentChain,
+    #[strum(to_string = "Logs")]
     Logs,
 }
 
@@ -70,17 +81,19 @@ impl EguiApp {
         cc.egui_ctx.set_style(style);
 
         let activity = Activity::new(&app);
+        let parent_chain = ParentChain::new(&app);
         Self {
-            app,
-            set_seed: SetSeed::default(),
-            miner: Miner::default(),
-            deposit: Deposit::default(),
-            lookup: Lookup::default(),
-            tab: Tab::Coins,
             activity,
+            app,
             coins: Coins::default(),
+            deposit: Deposit::default(),
             encrypt_message: EncryptMessage::new(),
             logs: Logs::new(logs_capture),
+            lookup: Lookup::default(),
+            miner: Miner::default(),
+            parent_chain,
+            set_seed: SetSeed::default(),
+            tab: Tab::Coins,
         }
     }
 
@@ -123,19 +136,14 @@ impl eframe::App for EguiApp {
         if self.app.wallet.has_seed().unwrap_or(false) {
             egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.tab, Tab::Coins, "Coins");
-                    ui.selectable_value(&mut self.tab, Tab::Lookup, "Lookup");
-                    ui.selectable_value(
-                        &mut self.tab,
-                        Tab::EncryptMessage,
-                        "Messaging",
-                    );
-                    ui.selectable_value(
-                        &mut self.tab,
-                        Tab::Activity,
-                        "Activity",
-                    );
-                    ui.selectable_value(&mut self.tab, Tab::Logs, "Logs");
+                    Tab::iter().for_each(|tab_variant| {
+                        let tab_name = tab_variant.to_string();
+                        ui.selectable_value(
+                            &mut self.tab,
+                            tab_variant,
+                            tab_name,
+                        );
+                    })
                 });
             });
             egui::TopBottomPanel::bottom("util")
@@ -152,6 +160,9 @@ impl eframe::App for EguiApp {
                 }
                 Tab::Activity => {
                     self.activity.show(&mut self.app, ui);
+                }
+                Tab::ParentChain => {
+                    self.parent_chain.show(&mut self.app, ui);
                 }
                 Tab::Logs => {
                     self.logs.show(ui);

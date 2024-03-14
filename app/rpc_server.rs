@@ -1,5 +1,6 @@
 use std::{cmp::Ordering, net::SocketAddr};
 
+use bip300301::bitcoin;
 use fraction::Fraction;
 use jsonrpsee::{
     core::{async_trait, RpcResult},
@@ -389,6 +390,13 @@ impl RpcServer for RpcServerImpl {
             .wallet
             .set_seed_from_mnemonic(mnemonic.as_str())
             .map_err(convert_wallet_err)
+    }
+
+    async fn sidechain_wealth(&self) -> RpcResult<bitcoin::Amount> {
+        self.app
+            .node
+            .get_sidechain_wealth()
+            .map_err(convert_node_err)
     }
 
     async fn transfer(
