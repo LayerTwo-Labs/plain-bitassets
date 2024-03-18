@@ -45,83 +45,6 @@ fn convert_wallet_err(err: wallet::Error) -> ErrorObject<'static> {
 
 #[async_trait]
 impl RpcServer for RpcServerImpl {
-    async fn stop(&self) {
-        std::process::exit(0);
-    }
-
-    async fn bitcoin_balance(&self) -> RpcResult<u64> {
-        self.app
-            .wallet
-            .get_bitcoin_balance()
-            .map_err(convert_wallet_err)
-    }
-
-    async fn format_deposit_address(
-        &self,
-        address: Address,
-    ) -> RpcResult<String> {
-        let deposit_address = plain_bitassets::format_deposit_address(
-            node::THIS_SIDECHAIN,
-            &address.to_string(),
-        );
-        Ok(deposit_address)
-    }
-
-    async fn getblockcount(&self) -> RpcResult<u32> {
-        self.app.node.get_height().map_err(convert_node_err)
-    }
-
-    async fn get_amm_price(
-        &self,
-        base: AssetId,
-        quote: AssetId,
-    ) -> RpcResult<Option<Fraction>> {
-        self.app
-            .node
-            .try_get_amm_price(base, quote)
-            .map_err(convert_node_err)
-    }
-
-    async fn get_amm_pool_state(
-        &self,
-        asset0: AssetId,
-        asset1: AssetId,
-    ) -> RpcResult<AmmPoolState> {
-        let amm_pair = AmmPair::new(asset0, asset1);
-        self.app
-            .node
-            .get_amm_pool_state(amm_pair)
-            .map_err(convert_node_err)
-    }
-
-    async fn amm_mint(
-        &self,
-        asset0: AssetId,
-        asset1: AssetId,
-        amount0: u64,
-        amount1: u64,
-    ) -> RpcResult<()> {
-        let amm_pool_state = self.get_amm_pool_state(asset0, asset1).await?;
-        let next_amm_pool_state = amm_pool_state
-            .mint(amount0, amount1)
-            .map_err(|err| convert_node_err(err.into()))?;
-        let lp_token_mint = next_amm_pool_state.outstanding_lp_tokens
-            - amm_pool_state.outstanding_lp_tokens;
-        let mut tx = Transaction::default();
-        let () = self
-            .app
-            .wallet
-            .amm_mint(&mut tx, asset0, asset1, amount0, amount1, lp_token_mint)
-            .map_err(convert_wallet_err)?;
-        let authorized_tx =
-            self.app.wallet.authorize(tx).map_err(convert_wallet_err)?;
-        self.app
-            .node
-            .submit_transaction(&authorized_tx)
-            .await
-            .map_err(convert_node_err)
-    }
-
     async fn amm_burn(
         &self,
         asset0: AssetId,
@@ -147,6 +70,34 @@ impl RpcServer for RpcServerImpl {
                 amount1,
                 lp_token_amount,
             )
+            .map_err(convert_wallet_err)?;
+        let authorized_tx =
+            self.app.wallet.authorize(tx).map_err(convert_wallet_err)?;
+        self.app
+            .node
+            .submit_transaction(&authorized_tx)
+            .await
+            .map_err(convert_node_err)
+    }
+
+    async fn amm_mint(
+        &self,
+        asset0: AssetId,
+        asset1: AssetId,
+        amount0: u64,
+        amount1: u64,
+    ) -> RpcResult<()> {
+        let amm_pool_state = self.get_amm_pool_state(asset0, asset1).await?;
+        let next_amm_pool_state = amm_pool_state
+            .mint(amount0, amount1)
+            .map_err(|err| convert_node_err(err.into()))?;
+        let lp_token_mint = next_amm_pool_state.outstanding_lp_tokens
+            - amm_pool_state.outstanding_lp_tokens;
+        let mut tx = Transaction::default();
+        let () = self
+            .app
+            .wallet
+            .amm_mint(&mut tx, asset0, asset1, amount0, amount1, lp_token_mint)
             .map_err(convert_wallet_err)?;
         let authorized_tx =
             self.app.wallet.authorize(tx).map_err(convert_wallet_err)?;
@@ -214,10 +165,19 @@ impl RpcServer for RpcServerImpl {
         self.app.node.bitassets().map_err(convert_node_err)
     }
 
-    async fn dutch_auctions(
-        &self,
-    ) -> RpcResult<Vec<(DutchAuctionId, DutchAuctionState)>> {
-        self.app.node.dutch_auctions().map_err(convert_node_err)
+    async fn bitcoin_balance(&self) -> RpcResult<u64> {
+        self.app
+            .wallet
+            .get_bitcoin_balance()
+            .map_err(convert_wallet_err)
+    }
+
+    async fn connect_peer(&self, addr: SocketAddr) -> RpcResult<()> {
+        self.app
+            .node
+            .connect_peer(addr)
+            .await
+            .map_err(convert_node_err)
     }
 
     async fn dutch_auction_bid(
@@ -320,6 +280,63 @@ impl RpcServer for RpcServerImpl {
         Ok(())
     }
 
+    async fn dutch_auctions(
+        &self,
+    ) -> RpcResult<Vec<(DutchAuctionId, DutchAuctionState)>> {
+        self.app.node.dutch_auctions().map_err(convert_node_err)
+    }
+
+    async fn format_deposit_address(
+        &self,
+        address: Address,
+    ) -> RpcResult<String> {
+        let deposit_address = plain_bitassets::format_deposit_address(
+            node::THIS_SIDECHAIN,
+            &address.to_string(),
+        );
+        Ok(deposit_address)
+    }
+
+    async fn generate_mnemonic(&self) -> RpcResult<String> {
+        let mnemonic = bip39::Mnemonic::new(
+            bip39::MnemonicType::Words12,
+            bip39::Language::English,
+        );
+        Ok(mnemonic.to_string())
+    }
+
+    async fn get_amm_pool_state(
+        &self,
+        asset0: AssetId,
+        asset1: AssetId,
+    ) -> RpcResult<AmmPoolState> {
+        let amm_pair = AmmPair::new(asset0, asset1);
+        self.app
+            .node
+            .get_amm_pool_state(amm_pair)
+            .map_err(convert_node_err)
+    }
+
+    async fn get_amm_price(
+        &self,
+        base: AssetId,
+        quote: AssetId,
+    ) -> RpcResult<Option<Fraction>> {
+        self.app
+            .node
+            .try_get_amm_price(base, quote)
+            .map_err(convert_node_err)
+    }
+
+    async fn get_block(&self, block_hash: BlockHash) -> RpcResult<Block> {
+        let block = self
+            .app
+            .node
+            .get_block(block_hash)
+            .expect("This error should have been handled properly.");
+        Ok(block)
+    }
+
     async fn get_block_hash(&self, height: u32) -> RpcResult<BlockHash> {
         let block_hash = self
             .app
@@ -331,13 +348,15 @@ impl RpcServer for RpcServerImpl {
         Ok(block_hash)
     }
 
-    async fn get_block(&self, block_hash: BlockHash) -> RpcResult<Block> {
-        let block = self
-            .app
-            .node
-            .get_block(block_hash)
-            .expect("This error should have been handled properly.");
-        Ok(block)
+    async fn get_new_address(&self) -> RpcResult<Address> {
+        self.app
+            .wallet
+            .get_new_address()
+            .map_err(convert_wallet_err)
+    }
+
+    async fn getblockcount(&self) -> RpcResult<u32> {
+        self.app.node.get_height().map_err(convert_node_err)
     }
 
     async fn mine(&self, fee: Option<u64>) -> RpcResult<()> {
@@ -370,21 +389,6 @@ impl RpcServer for RpcServerImpl {
         Ok(utxos)
     }
 
-    async fn get_new_address(&self) -> RpcResult<Address> {
-        self.app
-            .wallet
-            .get_new_address()
-            .map_err(convert_wallet_err)
-    }
-
-    async fn generate_mnemonic(&self) -> RpcResult<String> {
-        let mnemonic = bip39::Mnemonic::new(
-            bip39::MnemonicType::Words12,
-            bip39::Language::English,
-        );
-        Ok(mnemonic.to_string())
-    }
-
     async fn set_seed_from_mnemonic(&self, mnemonic: String) -> RpcResult<()> {
         self.app
             .wallet
@@ -397,6 +401,10 @@ impl RpcServer for RpcServerImpl {
             .node
             .get_sidechain_wealth()
             .map_err(convert_node_err)
+    }
+
+    async fn stop(&self) {
+        std::process::exit(0);
     }
 
     async fn transfer(

@@ -579,8 +579,8 @@ impl Node {
         Ok(())
     }
 
-    pub async fn connect(&self, addr: SocketAddr) -> Result<(), Error> {
-        let peer = self.net.connect(addr).await?;
+    pub async fn connect_peer(&self, addr: SocketAddr) -> Result<(), Error> {
+        let peer = self.net.connect_peer(addr).await?;
         let peer0 = peer.clone();
         let node0 = self.clone();
         tokio::spawn(async move {
@@ -732,7 +732,7 @@ impl Node {
                             connection.remote_address()
                         );
                         connection.close(
-                            crate::net::quinn::VarInt::from_u32(1),
+                            quinn::VarInt::from_u32(1),
                             b"already connected",
                         );
                     }
