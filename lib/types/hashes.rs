@@ -152,6 +152,14 @@ impl std::fmt::Debug for Txid {
     }
 }
 
+impl FromHex for Txid {
+    type Error = <Hash as FromHex>::Error;
+
+    fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Self::Error> {
+        Hash::from_hex(hex).map(Self)
+    }
+}
+
 /// Identifier for a BitAsset
 #[derive(
     BorshDeserialize,
@@ -169,6 +177,14 @@ impl std::fmt::Debug for Txid {
 )]
 #[repr(transparent)]
 pub struct BitAssetId(#[serde(with = "serde_hexstr_human_readable")] pub Hash);
+
+impl FromHex for BitAssetId {
+    type Error = <Hash as FromHex>::Error;
+
+    fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Self::Error> {
+        Hash::from_hex(hex).map(Self)
+    }
+}
 
 /// Identifier for an arbitrary asset (Bitcoin, BitAsset, or BitAsset control)
 #[derive(
@@ -226,9 +242,19 @@ impl std::fmt::Display for AssetId {
     Debug,
     Deserialize,
     Eq,
+    Ord,
     PartialEq,
+    PartialOrd,
     Serialize,
 )]
 #[repr(transparent)]
 #[serde(transparent)]
 pub struct DutchAuctionId(pub Txid);
+
+impl FromHex for DutchAuctionId {
+    type Error = <Hash as FromHex>::Error;
+
+    fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Self::Error> {
+        Txid::from_hex(hex).map(Self)
+    }
+}

@@ -14,7 +14,7 @@ use plain_bitassets::{
     types::{
         Address, AssetId, BitAssetData, BitAssetId, Block, BlockHash,
         DutchAuctionId, DutchAuctionParams, FilledOutput, OutPoint, Output,
-        Transaction,
+        Transaction, Txid,
     },
     wallet,
 };
@@ -389,6 +389,23 @@ impl RpcServer for RpcServerImpl {
         Ok(utxos)
     }
 
+    async fn reserve_bitasset(&self, plain_name: String) -> RpcResult<()> {
+        let mut tx = Transaction::default();
+        let () = match self.app.wallet.reserve_bitasset(&mut tx, &plain_name) {
+            Ok(()) => (),
+            Err(err) => return Err(convert_wallet_err(err)),
+        };
+        let authorized_tx = match self.app.wallet.authorize(tx) {
+            Ok(tx) => tx,
+            Err(err) => return Err(convert_wallet_err(err)),
+        };
+        self.app
+            .node
+            .submit_transaction(&authorized_tx)
+            .await
+            .map_err(convert_node_err)
+    }
+
     async fn set_seed_from_mnemonic(&self, mnemonic: String) -> RpcResult<()> {
         self.app
             .wallet
@@ -425,32 +442,31 @@ impl RpcServer for RpcServerImpl {
         let tx = self
             .app
             .wallet
-            .create_regular_transaction(dest, value, fee, memo)
+            .create_transfer(dest, value, fee, memo)
             .map_err(convert_wallet_err)?;
-        let authorized_tx =
-            self.app.wallet.authorize(tx).map_err(convert_wallet_err)?;
-        self.app
-            .node
-            .submit_transaction(&authorized_tx)
-            .await
-            .map_err(convert_node_err)
+        self.app.sign_and_send(tx).map_err(convert_app_err)
     }
 
-    async fn reserve_bitasset(&self, plain_name: String) -> RpcResult<()> {
-        let mut tx = Transaction::default();
-        let () = match self.app.wallet.reserve_bitasset(&mut tx, &plain_name) {
-            Ok(()) => (),
-            Err(err) => return Err(convert_wallet_err(err)),
-        };
-        let authorized_tx = match self.app.wallet.authorize(tx) {
-            Ok(tx) => tx,
-            Err(err) => return Err(convert_wallet_err(err)),
-        };
-        self.app
-            .node
-            .submit_transaction(&authorized_tx)
-            .await
-            .map_err(convert_node_err)
+    async fn withdraw(
+        &self,
+        mainchain_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
+        amount_sats: u64,
+        fee_sats: u64,
+        mainchain_fee_sats: u64,
+    ) -> RpcResult<Txid> {
+        let tx = self
+            .app
+            .wallet
+            .create_withdrawal(
+                mainchain_address,
+                amount_sats,
+                mainchain_fee_sats,
+                fee_sats,
+            )
+            .map_err(convert_wallet_err)?;
+        let txid = tx.txid();
+        self.app.sign_and_send(tx).map_err(convert_app_err)?;
+        Ok(txid)
     }
 }
 

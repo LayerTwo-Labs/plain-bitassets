@@ -197,6 +197,21 @@ impl Wallet {
         self.set_seed(&seed_bytes)
     }
 
+    /// Create a transaction with a fee only.
+    pub fn create_regular_transaction(
+        &self,
+        fee: u64,
+    ) -> Result<Transaction, Error> {
+        let (total, coins) = self.select_bitcoins(fee)?;
+        let change = total - fee;
+        let inputs = coins.into_keys().collect();
+        let outputs = vec![Output::new(
+            self.get_new_address()?,
+            OutputContent::Value(BitcoinOutputContent(change)),
+        )];
+        Ok(Transaction::new(inputs, outputs))
+    }
+
     pub fn create_withdrawal(
         &self,
         main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
@@ -224,7 +239,7 @@ impl Wallet {
         Ok(Transaction::new(inputs, outputs))
     }
 
-    pub fn create_regular_transaction(
+    pub fn create_transfer(
         &self,
         address: Address,
         bitcoin_value: u64,
@@ -437,7 +452,7 @@ impl Wallet {
             if output.content.is_withdrawal() {
                 continue;
             }
-            if total_sats > value {
+            if total_sats >= value {
                 break;
             }
             total_sats += output.get_bitcoin_value();

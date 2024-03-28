@@ -523,7 +523,7 @@ impl TxCreator {
         }
     }
 
-    fn show_bitasset_options(
+    pub(in crate::gui) fn show_bitasset_options(
         ui: &mut egui::Ui,
         bitasset_data: &mut TrySetBitAssetData,
     ) -> Response {

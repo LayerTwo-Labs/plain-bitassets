@@ -4,22 +4,20 @@ use strum::{EnumIter, IntoEnumIterator};
 use crate::{app::App, logs::LogsCapture};
 
 mod activity;
+mod bitassets;
 mod coins;
-mod deposit;
 mod encrypt_message;
 mod logs;
-mod lookup;
 mod miner;
 mod parent_chain;
 mod seed;
 mod util;
 
 use activity::Activity;
+use bitassets::BitAssets;
 use coins::Coins;
-use deposit::Deposit;
 use encrypt_message::EncryptMessage;
 use logs::Logs;
-use lookup::Lookup;
 use miner::Miner;
 use parent_chain::ParentChain;
 use seed::SetSeed;
@@ -27,29 +25,29 @@ use seed::SetSeed;
 pub struct EguiApp {
     activity: Activity,
     app: App,
+    bitassets: BitAssets,
     coins: Coins,
-    deposit: Deposit,
     encrypt_message: EncryptMessage,
     logs: Logs,
-    lookup: Lookup,
     miner: Miner,
     parent_chain: ParentChain,
     set_seed: SetSeed,
     tab: Tab,
 }
 
-#[derive(EnumIter, Eq, PartialEq, strum::Display)]
+#[derive(Default, EnumIter, Eq, PartialEq, strum::Display)]
 enum Tab {
+    #[default]
+    #[strum(to_string = "Parent Chain")]
+    ParentChain,
     #[strum(to_string = "Coins")]
     Coins,
-    #[strum(to_string = "Lookup")]
-    Lookup,
+    #[strum(to_string = "BitAssets")]
+    BitAssets,
     #[strum(to_string = "Messaging")]
     EncryptMessage,
     #[strum(to_string = "Activity")]
     Activity,
-    #[strum(to_string = "Parent Chain")]
-    ParentChain,
     #[strum(to_string = "Logs")]
     Logs,
 }
@@ -81,19 +79,19 @@ impl EguiApp {
         cc.egui_ctx.set_style(style);
 
         let activity = Activity::new(&app);
+        let coins = Coins::new(&app);
         let parent_chain = ParentChain::new(&app);
         Self {
             activity,
             app,
-            coins: Coins::default(),
-            deposit: Deposit::default(),
+            bitassets: BitAssets::default(),
+            coins,
             encrypt_message: EncryptMessage::new(),
             logs: Logs::new(logs_capture),
-            lookup: Lookup::default(),
             miner: Miner::default(),
             parent_chain,
             set_seed: SetSeed::default(),
-            tab: Tab::Coins,
+            tab: Tab::default(),
         }
     }
 
@@ -114,8 +112,6 @@ impl EguiApp {
             // it up if you have multiple widgets to expand, even with different ratios.
             let this_target_width = this_init_max_width - last_others_width;
 
-            self.deposit.show(&mut self.app, ui);
-            ui.separator();
             ui.add_space(this_target_width);
             ui.separator();
             self.miner.show(&self.app, ui);
@@ -149,20 +145,20 @@ impl eframe::App for EguiApp {
             egui::TopBottomPanel::bottom("util")
                 .show(ctx, |ui| self.bottom_panel_content(ui));
             egui::CentralPanel::default().show(ctx, |ui| match self.tab {
+                Tab::ParentChain => {
+                    self.parent_chain.show(&mut self.app, ui);
+                }
                 Tab::Coins => {
                     let () = self.coins.show(&mut self.app, ui).unwrap();
                 }
-                Tab::Lookup => {
-                    self.lookup.show(&mut self.app, ui);
+                Tab::BitAssets => {
+                    self.bitassets.show(&mut self.app, ui);
                 }
                 Tab::EncryptMessage => {
                     self.encrypt_message.show(&mut self.app, ui);
                 }
                 Tab::Activity => {
                     self.activity.show(&mut self.app, ui);
-                }
-                Tab::ParentChain => {
-                    self.parent_chain.show(&mut self.app, ui);
                 }
                 Tab::Logs => {
                     self.logs.show(ui);

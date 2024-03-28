@@ -6,9 +6,9 @@ use plain_bitassets::types::FilledOutput;
 use crate::{app::App, gui::util::UiExt};
 
 #[derive(Debug, Default)]
-pub struct MyBitassets;
+pub struct MyBitAssets;
 
-impl MyBitassets {
+impl MyBitAssets {
     pub fn show_reservations(&mut self, app: &mut App, ui: &mut egui::Ui) {
         let utxos_read = app.utxos.read();
         // all bitasset reservations

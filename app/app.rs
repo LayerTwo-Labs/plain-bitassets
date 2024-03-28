@@ -101,7 +101,7 @@ impl App {
         })
     }
 
-    pub fn sign_and_send(&mut self, tx: Transaction) -> Result<(), Error> {
+    pub fn sign_and_send(&self, tx: Transaction) -> Result<(), Error> {
         let authorized_transaction = self.wallet.authorize(tx)?;
         self.runtime
             .block_on(self.node.submit_transaction(&authorized_transaction))?;

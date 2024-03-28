@@ -47,7 +47,16 @@ struct TxidStamped<T> {
 struct RollBack<T>(NonEmpty<TxidStamped<T>>);
 
 #[derive(
-    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
 )]
 #[repr(transparent)]
 #[serde(transparent)]

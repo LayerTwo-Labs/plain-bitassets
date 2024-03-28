@@ -9,11 +9,11 @@ use plain_bitassets::{
 use crate::app::App;
 
 #[derive(Default)]
-pub struct MemPoolExplorer {
+pub struct MempoolExplorer {
     current: usize,
 }
 
-impl MemPoolExplorer {
+impl MempoolExplorer {
     pub fn show(&mut self, app: &mut App, ui: &mut egui::Ui) {
         let transactions = app.node.get_all_transactions().unwrap_or_default();
         let utxos = app.wallet.get_utxos().unwrap_or_default();

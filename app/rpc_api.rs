@@ -11,6 +11,7 @@ use plain_bitassets::{
     types::{
         Address, AssetId, BitAssetData, BitAssetId, Block, BlockHash,
         DutchAuctionId, DutchAuctionParams, FilledOutput, OutPoint, Output,
+        Txid,
     },
 };
 
@@ -152,4 +153,13 @@ pub trait Rpc {
         fee: u64,
         memo: Option<String>,
     ) -> RpcResult<()>;
+
+    #[method(name = "withdraw")]
+    async fn withdraw(
+        &self,
+        mainchain_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
+        amount_sats: u64,
+        fee_sats: u64,
+        mainchain_fee_sats: u64,
+    ) -> RpcResult<Txid>;
 }
