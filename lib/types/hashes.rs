@@ -1,9 +1,12 @@
+use std::str::FromStr;
+
 use bip300301::bitcoin;
 use bitcoin::hashes::Hash as _;
 use borsh::{BorshDeserialize, BorshSerialize};
 use heed::zerocopy::{self, AsBytes, FromBytes};
 use hex::FromHex;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use super::serde_hexstr_human_readable;
 
@@ -66,6 +69,13 @@ impl std::fmt::Display for BlockHash {
 impl std::fmt::Debug for BlockHash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", hex::encode(self.0))
+    }
+}
+
+impl FromStr for BlockHash {
+    type Err = <Self as FromHex>::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_hex(s)
     }
 }
 
@@ -160,6 +170,13 @@ impl FromHex for Txid {
     }
 }
 
+impl FromStr for Txid {
+    type Err = <Self as FromHex>::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_hex(s)
+    }
+}
+
 /// Identifier for a BitAsset
 #[derive(
     BorshDeserialize,
@@ -184,6 +201,14 @@ impl FromHex for BitAssetId {
     fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Self::Error> {
         Hash::from_hex(hex).map(Self)
     }
+}
+
+#[derive(Debug, Error)]
+pub enum ParseAssetIdError {
+    #[error(transparent)]
+    Borsh(#[from] borsh::io::Error),
+    #[error(transparent)]
+    FromHex(#[from] hex::FromHexError),
 }
 
 /// Identifier for an arbitrary asset (Bitcoin, BitAsset, or BitAsset control)
@@ -233,6 +258,14 @@ impl std::fmt::Display for AssetId {
     }
 }
 
+impl FromStr for AssetId {
+    type Err = ParseAssetIdError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let bytes: Vec<u8> = hex::decode(s)?;
+        borsh::from_slice(&bytes).map_err(Self::Err::from)
+    }
+}
+
 /// Unique identifier for each Dutch auction
 #[derive(
     BorshDeserialize,
@@ -256,5 +289,12 @@ impl FromHex for DutchAuctionId {
 
     fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Self::Error> {
         Txid::from_hex(hex).map(Self)
+    }
+}
+
+impl FromStr for DutchAuctionId {
+    type Err = <Self as FromHex>::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_hex(s)
     }
 }

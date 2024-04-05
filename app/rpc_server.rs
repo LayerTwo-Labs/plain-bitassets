@@ -50,7 +50,7 @@ impl RpcServer for RpcServerImpl {
         asset0: AssetId,
         asset1: AssetId,
         lp_token_amount: u64,
-    ) -> RpcResult<()> {
+    ) -> RpcResult<Txid> {
         let amm_pair = AmmPair::new(asset0, asset1);
         let amm_pool_state = self.get_amm_pool_state(asset0, asset1).await?;
         let next_amm_pool_state = amm_pool_state
@@ -71,13 +71,9 @@ impl RpcServer for RpcServerImpl {
                 lp_token_amount,
             )
             .map_err(convert_wallet_err)?;
-        let authorized_tx =
-            self.app.wallet.authorize(tx).map_err(convert_wallet_err)?;
-        self.app
-            .node
-            .submit_transaction(&authorized_tx)
-            .await
-            .map_err(convert_node_err)
+        let txid = tx.txid();
+        let () = self.app.sign_and_send(tx).map_err(convert_app_err)?;
+        Ok(txid)
     }
 
     async fn amm_mint(
@@ -86,7 +82,7 @@ impl RpcServer for RpcServerImpl {
         asset1: AssetId,
         amount0: u64,
         amount1: u64,
-    ) -> RpcResult<()> {
+    ) -> RpcResult<Txid> {
         let amm_pool_state = self.get_amm_pool_state(asset0, asset1).await?;
         let next_amm_pool_state = amm_pool_state
             .mint(amount0, amount1)
@@ -99,13 +95,9 @@ impl RpcServer for RpcServerImpl {
             .wallet
             .amm_mint(&mut tx, asset0, asset1, amount0, amount1, lp_token_mint)
             .map_err(convert_wallet_err)?;
-        let authorized_tx =
-            self.app.wallet.authorize(tx).map_err(convert_wallet_err)?;
-        self.app
-            .node
-            .submit_transaction(&authorized_tx)
-            .await
-            .map_err(convert_node_err)
+        let txid = tx.txid();
+        let () = self.app.sign_and_send(tx).map_err(convert_app_err)?;
+        Ok(txid)
     }
 
     async fn amm_swap(
@@ -263,21 +255,16 @@ impl RpcServer for RpcServerImpl {
     async fn dutch_auction_create(
         &self,
         dutch_auction_params: DutchAuctionParams,
-    ) -> RpcResult<()> {
+    ) -> RpcResult<Txid> {
         let mut tx = Transaction::default();
         let () = self
             .app
             .wallet
             .dutch_auction_create(&mut tx, dutch_auction_params)
             .map_err(convert_wallet_err)?;
-        let authorized_tx =
-            self.app.wallet.authorize(tx).map_err(convert_wallet_err)?;
-        self.app
-            .node
-            .submit_transaction(&authorized_tx)
-            .await
-            .map_err(convert_node_err)?;
-        Ok(())
+        let txid = tx.txid();
+        let () = self.app.sign_and_send(tx).map_err(convert_app_err)?;
+        Ok(txid)
     }
 
     async fn dutch_auctions(
@@ -389,21 +376,15 @@ impl RpcServer for RpcServerImpl {
         Ok(utxos)
     }
 
-    async fn reserve_bitasset(&self, plain_name: String) -> RpcResult<()> {
+    async fn reserve_bitasset(&self, plain_name: String) -> RpcResult<Txid> {
         let mut tx = Transaction::default();
         let () = match self.app.wallet.reserve_bitasset(&mut tx, &plain_name) {
             Ok(()) => (),
             Err(err) => return Err(convert_wallet_err(err)),
         };
-        let authorized_tx = match self.app.wallet.authorize(tx) {
-            Ok(tx) => tx,
-            Err(err) => return Err(convert_wallet_err(err)),
-        };
-        self.app
-            .node
-            .submit_transaction(&authorized_tx)
-            .await
-            .map_err(convert_node_err)
+        let txid = tx.txid();
+        let () = self.app.sign_and_send(tx).map_err(convert_app_err)?;
+        Ok(txid)
     }
 
     async fn set_seed_from_mnemonic(&self, mnemonic: String) -> RpcResult<()> {
@@ -430,7 +411,7 @@ impl RpcServer for RpcServerImpl {
         value: u64,
         fee: u64,
         memo: Option<String>,
-    ) -> RpcResult<()> {
+    ) -> RpcResult<Txid> {
         let memo = match memo {
             None => None,
             Some(memo) => {
@@ -444,7 +425,9 @@ impl RpcServer for RpcServerImpl {
             .wallet
             .create_transfer(dest, value, fee, memo)
             .map_err(convert_wallet_err)?;
-        self.app.sign_and_send(tx).map_err(convert_app_err)
+        let txid = tx.txid();
+        let () = self.app.sign_and_send(tx).map_err(convert_app_err)?;
+        Ok(txid)
     }
 
     async fn withdraw(

@@ -37,33 +37,40 @@ jobs:
       - name: Build
         run: cargo build --release
 
-      - name: 'Set environment variables: version number and output filename'
+      - name: 'Set environment variables: version number and output filenames'
         run: |
           BITASSETS_APP_VERSION=$(cargo metadata --format-version 1 | \
             jq -er '.packages | map(select(.name == "plain_bitassets_app") | .version) | .[0]')
-          OUTPUT_FILENAME="bitassets-${BITASSETS_APP_VERSION}-x86_64-unknown-linux-gnu"
+          BITASSETS_APP_FILENAME="bitassets-${BITASSETS_APP_VERSION}-x86_64-unknown-linux-gnu"
+          BITASSETS_CLI_FILENAME="bitassets-cli-${BITASSETS_APP_VERSION}-x86_64-unknown-linux-gnu"
           echo "BITASSETS_APP_VERSION=$BITASSETS_APP_VERSION" >> "$GITHUB_ENV"
-          echo "OUTPUT_FILENAME=$OUTPUT_FILENAME" >> "$GITHUB_ENV"
+          echo "BITASSETS_APP_FILENAME=$BITASSETS_APP_FILENAME" >> "$GITHUB_ENV"
+          echo "BITASSETS_CLI_FILENAME=$BITASSETS_CLI_FILENAME" >> "$GITHUB_ENV"
 
-      - name: 'Set filename for release binary'
+      - name: 'Set filenames for release binaries'
         run: |
           pushd "target/release"
-          ln -fs "plain_bitassets_app" "${OUTPUT_FILENAME}"
+          ln -fs "plain_bitassets_app" "${BITASSETS_APP_FILENAME}"
+          ln -fs "plain_bitassets_app_cli" "${BITASSETS_CLI_FILENAME}"
           popd
 
       - name: 'Upload Artifacts (bitassets)'
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.OUTPUT_FILENAME }}
-          path: target/release/${{ env.OUTPUT_FILENAME }}
+          name: ${{ env.BITASSETS_APP_FILENAME }}
           if-no-files-found: error
+          path: |
+            target/release/${{ env.BITASSETS_APP_FILENAME }}
+            target/release/${{ env.BITASSETS_CLI_FILENAME }}
 
       - name: Release
         uses: softprops/action-gh-release@v2.0.2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: target/release/${{ env.OUTPUT_FILENAME }}
           fail_on_unmatched_files: true
+          files: |
+            target/release/${{ env.BITASSETS_APP_FILENAME }}
+            target/release/${{ env.BITASSETS_CLI_FILENAME }}
   
   build-macos:
     name: Build (macos-x86_64)
@@ -86,33 +93,40 @@ jobs:
       - name: Build
         run: cargo build --release
 
-      - name: 'Set environment variables: version number and output filename'
+      - name: 'Set environment variables: version number and output filenames'
         run: |
           BITASSETS_APP_VERSION=$(cargo metadata --format-version 1 | \
             jq -er '.packages | map(select(.name == "plain_bitassets_app") | .version) | .[0]')
-          OUTPUT_FILENAME="bitassets-${BITASSETS_APP_VERSION}-x86_64-apple-darwin"
+          BITASSETS_APP_FILENAME="bitassets-${BITASSETS_APP_VERSION}-x86_64-apple-darwin"
+          BITASSETS_CLI_FILENAME="bitassets-cli-${BITASSETS_APP_VERSION}-x86_64-apple-darwin"
           echo "BITASSETS_APP_VERSION=$BITASSETS_APP_VERSION" >> "$GITHUB_ENV"
-          echo "OUTPUT_FILENAME=$OUTPUT_FILENAME" >> "$GITHUB_ENV"
+          echo "BITASSETS_APP_FILENAME=$BITASSETS_APP_FILENAME" >> "$GITHUB_ENV"
+          echo "BITASSETS_CLI_FILENAME=$BITASSETS_CLI_FILENAME" >> "$GITHUB_ENV"
 
-      - name: 'set filename for release binary'
+      - name: 'set filenames for release binaries'
         run: |
           pushd "target/release"
-          ln -fs "plain_bitassets_app" "${OUTPUT_FILENAME}"
+          ln -fs "plain_bitassets_app" "${BITASSETS_APP_FILENAME}"
+          ln -fs "plain_bitassets_app_cli" "${BITASSETS_CLI_FILENAME}"
           popd
 
       - name: 'Upload Artifacts (bitassets)'
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.OUTPUT_FILENAME }}
-          path: target/release/${{ env.OUTPUT_FILENAME }}
+          name: ${{ env.BITASSETS_APP_FILENAME }}
           if-no-files-found: error
+          path: |
+            target/release/${{ env.BITASSETS_APP_FILENAME }}
+            target/release/${{ env.BITASSETS_CLI_FILENAME }}
 
       - name: Release
         uses: softprops/action-gh-release@v2.0.2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: target/release/${{ env.OUTPUT_FILENAME }}
           fail_on_unmatched_files: true
+          files: |
+            target/release/${{ env.BITASSETS_APP_FILENAME }}
+            target/release/${{ env.BITASSETS_CLI_FILENAME }}
 
   build-windows:
     name: Build (x86_64-pc-windows-gnu)
@@ -141,33 +155,40 @@ jobs:
         env:
           RUSTFLAGS: "-C linker=/usr/bin/x86_64-w64-mingw32-gcc"
 
-      - name: 'Set environment variables: version number and output filename'
+      - name: 'Set environment variables: version number and output filenames'
         run: |
           BITASSETS_APP_VERSION=$(cargo metadata --format-version 1 | \
             jq -er '.packages | map(select(.name == "plain_bitassets_app") | .version) | .[0]')
-          OUTPUT_FILENAME="bitassets-${BITASSETS_APP_VERSION}-x86_64-pc-windows-gnu.exe"
+          BITASSETS_APP_FILENAME="bitassets-${BITASSETS_APP_VERSION}-x86_64-pc-windows-gnu.exe"
+          BITASSETS_CLI_FILENAME="bitassets-cli-${BITASSETS_APP_VERSION}-x86_64-pc-windows-gnu.exe"
           echo "BITASSETS_APP_VERSION=$BITASSETS_APP_VERSION" >> "$GITHUB_ENV"
-          echo "OUTPUT_FILENAME=$OUTPUT_FILENAME" >> "$GITHUB_ENV"
+          echo "BITASSETS_APP_FILENAME=$BITASSETS_APP_FILENAME" >> "$GITHUB_ENV"
+          echo "BITASSETS_CLI_FILENAME=$BITASSETS_CLI_FILENAME" >> "$GITHUB_ENV"
 
-      - name: 'set filename for release binary'
+      - name: 'set filenames for release binaries'
         run: |
           pushd "target/x86_64-pc-windows-gnu/release"
-          ln -fs "plain_bitassets_app.exe" "${OUTPUT_FILENAME}"
+          ln -fs "plain_bitassets_app.exe" "${BITASSETS_APP_FILENAME}"
+          ln -fs "plain_bitassets_app_cli.exe" "${BITASSETS_CLI_FILENAME}"
           popd
 
       - name: 'Upload Artifacts (bitassets)'
         uses: actions/upload-artifact@v2
         with:
-          name: ${{ env.OUTPUT_FILENAME }}
-          path: target/x86_64-pc-windows-gnu/release/${{ env.OUTPUT_FILENAME }}
+          name: ${{ env.BITASSETS_APP_FILENAME }}
           if-no-files-found: error
+          path: |
+            target/x86_64-pc-windows-gnu/release/${{ env.BITASSETS_APP_FILENAME }}
+            target/x86_64-pc-windows-gnu/release/${{ env.BITASSETS_CLI_FILENAME }}
 
       - name: Release
         uses: softprops/action-gh-release@v2.0.2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: target/x86_64-pc-windows-gnu/release/${{ env.OUTPUT_FILENAME }}
           fail_on_unmatched_files: true
+          files: |
+            target/x86_64-pc-windows-gnu/release/${{ env.BITASSETS_APP_FILENAME }}
+            target/x86_64-pc-windows-gnu/release/${{ env.BITASSETS_CLI_FILENAME }}
   
   upload-releases-to-releases-drivechain-info:
     name: Upload releases to releases.drivechain.info
@@ -182,12 +203,22 @@ jobs:
 
       - name: Create zip files for releases.drivechain.info
         run: |
-          mv bitassets-*-x86_64-apple-darwin bitassets-latest-x86_64-apple-darwin
-          zip L2-S4-BitAssets-latest-x86_64-apple-darwin.zip bitassets-latest-x86_64-apple-darwin
-          mv bitassets-*-x86_64-pc-windows-gnu.exe bitassets-latest-x86_64-pc-windows-gnu.exe
-          zip L2-S4-BitAssets-latest-x86_64-pc-windows-gnu.zip bitassets-latest-x86_64-pc-windows-gnu.exe
-          mv bitassets-*-x86_64-unknown-linux-gnu bitassets-latest-x86_64-unknown-linux-gnu
-          zip L2-S4-BitAssets-latest-x86_64-unknown-linux-gnu.zip bitassets-latest-x86_64-unknown-linux-gnu
+          shopt -s extglob
+          mv bitassets-+([0-9]).+([0-9]).+([0-9])-x86_64-apple-darwin bitassets-latest-x86_64-apple-darwin
+          mv bitassets-cli-+([0-9]).+([0-9]).+([0-9])-x86_64-apple-darwin bitassets-cli-latest-x86_64-apple-darwin
+          zip L2-S4-BitAssets-latest-x86_64-apple-darwin.zip \
+            bitassets-latest-x86_64-apple-darwin \
+            bitassets-cli-latest-x86_64-apple-darwin
+          mv bitassets-+([0-9]).+([0-9]).+([0-9])-x86_64-pc-windows-gnu.exe bitassets-latest-x86_64-pc-windows-gnu.exe
+          mv bitassets-cli-+([0-9]).+([0-9]).+([0-9])-x86_64-pc-windows-gnu.exe bitassets-cli-latest-x86_64-pc-windows-gnu.exe
+          zip L2-S4-BitAssets-latest-x86_64-pc-windows-gnu.zip \
+            bitassets-latest-x86_64-pc-windows-gnu.exe \
+            bitassets-cli-latest-x86_64-pc-windows-gnu.exe
+          mv bitassets-+([0-9]).+([0-9]).+([0-9])-x86_64-unknown-linux-gnu bitassets-latest-x86_64-unknown-linux-gnu
+          mv bitassets-cli-+([0-9]).+([0-9]).+([0-9])-x86_64-unknown-linux-gnu bitassets-cli-latest-x86_64-unknown-linux-gnu
+          zip L2-S4-BitAssets-latest-x86_64-unknown-linux-gnu.zip \
+            bitassets-latest-x86_64-unknown-linux-gnu \
+            bitassets-cli-latest-x86_64-unknown-linux-gnu
 
       - name: Upload release assets to releases.drivechain.info
         uses: cross-the-world/ssh-scp-ssh-pipelines@latest

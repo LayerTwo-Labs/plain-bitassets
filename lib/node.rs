@@ -579,37 +579,6 @@ impl Node {
         Ok(())
     }
 
-    pub async fn connect_peer(&self, addr: SocketAddr) -> Result<(), Error> {
-        let peer = self.net.connect_peer(addr).await?;
-        let peer0 = peer.clone();
-        let node0 = self.clone();
-        tokio::spawn(async move {
-            loop {
-                match node0.peer_listen(&peer0).await {
-                    Ok(_) => {}
-                    Err(err) => {
-                        println!("{:?}", err);
-                        break;
-                    }
-                }
-            }
-        });
-        let peer0 = peer.clone();
-        let node0 = self.clone();
-        tokio::spawn(async move {
-            loop {
-                match node0.heart_beat_listen(&peer0).await {
-                    Ok(_) => {}
-                    Err(err) => {
-                        println!("{:?}", err);
-                        break;
-                    }
-                }
-            }
-        });
-        Ok(())
-    }
-
     pub async fn heart_beat_listen(
         &self,
         peer: &crate::net::Peer,
@@ -629,6 +598,41 @@ impl Node {
         };
         let state: PeerState = bincode::deserialize(&message)?;
         *peer.state.write().await = Some(state);
+        Ok(())
+    }
+
+    pub async fn connect_peer(&self, addr: SocketAddr) -> Result<(), Error> {
+        let peer = self.net.connect_peer(addr).await?;
+        tokio::spawn({
+            let node = self.clone();
+            let peer = peer.clone();
+            async move {
+                loop {
+                    match node.peer_listen(&peer).await {
+                        Ok(_) => {}
+                        Err(err) => {
+                            println!("{:?}", err);
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        tokio::spawn({
+            let node = self.clone();
+            let peer = peer.clone();
+            async move {
+                loop {
+                    match node.heart_beat_listen(&peer).await {
+                        Ok(_) => {}
+                        Err(err) => {
+                            println!("{:?}", err);
+                            break;
+                        }
+                    }
+                }
+            }
+        });
         Ok(())
     }
 
@@ -749,28 +753,32 @@ impl Node {
                     state: Arc::new(RwLock::new(None)),
                     connection,
                 };
-                let node0 = node.clone();
-                let peer0 = peer.clone();
-                tokio::spawn(async move {
-                    loop {
-                        match node0.peer_listen(&peer0).await {
-                            Ok(_) => {}
-                            Err(err) => {
-                                println!("{:?}", err);
-                                break;
+                tokio::spawn({
+                    let node = node.clone();
+                    let peer = peer.clone();
+                    async move {
+                        loop {
+                            match node.peer_listen(&peer).await {
+                                Ok(_) => {}
+                                Err(err) => {
+                                    println!("{:?}", err);
+                                    break;
+                                }
                             }
                         }
                     }
                 });
-                let node0 = node.clone();
-                let peer0 = peer.clone();
-                tokio::spawn(async move {
-                    loop {
-                        match node0.heart_beat_listen(&peer0).await {
-                            Ok(_) => {}
-                            Err(err) => {
-                                println!("{:?}", err);
-                                break;
+                tokio::spawn({
+                    let node = node.clone();
+                    let peer = peer.clone();
+                    async move {
+                        loop {
+                            match node.heart_beat_listen(&peer).await {
+                                Ok(_) => {}
+                                Err(err) => {
+                                    println!("{:?}", err);
+                                    break;
+                                }
                             }
                         }
                     }

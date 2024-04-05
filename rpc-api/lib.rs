@@ -17,14 +17,16 @@ use plain_bitassets::{
 
 #[rpc(client, server)]
 pub trait Rpc {
+    /// Burn an AMM position
     #[method(name = "amm_burn")]
     async fn amm_burn(
         &self,
         asset0: AssetId,
         asset1: AssetId,
         lp_token_amount: u64,
-    ) -> RpcResult<()>;
+    ) -> RpcResult<Txid>;
 
+    /// Mint an AMM position
     #[method(name = "amm_mint")]
     async fn amm_mint(
         &self,
@@ -32,7 +34,7 @@ pub trait Rpc {
         asset1: AssetId,
         amount0: u64,
         amount1: u64,
-    ) -> RpcResult<()>;
+    ) -> RpcResult<Txid>;
 
     /// Returns the amount of `asset_receive` to receive
     #[method(name = "amm_swap")]
@@ -65,11 +67,12 @@ pub trait Rpc {
         bid_size: u64,
     ) -> RpcResult<u64>;
 
+    /// Create a dutch auction
     #[method(name = "dutch_auction_create")]
     async fn dutch_auction_create(
         &self,
         dutch_auction_params: DutchAuctionParams,
-    ) -> RpcResult<()>;
+    ) -> RpcResult<Txid>;
 
     /// Returns the amount of the base asset and quote asset to receive
     #[method(name = "dutch_auction_collect")]
@@ -84,15 +87,18 @@ pub trait Rpc {
         &self,
     ) -> RpcResult<Vec<(DutchAuctionId, DutchAuctionState)>>;
 
+    /// Format a deposit address
     #[method(name = "format_deposit_address")]
     async fn format_deposit_address(
         &self,
         address: Address,
     ) -> RpcResult<String>;
 
+    /// Generate a mnemonic seed phrase
     #[method(name = "generate_mnemonic")]
     async fn generate_mnemonic(&self) -> RpcResult<String>;
 
+    /// Get the state of the specified AMM pool
     #[method(name = "get_amm_pool_state")]
     async fn get_amm_pool_state(
         &self,
@@ -100,6 +106,7 @@ pub trait Rpc {
         asset1: AssetId,
     ) -> RpcResult<AmmPoolState>;
 
+    /// Get the current price for the specified pair
     #[method(name = "get_amm_price")]
     async fn get_amm_price(
         &self,
@@ -107,18 +114,23 @@ pub trait Rpc {
         quote: AssetId,
     ) -> RpcResult<Option<Fraction>>;
 
+    /// Get block data
     #[method(name = "get_block")]
     async fn get_block(&self, block_hash: BlockHash) -> RpcResult<Block>;
 
+    /// Get the hash of the block at the specified height
     #[method(name = "get_block_hash")]
     async fn get_block_hash(&self, height: u32) -> RpcResult<BlockHash>;
 
+    /// Get a new address
     #[method(name = "get_new_address")]
     async fn get_new_address(&self) -> RpcResult<Address>;
 
+    /// Get the current block count
     #[method(name = "getblockcount")]
     async fn getblockcount(&self) -> RpcResult<u32>;
 
+    /// Attempt to mine a sidechain block
     #[method(name = "mine")]
     async fn mine(&self, fee: Option<u64>) -> RpcResult<()>;
 
@@ -127,24 +139,31 @@ pub trait Rpc {
     async fn my_unconfirmed_stxos(&self) -> RpcResult<Vec<InPoint>>;
     */
 
+    /// List unconfirmed owned UTXOs
     #[method(name = "my_unconfirmed_utxos")]
     async fn my_unconfirmed_utxos(&self) -> RpcResult<Vec<(OutPoint, Output)>>;
 
+    /// List owned UTXOs
     #[method(name = "my_utxos")]
     async fn my_utxos(&self) -> RpcResult<Vec<FilledOutput>>;
 
+    /// Reserve a BitAsset
     #[method(name = "reserve_bitasset")]
-    async fn reserve_bitasset(&self, plain_name: String) -> RpcResult<()>;
+    async fn reserve_bitasset(&self, plain_name: String) -> RpcResult<Txid>;
 
+    /// Set the wallet seed from a mnemonic seed phrase
     #[method(name = "set_seed_from_mnemonic")]
     async fn set_seed_from_mnemonic(&self, mnemonic: String) -> RpcResult<()>;
 
+    /// Get total sidechain wealth
     #[method(name = "sidechain_wealth")]
     async fn sidechain_wealth(&self) -> RpcResult<bitcoin::Amount>;
 
+    /// Stop the node
     #[method(name = "stop")]
     async fn stop(&self);
 
+    /// Transfer funds to the specified address
     #[method(name = "transfer")]
     async fn transfer(
         &self,
@@ -152,8 +171,9 @@ pub trait Rpc {
         value: u64,
         fee: u64,
         memo: Option<String>,
-    ) -> RpcResult<()>;
+    ) -> RpcResult<Txid>;
 
+    /// Initiate a withdrawal to the specified mainchain address
     #[method(name = "withdraw")]
     async fn withdraw(
         &self,

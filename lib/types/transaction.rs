@@ -6,6 +6,7 @@ use std::{
 };
 
 use bip300301::bitcoin;
+use clap::Parser;
 use educe::Educe;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -100,21 +101,28 @@ pub struct BitAssetDataUpdates {
 }
 
 /// Parameters of a Dutch Auction
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Parser, Serialize)]
 pub struct DutchAuctionParams {
     /// Block height at which the auction starts
+    #[arg(long)]
     pub start_block: u32,
     /// Auction duration, in blocks
+    #[arg(long)]
     pub duration: u32,
     /// The asset to be auctioned
+    #[arg(long)]
     pub base_asset: AssetId,
     /// The amount of the base asset to be auctioned
+    #[arg(long)]
     pub base_amount: u64,
     /// The asset in which the auction is to be quoted
+    #[arg(long)]
     pub quote_asset: AssetId,
     /// Initial price
+    #[arg(long)]
     pub initial_price: u64,
     /// Final price
+    #[arg(long)]
     pub final_price: u64,
 }
 

@@ -77,6 +77,10 @@ impl App {
             };
             Ok(node)
         })?;
+        let node = Arc::new(node);
+        let rt_guard = runtime.enter();
+        node.clone().run()?;
+        drop(rt_guard);
         let (unconfirmed_utxos, utxos) = {
             let mut utxos = wallet.get_utxos()?;
             let mut unconfirmed_utxos = wallet.get_unconfirmed_utxos()?;
@@ -92,7 +96,7 @@ impl App {
             (unconfirmed_utxos, utxos)
         };
         Ok(Self {
-            node: Arc::new(node),
+            node,
             wallet: Arc::new(wallet),
             miner: Arc::new(TokioRwLock::new(miner)),
             unconfirmed_utxos,

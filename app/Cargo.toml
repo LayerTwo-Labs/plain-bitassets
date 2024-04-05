@@ -18,20 +18,23 @@ bincode = "1.3.3"
 bip300301.workspace = true
 blake3 = "1.4.1"
 borsh = "1.3.0"
-clap = { version = "4.3.19", features = ["derive"] }
+clap = { version = "4.5.4", features = ["derive"] }
 ctrlc = "3.4.0"
 dirs = "5.0.1"
-eframe = "0.26.2"
+eframe = "0.27.1"
 either = "1.9.0"
 fraction = { version = "0.14.0", features = ["with-serde-support"] }
 futures = "0.3.30"
 hex = "0.4.3"
 human-size = "0.4.3"
 itertools = "0.11.0"
-jsonrpsee = { version = "0.20.0", features = ["client-core", "macros", "server"] }
+jsonrpsee = { version = "0.20.0", features = ["server"] }
 parking_lot = "0.12.1"
 plain_bitassets = { path = "../lib" }
+plain_bitassets_app_cli = { path = "../cli" }
+plain_bitassets_app_rpc_api = { path = "../rpc-api" }
 serde = { version = "1.0.179", features = ["derive"] }
+shlex = "1.3.0"
 strum = { version = "0.25.0", features = ["derive"] }
 thiserror = "1.0.44"
 tiny-bip39 = "1.0.0"
@@ -51,10 +54,6 @@ optional = true
 [features]
 default = ["zmq"]
 zmq = ["dep:async_zmq", "plain_bitassets/zmq"]
-
-[lib]
-name = "plain_bitassets_app_rpc_api"
-path = "rpc_api.rs"
 
 [[bin]]
 name = "plain_bitassets_app"
