@@ -640,7 +640,7 @@ dependencies = [
 [[package]]
 name = "bip300301"
 version = "0.1.1"
-source = "git+https://github.com/Ash-L2L/bip300301.git?rev=e47a263c8cbf9c520aa80f71788ee28e9f11bb62#e47a263c8cbf9c520aa80f71788ee28e9f11bb62"
+source = "git+https://github.com/Ash-L2L/bip300301.git?rev=64568dee7b89fe8c021226f10b17a18fe3386871#64568dee7b89fe8c021226f10b17a18fe3386871"
 dependencies = [
  "base64 0.21.7",
  "bitcoin",
@@ -650,6 +650,7 @@ dependencies = [
  "jsonrpsee",
  "serde",
  "serde_json",
+ "serde_with",
  "thiserror",
  "tokio",
  "tracing",
@@ -3711,7 +3712,7 @@ checksum = "d231b230927b5e4ad203db57bbcbee2802f6bce620b1e4a9024a07d94e2907ec"
 
 [[package]]
 name = "plain_bitassets"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "addr",
  "anyhow",
@@ -3759,7 +3760,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitassets_app"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "async_zmq",
@@ -3799,7 +3800,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitassets_app_cli"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "bip300301",
@@ -3813,7 +3814,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitassets_app_rpc_api"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "bip300301",
  "fraction",

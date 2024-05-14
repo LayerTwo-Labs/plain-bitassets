@@ -9,12 +9,8 @@ use std::{
 #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
 use async_zmq::SinkExt;
 use bip300301::{
-    bitcoin::{
-        self,
-        block::{self, Header as BitcoinHeader},
-        hashes::Hash,
-    },
-    DepositInfo,
+    bitcoin::{self, hashes::Hash},
+    DepositInfo, Header as BitcoinHeader,
 };
 use fallible_iterator::{FallibleIterator, IteratorExt};
 use fraction::Fraction;
@@ -220,7 +216,7 @@ async fn request_two_way_peg_data(
         .await?;
     let mut rwtxn = env.write_txn()?;
     // Deposits by block, first-to-last within each block
-    let deposits_by_block: HashMap<block::BlockHash, Vec<DepositInfo>> = {
+    let deposits_by_block: HashMap<bitcoin::BlockHash, Vec<DepositInfo>> = {
         let mut deposits = HashMap::<_, Vec<_>>::new();
         two_way_peg_data.deposits.into_iter().for_each(|deposit| {
             deposits
@@ -328,10 +324,10 @@ async fn submit_block(
     header: &Header,
     body: &Body,
 ) -> Result<(), Error> {
-    let mut rwtxn = env.write_txn()?;
     // Request mainchain headers if they do not exist
     request_ancestor_headers(env, archive, drivechain, header.prev_main_hash)
         .await?;
+    let mut rwtxn = env.write_txn()?;
     let () = connect_tip_(
         &mut rwtxn, archive, drivechain, mempool, state, header, body,
     )
