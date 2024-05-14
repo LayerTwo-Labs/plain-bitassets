@@ -145,8 +145,7 @@ impl RpcServer for RpcServerImpl {
             self.app.wallet.authorize(tx).map_err(convert_wallet_err)?;
         self.app
             .node
-            .submit_transaction(&authorized_tx)
-            .await
+            .submit_transaction(authorized_tx)
             .map_err(convert_node_err)?;
         Ok(amount_receive)
     }
@@ -165,11 +164,7 @@ impl RpcServer for RpcServerImpl {
     }
 
     async fn connect_peer(&self, addr: SocketAddr) -> RpcResult<()> {
-        self.app
-            .node
-            .connect_peer(addr)
-            .await
-            .map_err(convert_node_err)
+        self.app.node.connect_peer(addr).map_err(convert_node_err)
     }
 
     async fn dutch_auction_bid(
@@ -184,10 +179,11 @@ impl RpcServer for RpcServerImpl {
             .get_dutch_auction_state(auction_id)
             .map_err(convert_node_err)?;
         let next_auction_state = auction_state
-            .bid(bid_size, height)
+            .bid(Txid::default(), bid_size, height)
             .map_err(|err| convert_node_err(err.into()))?;
-        let receive_quantity = auction_state.base_amount_remaining
-            - next_auction_state.base_amount_remaining;
+        let receive_quantity =
+            auction_state.base_amount_remaining.latest().data
+                - next_auction_state.base_amount_remaining.latest().data;
         let mut tx = Transaction::default();
         let () = self
             .app
@@ -205,8 +201,7 @@ impl RpcServer for RpcServerImpl {
             self.app.wallet.authorize(tx).map_err(convert_wallet_err)?;
         self.app
             .node
-            .submit_transaction(&authorized_tx)
-            .await
+            .submit_transaction(authorized_tx)
             .map_err(convert_node_err)?;
         Ok(receive_quantity)
     }
@@ -235,20 +230,19 @@ impl RpcServer for RpcServerImpl {
                 auction_id,
                 auction_state.base_asset,
                 auction_state.quote_asset,
-                auction_state.base_amount_remaining,
-                auction_state.quote_amount,
+                auction_state.base_amount_remaining.latest().data,
+                auction_state.quote_amount.latest().data,
             )
             .map_err(convert_wallet_err)?;
         let authorized_tx =
             self.app.wallet.authorize(tx).map_err(convert_wallet_err)?;
         self.app
             .node
-            .submit_transaction(&authorized_tx)
-            .await
+            .submit_transaction(authorized_tx)
             .map_err(convert_node_err)?;
         Ok((
-            auction_state.base_amount_remaining,
-            auction_state.quote_amount,
+            auction_state.base_amount_remaining.latest().data,
+            auction_state.quote_amount.latest().data,
         ))
     }
 
@@ -324,17 +318,6 @@ impl RpcServer for RpcServerImpl {
         Ok(block)
     }
 
-    async fn get_block_hash(&self, height: u32) -> RpcResult<BlockHash> {
-        let block_hash = self
-            .app
-            .node
-            .get_header(height)
-            .map_err(convert_node_err)?
-            .ok_or_else(|| custom_err("block not found"))?
-            .hash();
-        Ok(block_hash)
-    }
-
     async fn get_new_address(&self) -> RpcResult<Address> {
         self.app
             .wallet
@@ -343,12 +326,15 @@ impl RpcServer for RpcServerImpl {
     }
 
     async fn getblockcount(&self) -> RpcResult<u32> {
-        self.app.node.get_height().map_err(convert_node_err)
+        self.app.node.get_tip_height().map_err(convert_node_err)
     }
 
     async fn mine(&self, fee: Option<u64>) -> RpcResult<()> {
         let fee = fee.map(bip300301::bitcoin::Amount::from_sat);
-        self.app.mine(fee).await.map_err(convert_app_err)
+        self.app.local_pool.spawn_pinned({
+            let app = self.app.clone();
+            move || async move { app.mine(fee).await.map_err(convert_app_err) }
+        }).await.unwrap()
     }
 
     async fn my_unconfirmed_utxos(&self) -> RpcResult<Vec<(OutPoint, Output)>> {

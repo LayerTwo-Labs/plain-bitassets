@@ -10,10 +10,10 @@ pub use ed25519_dalek::{
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("borsh serialization error")]
+    BorshSerialize(#[from] borsh::io::Error),
     #[error("ed25519_dalek error")]
     DalekError(#[from] SignatureError),
-    #[error("bincode error")]
-    BincodeError(#[from] bincode::Error),
     #[error(
         "wrong key for address: address = {address},
              hash(verifying_key) = {hash_verifying_key}"
@@ -68,8 +68,8 @@ struct Package<'a> {
 pub fn verify_authorized_transaction(
     transaction: &AuthorizedTransaction,
 ) -> Result<(), Error> {
-    let serialized_transaction = bincode::serialize(&transaction.transaction)?;
-    let messages: Vec<_> = std::iter::repeat(serialized_transaction.as_slice())
+    let tx_bytes_canonical = borsh::to_vec(&transaction.transaction)?;
+    let messages: Vec<_> = std::iter::repeat(tx_bytes_canonical.as_slice())
         .take(transaction.authorizations.len())
         .collect();
     let (verifying_keys, signatures): (Vec<VerifyingKey>, Vec<Signature>) =
@@ -95,7 +95,7 @@ pub fn verify_authorizations(body: &Body) -> Result<(), Error> {
     let serialized_transactions: Vec<Vec<u8>> = body
         .transactions
         .par_iter()
-        .map(bincode::serialize)
+        .map(borsh::to_vec)
         .collect::<Result<_, _>>()?;
     let serialized_transactions =
         serialized_transactions.iter().map(Vec::as_slice);
@@ -162,8 +162,8 @@ pub fn sign(
     signing_key: &SigningKey,
     transaction: &Transaction,
 ) -> Result<Signature, Error> {
-    let message = bincode::serialize(&transaction)?;
-    Ok(signing_key.sign(&message))
+    let tx_bytes_canonical = borsh::to_vec(&transaction)?;
+    Ok(signing_key.sign(&tx_bytes_canonical))
 }
 
 pub fn authorize(
@@ -172,7 +172,7 @@ pub fn authorize(
 ) -> Result<AuthorizedTransaction, Error> {
     let mut authorizations: Vec<Authorization> =
         Vec::with_capacity(addresses_signing_keys.len());
-    let message = bincode::serialize(&transaction)?;
+    let tx_bytes_canonical = borsh::to_vec(&transaction)?;
     for (address, keypair) in addresses_signing_keys {
         let hash_verifying_key = get_address(&keypair.verifying_key());
         if *address != hash_verifying_key {
@@ -183,7 +183,7 @@ pub fn authorize(
         }
         let authorization = Authorization {
             verifying_key: keypair.verifying_key(),
-            signature: keypair.sign(&message),
+            signature: keypair.sign(&tx_bytes_canonical),
         };
         authorizations.push(authorization);
     }

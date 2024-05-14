@@ -69,8 +69,6 @@ pub enum Command {
     GetAmmPrice { base: AssetId, quote: AssetId },
     /// Get block data
     GetBlock { block_hash: BlockHash },
-    /// Get the hash of the block at the specified height
-    GetBlockHash { height: u32 },
     /// Get the current block count
     GetBlockcount,
     /// Get a new address
@@ -215,10 +213,6 @@ impl Cli {
             Command::GetBlock { block_hash } => {
                 let block = rpc_client.get_block(block_hash).await?;
                 serde_json::to_string_pretty(&block)?
-            }
-            Command::GetBlockHash { height } => {
-                let block_hash = rpc_client.get_block_hash(height).await?;
-                format!("{block_hash}")
             }
             Command::GetBlockcount => {
                 let blockcount = rpc_client.getblockcount().await?;

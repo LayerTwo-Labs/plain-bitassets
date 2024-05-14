@@ -1,9 +1,6 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
-use heed::{
-    types::{OwnedType, SerdeBincode},
-    Database, RoTxn, RwTxn,
-};
+use heed::{types::SerdeBincode, Database, RoTxn, RwTxn};
 
 use crate::types::{
     Address, AuthorizedTransaction, InPoint, OutPoint, Output, Txid,
@@ -22,7 +19,7 @@ pub enum Error {
 #[derive(Clone)]
 pub struct MemPool {
     pub transactions:
-        Database<OwnedType<Txid>, SerdeBincode<AuthorizedTransaction>>,
+        Database<SerdeBincode<Txid>, SerdeBincode<AuthorizedTransaction>>,
     pub spent_utxos: Database<SerdeBincode<OutPoint>, SerdeBincode<InPoint>>,
     /// Associates relevant txs to each address
     address_to_txs:
@@ -145,10 +142,8 @@ impl MemPool {
         rwtxn: &mut RwTxn,
         transaction: &AuthorizedTransaction,
     ) -> Result<(), Error> {
-        println!(
-            "adding transaction {} to mempool",
-            transaction.transaction.txid()
-        );
+        let txid = transaction.transaction.txid();
+        tracing::debug!("adding transaction {txid} to mempool");
         let stxos = {
             let txid = transaction.transaction.txid();
             transaction.transaction.inputs.iter().enumerate().map(
@@ -164,20 +159,31 @@ impl MemPool {
             )
         };
         let () = self.put_stxos(rwtxn, stxos)?;
-        self.transactions.put(
-            rwtxn,
-            &transaction.transaction.txid(),
-            transaction,
-        )?;
+        self.transactions.put(rwtxn, &txid, transaction)?;
         let () = self.assoc_tx_with_relevant_addresses(rwtxn, transaction)?;
         Ok(())
     }
 
-    pub fn delete(&self, rwtxn: &mut RwTxn, txid: &Txid) -> Result<(), Error> {
-        if let Some(tx) = self.transactions.get(rwtxn, txid)? {
-            let () = self.delete_stxos(rwtxn, &tx.transaction.inputs)?;
-            let () = self.unassoc_tx_with_relevant_addresses(rwtxn, &tx)?;
-            self.transactions.delete(rwtxn, txid)?;
+    pub fn delete(&self, rwtxn: &mut RwTxn, txid: Txid) -> Result<(), Error> {
+        let mut pending_deletes = VecDeque::from([txid]);
+        while let Some(txid) = pending_deletes.pop_front() {
+            if let Some(tx) = self.transactions.get(rwtxn, &txid)? {
+                let () = self.delete_stxos(rwtxn, &tx.transaction.inputs)?;
+                let () = self.unassoc_tx_with_relevant_addresses(rwtxn, &tx)?;
+                self.transactions.delete(rwtxn, &txid)?;
+                for vout in 0..tx.transaction.outputs.len() {
+                    let outpoint = OutPoint::Regular {
+                        txid,
+                        vout: vout as u32,
+                    };
+                    if let Some(InPoint::Regular {
+                        txid: child_txid, ..
+                    }) = self.spent_utxos.get(rwtxn, &outpoint)?
+                    {
+                        pending_deletes.push_back(child_txid);
+                    }
+                }
+            }
         }
         Ok(())
     }

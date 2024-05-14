@@ -24,7 +24,18 @@ pub fn update<T: serde::Serialize>(hasher: &mut blake3::Hasher, data: &T) {
     let _hasher = hasher.update(&data_serialized);
 }
 
-#[derive(Default, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Default,
+    Deserialize,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+)]
 pub struct BlockHash(#[serde(with = "serde_hexstr_human_readable")] pub Hash);
 
 impl From<Hash> for BlockHash {
@@ -79,7 +90,21 @@ impl FromStr for BlockHash {
     }
 }
 
-#[derive(Default, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(
+    BorshSerialize,
+    Clone,
+    Copy,
+    Default,
+    Deserialize,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+)]
+#[repr(transparent)]
+#[serde(transparent)]
 pub struct MerkleRoot(#[serde(with = "serde_hexstr_human_readable")] Hash);
 
 impl From<Hash> for MerkleRoot {
@@ -283,6 +308,12 @@ impl FromStr for AssetId {
 #[repr(transparent)]
 #[serde(transparent)]
 pub struct DutchAuctionId(pub Txid);
+
+impl std::fmt::Display for DutchAuctionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 impl FromHex for DutchAuctionId {
     type Error = <Hash as FromHex>::Error;

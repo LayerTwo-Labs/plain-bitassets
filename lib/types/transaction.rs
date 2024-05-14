@@ -6,6 +6,7 @@ use std::{
 };
 
 use bip300301::bitcoin;
+use borsh::BorshSerialize;
 use clap::Parser;
 use educe::Educe;
 use itertools::Itertools;
@@ -22,14 +23,47 @@ use super::{
 };
 use crate::authorization::{Authorization, VerifyingKey};
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+fn borsh_serialize_bitcoin_outpoint<W>(
+    block_hash: &bitcoin::OutPoint,
+    writer: &mut W,
+) -> borsh::io::Result<()>
+where
+    W: borsh::io::Write,
+{
+    let bitcoin::OutPoint { txid, vout } = block_hash;
+    let txid_bytes: &[u8; 32] = txid.as_ref();
+    borsh::BorshSerialize::serialize(&(txid_bytes, vout), writer)
+}
+
+#[derive(
+    BorshSerialize,
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+)]
 pub enum OutPoint {
     // Created by transactions.
-    Regular { txid: Txid, vout: u32 },
+    Regular {
+        txid: Txid,
+        vout: u32,
+    },
     // Created by block bodies.
-    Coinbase { merkle_root: MerkleRoot, vout: u32 },
+    Coinbase {
+        merkle_root: MerkleRoot,
+        vout: u32,
+    },
     // Created by mainchain deposits.
-    Deposit(bitcoin::OutPoint),
+    Deposit(
+        #[borsh(serialize_with = "borsh_serialize_bitcoin_outpoint")]
+        bitcoin::OutPoint,
+    ),
 }
 
 /// Reference to a tx input.
@@ -59,8 +93,42 @@ where
     vk.map(|vk| vk.to_bytes()).hash(state)
 }
 
+fn borsh_serialize_verifying_key<W>(
+    verifying_key: &VerifyingKey,
+    writer: &mut W,
+) -> borsh::io::Result<()>
+where
+    W: borsh::io::Write,
+{
+    borsh::BorshSerialize::serialize(verifying_key.as_bytes(), writer)
+}
+
+fn borsh_serialize_option_verifying_key<W>(
+    option_verifying_key: &Option<VerifyingKey>,
+    writer: &mut W,
+) -> borsh::io::Result<()>
+where
+    W: borsh::io::Write,
+{
+    #[derive(BorshSerialize)]
+    #[repr(transparent)]
+    struct Repr(
+        #[borsh(serialize_with = "borsh_serialize_verifying_key")] VerifyingKey,
+    );
+
+    borsh::BorshSerialize::serialize(&option_verifying_key.map(Repr), writer)
+}
+
 #[derive(
-    Clone, Debug, Default, Educe, Eq, PartialEq, Serialize, Deserialize,
+    BorshSerialize,
+    Clone,
+    Debug,
+    Default,
+    Deserialize,
+    Educe,
+    Eq,
+    PartialEq,
+    Serialize,
 )]
 #[educe(Hash)]
 pub struct BitAssetData {
@@ -73,20 +141,41 @@ pub struct BitAssetData {
     /// Optional pubkey used for encryption
     pub encryption_pubkey: Option<EncryptionPubKey>,
     /// Optional pubkey used for signing messages
+    #[borsh(serialize_with = "borsh_serialize_option_verifying_key")]
     #[educe(Hash(method = "hash_option_verifying_key"))]
     pub signing_pubkey: Option<VerifyingKey>,
 }
 
 /// Delete, retain, or set a value
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize)]
 pub enum Update<T> {
     Delete,
     Retain,
     Set(T),
 }
 
+fn borsh_serialize_update_verifying_key<W>(
+    update_verifying_key: &Update<VerifyingKey>,
+    writer: &mut W,
+) -> borsh::io::Result<()>
+where
+    W: borsh::io::Write,
+{
+    #[derive(BorshSerialize)]
+    #[repr(transparent)]
+    struct Repr(
+        #[borsh(serialize_with = "borsh_serialize_verifying_key")] VerifyingKey,
+    );
+    let update_verifying_key_repr = match update_verifying_key {
+        Update::Delete => Update::Delete,
+        Update::Retain => Update::Retain,
+        Update::Set(vk) => Update::Set(Repr(*vk)),
+    };
+    borsh::BorshSerialize::serialize(&update_verifying_key_repr, writer)
+}
+
 /// Updates to the data associated with a BitAsset
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize)]
 pub struct BitAssetDataUpdates {
     /// Commitment to arbitrary data
     pub commitment: Update<Hash>,
@@ -97,11 +186,14 @@ pub struct BitAssetDataUpdates {
     /// Optional pubkey used for encryption
     pub encryption_pubkey: Update<EncryptionPubKey>,
     /// Optional pubkey used for signing messages
+    #[borsh(serialize_with = "borsh_serialize_update_verifying_key")]
     pub signing_pubkey: Update<VerifyingKey>,
 }
 
 /// Parameters of a Dutch Auction
-#[derive(Clone, Copy, Debug, Deserialize, Parser, Serialize)]
+#[derive(
+    BorshSerialize, Clone, Copy, Debug, Deserialize, Parser, Serialize,
+)]
 pub struct DutchAuctionParams {
     /// Block height at which the auction starts
     #[arg(long)]
@@ -127,7 +219,7 @@ pub struct DutchAuctionParams {
 }
 
 #[allow(clippy::enum_variant_names)]
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize)]
 pub enum TransactionData {
     /// Burn an AMM position
     AmmBurn {
@@ -200,7 +292,7 @@ pub enum TransactionData {
 
 pub type TxData = TransactionData;
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(BorshSerialize, Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Transaction {
     pub inputs: TxInputs,
     pub outputs: TxOutputs,
@@ -213,6 +305,35 @@ pub struct Transaction {
 pub struct FilledTransaction {
     pub transaction: Transaction,
     pub spent_utxos: Vec<FilledOutput>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Authorized<T> {
+    pub transaction: T,
+    /// Authorizations are called witnesses in Bitcoin.
+    pub authorizations: Vec<Authorization>,
+}
+
+pub type AuthorizedTransaction = Authorized<Transaction>;
+
+impl AuthorizedTransaction {
+    /// Return an iterator over all addresses relevant to the transaction
+    pub fn relevant_addresses(&self) -> HashSet<Address> {
+        let input_addrs =
+            self.authorizations.iter().map(|auth| auth.get_address());
+        let output_addrs =
+            self.transaction.outputs.iter().map(|output| output.address);
+        input_addrs.chain(output_addrs).collect()
+    }
+}
+
+impl From<Authorized<FilledTransaction>> for AuthorizedTransaction {
+    fn from(tx: Authorized<FilledTransaction>) -> Self {
+        Self {
+            transaction: tx.transaction.transaction,
+            authorizations: tx.authorizations,
+        }
+    }
 }
 
 /// Struct describing an AMM burn
@@ -274,24 +395,6 @@ pub struct DutchAuctionCollect {
     pub amount_offered_remaining: u64,
     //// Amount of receive asset received
     pub amount_received: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuthorizedTransaction {
-    pub transaction: Transaction,
-    /// Authorization is called witness in Bitcoin.
-    pub authorizations: Vec<Authorization>,
-}
-
-impl AuthorizedTransaction {
-    /// Return an iterator over all addresses relevant to the transaction
-    pub fn relevant_addresses(&self) -> HashSet<Address> {
-        let input_addrs =
-            self.authorizations.iter().map(|auth| auth.get_address());
-        let output_addrs =
-            self.transaction.outputs.iter().map(|output| output.address);
-        input_addrs.chain(output_addrs).collect()
-    }
 }
 
 impl std::fmt::Display for OutPoint {

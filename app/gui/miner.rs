@@ -22,8 +22,8 @@ impl Default for Miner {
 
 impl Miner {
     pub fn show(&mut self, app: &App, ui: &mut egui::Ui) {
-        let block_height = app.node.get_height().unwrap_or(0);
-        let best_hash = app.node.get_best_hash().unwrap_or([0; 32].into());
+        let block_height = app.node.get_tip_height().unwrap_or(0);
+        let best_hash = app.node.get_tip().unwrap_or([0; 32].into());
         ui.label("Block height: ");
         ui.monospace(format!("{block_height}"));
         ui.label("Best hash: ");
@@ -35,10 +35,10 @@ impl Miner {
             .clicked()
         {
             self.running.store(true, atomic::Ordering::SeqCst);
-            app.runtime.spawn({
+            app.local_pool.spawn_pinned({
                 let app = app.clone();
                 let running = self.running.clone();
-                async move {
+                || async move {
                     tracing::debug!("Mining...");
                     let mining_result = app.mine(None).await;
                     running.store(false, atomic::Ordering::SeqCst);

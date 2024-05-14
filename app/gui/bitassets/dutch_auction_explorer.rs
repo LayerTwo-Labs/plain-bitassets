@@ -47,18 +47,27 @@ fn show_dutch_auction_state(
     } = auction_state;
     [
         (start_block as &dyn Display, "Start Block"),
-        (most_recent_bid_block, "Most Recent Bid Block"),
+        (
+            &most_recent_bid_block.latest().data,
+            "Most Recent Bid Block",
+        ),
         (duration, "Duration"),
         (base_asset, "Base Asset"),
         (initial_base_amount, "Initial Base Amount"),
-        (base_amount_remaining, "Base Amount Remaining"),
+        (
+            &base_amount_remaining.latest().data,
+            "Base Amount Remaining",
+        ),
         (quote_asset, "Quote Asset"),
-        (quote_amount, "Quote Amount"),
+        (&quote_amount.latest().data, "Quote Amount"),
         (initial_price, "Initial Price"),
-        (price_after_most_recent_bid, "Price after most recent bid"),
+        (
+            &price_after_most_recent_bid.latest().data,
+            "Price after most recent bid",
+        ),
         (initial_end_price, "Initial End Price"),
         (
-            end_price_after_most_recent_bid,
+            &end_price_after_most_recent_bid.latest().data,
             "End Price after most recent bid",
         ),
     ]

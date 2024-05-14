@@ -1,18 +1,19 @@
 use std::{collections::HashMap, sync::Arc};
 
 use parking_lot::RwLock;
-use tokio::sync::RwLock as TokioRwLock;
-
 use plain_bitassets::{
     bip300301::{bitcoin, MainClient},
     format_deposit_address,
     miner::{self, Miner},
     node::{self, Node, THIS_SIDECHAIN},
     types::{
-        self, BitcoinOutputContent, FilledOutput, OutPoint, Output, Transaction,
+        self, BitcoinOutputContent, Body, FilledOutput, OutPoint, Output,
+        Transaction,
     },
     wallet::{self, Wallet},
 };
+use tokio::sync::RwLock as TokioRwLock;
+use tokio_util::task::LocalPoolHandle;
 
 use crate::cli::Config;
 
@@ -24,6 +25,7 @@ pub struct App {
     pub utxos: Arc<RwLock<HashMap<OutPoint, FilledOutput>>>,
     pub unconfirmed_utxos: Arc<RwLock<HashMap<OutPoint, Output>>>,
     pub runtime: Arc<tokio::runtime::Runtime>,
+    pub local_pool: LocalPoolHandle,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -62,24 +64,18 @@ impl App {
             &config.main_user,
             &config.main_password,
         )?;
-        let node = runtime.block_on(async {
-            let node = match Node::new(
-                config.net_addr,
-                &config.datadir,
-                config.main_addr,
-                &config.main_password,
-                &config.main_user,
-                #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
-                config.zmq_addr,
-            ) {
-                Ok(node) => node,
-                Err(err) => return Err(err),
-            };
-            Ok(node)
-        })?;
-        let node = Arc::new(node);
         let rt_guard = runtime.enter();
-        node.clone().run()?;
+        let local_pool = LocalPoolHandle::new(1);
+        let node = Node::new(
+            config.net_addr,
+            &config.datadir,
+            config.main_addr,
+            &config.main_password,
+            &config.main_user,
+            local_pool.clone(),
+            #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
+            config.zmq_addr,
+        )?;
         drop(rt_guard);
         let (unconfirmed_utxos, utxos) = {
             let mut utxos = wallet.get_utxos()?;
@@ -96,19 +92,19 @@ impl App {
             (unconfirmed_utxos, utxos)
         };
         Ok(Self {
-            node,
+            node: Arc::new(node),
             wallet: Arc::new(wallet),
             miner: Arc::new(TokioRwLock::new(miner)),
             unconfirmed_utxos,
             utxos,
             runtime: Arc::new(runtime),
+            local_pool,
         })
     }
 
     pub fn sign_and_send(&self, tx: Transaction) -> Result<(), Error> {
         let authorized_transaction = self.wallet.authorize(tx)?;
-        self.runtime
-            .block_on(self.node.submit_transaction(&authorized_transaction))?;
+        self.node.submit_transaction(authorized_transaction)?;
         self.update_utxos()?;
         Ok(())
     }
@@ -150,8 +146,11 @@ impl App {
                 types::OutputContent::Value(BitcoinOutputContent(tx_fees)),
             )],
         };
-        let body = types::Body::new(txs, coinbase);
-        let prev_side_hash = self.node.get_best_hash()?;
+        let body = {
+            let txs = txs.into_iter().map(|tx| tx.into()).collect();
+            Body::new(txs, coinbase)
+        };
+        let prev_side_hash = self.node.get_tip()?;
         let prev_main_hash = self
             .miner
             .read()

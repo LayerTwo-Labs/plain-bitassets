@@ -27,7 +27,7 @@ pub struct Activity {
 
 impl Activity {
     pub fn new(app: &App) -> Self {
-        let height = app.node.get_height().unwrap_or(0);
+        let height = app.node.get_tip_height().unwrap_or(0);
         Self {
             block_explorer: BlockExplorer::new(height),
             mempool_explorer: Default::default(),

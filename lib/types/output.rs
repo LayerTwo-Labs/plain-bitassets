@@ -1,4 +1,5 @@
 use bip300301::bitcoin;
+use borsh::BorshSerialize;
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -6,7 +7,9 @@ use super::{
     AssetId, BitAssetId, DutchAuctionId, GetBitcoinValue, Hash, InPoint, Txid,
 };
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(
+    BorshSerialize, Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize,
+)]
 #[repr(transparent)]
 #[serde(transparent)]
 pub struct BitcoinOutputContent(pub u64);
@@ -30,7 +33,24 @@ impl From<BitcoinOutputContent> for AssetOutputContent {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+fn borsh_serialize_bitcoin_address<V, W>(
+    bitcoin_address: &bitcoin::Address<V>,
+    writer: &mut W,
+) -> borsh::io::Result<()>
+where
+    V: bitcoin::address::NetworkValidation,
+    W: borsh::io::Write,
+{
+    let spk = bitcoin_address
+        .as_unchecked()
+        .assume_checked_ref()
+        .script_pubkey();
+    borsh::BorshSerialize::serialize(spk.as_bytes(), writer)
+}
+
+#[derive(
+    BorshSerialize, Clone, Debug, Deserialize, Eq, PartialEq, Serialize,
+)]
 pub enum OutputContent {
     AmmLpToken(u64),
     BitAsset(u64),
@@ -42,6 +62,7 @@ pub enum OutputContent {
     Withdrawal {
         value: u64,
         main_fee: u64,
+        #[borsh(serialize_with = "borsh_serialize_bitcoin_address")]
         main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
     },
 }
@@ -335,7 +356,9 @@ impl GetBitcoinValue for FilledContent {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(
+    BorshSerialize, Clone, Debug, Deserialize, Eq, PartialEq, Serialize,
+)]
 pub struct Output<Content = OutputContent> {
     #[serde(with = "serde_display_fromstr_human_readable")]
     pub address: Address,

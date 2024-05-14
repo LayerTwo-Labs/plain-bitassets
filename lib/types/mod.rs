@@ -1,6 +1,10 @@
-use std::{cmp::Ordering, collections::HashMap};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, HashMap},
+};
 
 use bech32::{FromBase32, ToBase32};
+use borsh::BorshSerialize;
 use serde::{Deserialize, Serialize};
 
 use bip300301::bitcoin;
@@ -24,7 +28,7 @@ pub use output::{
     SpentOutput,
 };
 pub use transaction::{
-    AmmBurn, AmmMint, AmmSwap, AuthorizedTransaction, BitAssetData,
+    AmmBurn, AmmMint, AmmSwap, Authorized, AuthorizedTransaction, BitAssetData,
     BitAssetDataUpdates, DutchAuctionBid, DutchAuctionCollect,
     DutchAuctionParams, FilledTransaction, InPoint, OutPoint, Transaction,
     TxData, TxInputs, Update,
@@ -112,72 +116,6 @@ pub trait Verify {
     fn verify_body(body: &Body) -> Result<(), Self::Error>;
 }
 
-/// Wrapper around x25519 pubkeys
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub struct EncryptionPubKey(pub x25519_dalek::PublicKey);
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Header {
-    pub merkle_root: MerkleRoot,
-    pub prev_side_hash: BlockHash,
-    pub prev_main_hash: bitcoin::BlockHash,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub enum WithdrawalBundleStatus {
-    Failed,
-    Confirmed,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WithdrawalBundle {
-    pub spend_utxos: HashMap<OutPoint, FilledOutput>,
-    pub transaction: bitcoin::Transaction,
-}
-
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
-pub struct TwoWayPegData {
-    pub deposits: HashMap<OutPoint, Output>,
-    pub deposit_block_hash: Option<bitcoin::BlockHash>,
-    pub bundle_statuses: HashMap<bitcoin::Txid, WithdrawalBundleStatus>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Body {
-    pub coinbase: Vec<Output>,
-    pub transactions: Vec<Transaction>,
-    pub authorizations: Vec<Authorization>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Block {
-    #[serde(flatten)]
-    pub header: Header,
-    #[serde(flatten)]
-    pub body: Body,
-    pub height: u32,
-}
-
-/*
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DisconnectData {
-    pub spent_utxos: HashMap<types::OutPoint, Output>,
-    pub deposits: Vec<types::OutPoint>,
-    pub pending_bundles: Vec<bitcoin::Txid>,
-    pub spent_bundles: HashMap<bitcoin::Txid, Vec<types::OutPoint>>,
-    pub spent_withdrawals: HashMap<types::OutPoint, Output>,
-    pub failed_withdrawals: Vec<bitcoin::Txid>,
-}
-*/
-
-#[derive(Eq, PartialEq, Clone, Debug)]
-pub struct AggregatedWithdrawal {
-    pub spend_utxos: HashMap<OutPoint, FilledOutput>,
-    pub main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
-    pub value: u64,
-    pub main_fee: u64,
-}
-
 #[derive(Debug, Error)]
 pub enum Bech32mDecodeError {
     #[error(transparent)]
@@ -189,6 +127,33 @@ pub enum Bech32mDecodeError {
     #[error("Wrong Bech32 variant. Only Bech32m is accepted.")]
     WrongVariant,
 }
+
+fn borsh_serialize_x25519_pubkey<W>(
+    pk: &x25519_dalek::PublicKey,
+    writer: &mut W,
+) -> borsh::io::Result<()>
+where
+    W: borsh::io::Write,
+{
+    borsh::BorshSerialize::serialize(pk.as_bytes(), writer)
+}
+
+/// Wrapper around x25519 pubkeys
+#[derive(
+    BorshSerialize,
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    PartialEq,
+    Serialize,
+)]
+pub struct EncryptionPubKey(
+    #[borsh(serialize_with = "borsh_serialize_x25519_pubkey")]
+    pub  x25519_dalek::PublicKey,
+);
 
 impl EncryptionPubKey {
     /// HRP for Bech32m encoding
@@ -236,10 +201,43 @@ where
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Header {
+    pub merkle_root: MerkleRoot,
+    pub prev_side_hash: BlockHash,
+    pub prev_main_hash: bitcoin::BlockHash,
+}
+
 impl Header {
     pub fn hash(&self) -> BlockHash {
         hashes::hash(self).into()
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum WithdrawalBundleStatus {
+    Failed,
+    Confirmed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WithdrawalBundle {
+    pub spend_utxos: BTreeMap<OutPoint, FilledOutput>,
+    pub transaction: bitcoin::Transaction,
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct TwoWayPegData {
+    pub deposits: HashMap<OutPoint, Output>,
+    pub deposit_block_hash: Option<bitcoin::BlockHash>,
+    pub bundle_statuses: HashMap<bitcoin::Txid, WithdrawalBundleStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Body {
+    pub coinbase: Vec<Output>,
+    pub transactions: Vec<Transaction>,
+    pub authorizations: Vec<Authorization>,
 }
 
 impl Body {
@@ -264,6 +262,24 @@ impl Body {
             transactions,
             authorizations,
         }
+    }
+
+    pub fn authorized_transactions(&self) -> Vec<AuthorizedTransaction> {
+        let mut authorizations_iter = self.authorizations.iter();
+        self.transactions
+            .iter()
+            .map(|tx| {
+                let mut authorizations = Vec::with_capacity(tx.inputs.len());
+                for _ in 0..tx.inputs.len() {
+                    let auth = authorizations_iter.next().unwrap();
+                    authorizations.push(auth.clone());
+                }
+                AuthorizedTransaction {
+                    transaction: tx.clone(),
+                    authorizations,
+                }
+            })
+            .collect()
     }
 
     pub fn compute_merkle_root(&self) -> MerkleRoot {
@@ -304,6 +320,35 @@ impl Body {
             .map(|output| output.get_bitcoin_value())
             .sum()
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Block {
+    #[serde(flatten)]
+    pub header: Header,
+    #[serde(flatten)]
+    pub body: Body,
+    pub height: u32,
+}
+
+/*
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DisconnectData {
+    pub spent_utxos: HashMap<types::OutPoint, Output>,
+    pub deposits: Vec<types::OutPoint>,
+    pub pending_bundles: Vec<bitcoin::Txid>,
+    pub spent_bundles: HashMap<bitcoin::Txid, Vec<types::OutPoint>>,
+    pub spent_withdrawals: HashMap<types::OutPoint, Output>,
+    pub failed_withdrawals: Vec<bitcoin::Txid>,
+}
+*/
+
+#[derive(Eq, PartialEq, Clone, Debug)]
+pub struct AggregatedWithdrawal {
+    pub spend_utxos: HashMap<OutPoint, FilledOutput>,
+    pub main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
+    pub value: u64,
+    pub main_fee: u64,
 }
 
 impl Ord for AggregatedWithdrawal {

@@ -118,10 +118,6 @@ pub trait Rpc {
     #[method(name = "get_block")]
     async fn get_block(&self, block_hash: BlockHash) -> RpcResult<Block>;
 
-    /// Get the hash of the block at the specified height
-    #[method(name = "get_block_hash")]
-    async fn get_block_hash(&self, height: u32) -> RpcResult<BlockHash>;
-
     /// Get a new address
     #[method(name = "get_new_address")]
     async fn get_new_address(&self) -> RpcResult<Address>;

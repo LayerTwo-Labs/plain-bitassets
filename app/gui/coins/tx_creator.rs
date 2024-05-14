@@ -336,16 +336,17 @@ impl TxCreator {
         let bid_size = u64::from_str(bid_size).map_err(|err| {
             anyhow::anyhow!("Failed to parse bid size: {err}")
         })?;
-        let height = app.node.get_height().unwrap_or(0);
+        let height = app.node.get_tip_height()?;
         let auction_state = app
             .node
             .get_dutch_auction_state(auction_id)
             .map_err(anyhow::Error::new)?;
         let next_auction_state = auction_state
-            .bid(bid_size, height)
+            .bid(Txid::default(), bid_size, height)
             .map_err(anyhow::Error::new)?;
-        let receive_quantity = auction_state.base_amount_remaining
-            - next_auction_state.base_amount_remaining;
+        let receive_quantity =
+            auction_state.base_amount_remaining.latest().data
+                - next_auction_state.base_amount_remaining.latest().data;
         let () = app.wallet.dutch_auction_bid(
             &mut tx,
             auction_id,
@@ -375,8 +376,8 @@ impl TxCreator {
             auction_id,
             auction_state.base_asset,
             auction_state.quote_asset,
-            auction_state.base_amount_remaining,
-            auction_state.quote_amount,
+            auction_state.base_amount_remaining.latest().data,
+            auction_state.quote_amount.latest().data,
         )?;
         Ok(tx)
     }

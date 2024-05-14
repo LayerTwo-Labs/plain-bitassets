@@ -1,3 +1,6 @@
+#![feature(let_chains)]
+#![feature(try_find)]
+
 use std::sync::mpsc;
 
 use clap::Parser as _;

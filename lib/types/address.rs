@@ -1,10 +1,13 @@
+use borsh::BorshSerialize;
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeAs, DisplayFromStr};
+use thiserror::Error;
 
-#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+#[derive(BorshSerialize, Clone, Copy, Eq, Hash, PartialEq)]
+#[repr(transparent)]
 pub struct Address(pub [u8; 20]);
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Error)]
 pub enum AddressParseError {
     #[error("bs58 error")]
     Bs58(#[from] bs58::decode::Error),
@@ -71,9 +74,9 @@ impl Serialize for Address {
         S: serde::Serializer,
     {
         if serializer.is_human_readable() {
-            self.to_base58().serialize(serializer)
+            Serialize::serialize(&self.to_base58(), serializer)
         } else {
-            self.0.serialize(serializer)
+            Serialize::serialize(&self.0, serializer)
         }
     }
 }
