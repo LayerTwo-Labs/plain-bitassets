@@ -8,7 +8,7 @@ use bip300301::bitcoin;
 use byteorder::{BigEndian, ByteOrder};
 use ed25519_dalek_bip32::{ChildIndex, DerivationPath, ExtendedSigningKey};
 use heed::{
-    types::{OwnedType, SerdeBincode, Str},
+    types::{Bytes, SerdeBincode, Str, U8},
     Database, RoTxn,
 };
 
@@ -53,10 +53,14 @@ pub enum Error {
 #[derive(Clone)]
 pub struct Wallet {
     env: heed::Env,
+    // Seed is always [u8; 64], but due to serde not implementing serialize
+    // for [T; 64], use heed's `Bytes`
     // FIXME: Don't store the seed in plaintext.
-    seed: Database<OwnedType<u8>, OwnedType<[u8; 64]>>,
-    pub address_to_index: Database<SerdeBincode<Address>, OwnedType<[u8; 4]>>,
-    pub index_to_address: Database<OwnedType<[u8; 4]>, SerdeBincode<Address>>,
+    seed: Database<U8, Bytes>,
+    pub address_to_index:
+        Database<SerdeBincode<Address>, SerdeBincode<[u8; 4]>>,
+    pub index_to_address:
+        Database<SerdeBincode<[u8; 4]>, SerdeBincode<Address>>,
     pub unconfirmed_utxos:
         Database<SerdeBincode<OutPoint>, SerdeBincode<Output>>,
     pub utxos: Database<SerdeBincode<OutPoint>, SerdeBincode<FilledOutput>>,
@@ -66,7 +70,7 @@ pub struct Wallet {
         SerdeBincode<SpentOutput<OutputContent>>,
     >,
     /// Associates reservation commitments with plaintext BitAsset names
-    pub bitasset_reservations: Database<OwnedType<[u8; 32]>, Str>,
+    pub bitasset_reservations: Database<SerdeBincode<[u8; 32]>, Str>,
     /// Associates BitAssets with plaintext names
     pub known_bitassets: Database<SerdeBincode<BitAssetId>, Str>,
 }
@@ -76,22 +80,29 @@ impl Wallet {
 
     pub fn new(path: &Path) -> Result<Self, Error> {
         std::fs::create_dir_all(path)?;
-        let env = heed::EnvOpenOptions::new()
-            .map_size(10 * 1024 * 1024) // 10MB
-            .max_dbs(Self::NUM_DBS)
-            .open(path)?;
-        let seed_db = env.create_database(Some("seed"))?;
-        let address_to_index = env.create_database(Some("address_to_index"))?;
-        let index_to_address = env.create_database(Some("index_to_address"))?;
+        let env = unsafe {
+            heed::EnvOpenOptions::new()
+                .map_size(10 * 1024 * 1024) // 10MB
+                .max_dbs(Self::NUM_DBS)
+                .open(path)?
+        };
+        let mut rwtxn = env.write_txn()?;
+        let seed_db = env.create_database(&mut rwtxn, Some("seed"))?;
+        let address_to_index =
+            env.create_database(&mut rwtxn, Some("address_to_index"))?;
+        let index_to_address =
+            env.create_database(&mut rwtxn, Some("index_to_address"))?;
         let unconfirmed_utxos =
-            env.create_database(Some("unconfirmed_utxos"))?;
-        let utxos = env.create_database(Some("utxos"))?;
-        let stxos = env.create_database(Some("stxos"))?;
+            env.create_database(&mut rwtxn, Some("unconfirmed_utxos"))?;
+        let utxos = env.create_database(&mut rwtxn, Some("utxos"))?;
+        let stxos = env.create_database(&mut rwtxn, Some("stxos"))?;
         let spent_unconfirmed_utxos =
-            env.create_database(Some("spent_unconfirmed_utxos"))?;
+            env.create_database(&mut rwtxn, Some("spent_unconfirmed_utxos"))?;
         let bitasset_reservations =
-            env.create_database(Some("bitasset_reservations"))?;
-        let known_bitassets = env.create_database(Some("known_bitassets"))?;
+            env.create_database(&mut rwtxn, Some("bitasset_reservations"))?;
+        let known_bitassets =
+            env.create_database(&mut rwtxn, Some("known_bitassets"))?;
+        rwtxn.commit()?;
         Ok(Self {
             env,
             seed: seed_db,
@@ -112,7 +123,7 @@ impl Wallet {
         index: u32,
     ) -> Result<ed25519_dalek::SigningKey, Error> {
         let seed = self.seed.get(txn, &0)?.ok_or(Error::NoSeed)?;
-        let xpriv = ExtendedSigningKey::from_seed(&seed)?;
+        let xpriv = ExtendedSigningKey::from_seed(seed)?;
         let derivation_path = DerivationPath::new([
             ChildIndex::Hardened(1),
             ChildIndex::Hardened(0),

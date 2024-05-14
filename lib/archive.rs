@@ -65,17 +65,20 @@ impl Archive {
     pub const NUM_DBS: u32 = 8;
 
     pub fn new(env: &heed::Env) -> Result<Self, Error> {
+        let mut rwtxn = env.write_txn()?;
         let block_hash_to_height =
-            env.create_database(Some("hash_to_height"))?;
+            env.create_database(&mut rwtxn, Some("hash_to_height"))?;
         let bmm_verifications =
-            env.create_database(Some("bmm_verifications"))?;
-        let bodies = env.create_database(Some("bodies"))?;
-        let deposits = env.create_database(Some("deposits"))?;
-        let headers = env.create_database(Some("headers"))?;
-        let main_headers = env.create_database(Some("main_headers"))?;
-        let total_work = env.create_database(Some("total_work"))?;
+            env.create_database(&mut rwtxn, Some("bmm_verifications"))?;
+        let bodies = env.create_database(&mut rwtxn, Some("bodies"))?;
+        let deposits = env.create_database(&mut rwtxn, Some("deposits"))?;
+        let headers = env.create_database(&mut rwtxn, Some("headers"))?;
+        let main_headers =
+            env.create_database(&mut rwtxn, Some("main_headers"))?;
+        let total_work = env.create_database(&mut rwtxn, Some("total_work"))?;
         let txid_to_inclusions =
-            env.create_database(Some("txid_to_inclusions"))?;
+            env.create_database(&mut rwtxn, Some("txid_to_inclusions"))?;
+        rwtxn.commit()?;
         Ok(Self {
             block_hash_to_height,
             bmm_verifications,

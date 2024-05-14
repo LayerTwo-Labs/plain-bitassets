@@ -3,7 +3,6 @@ use std::str::FromStr;
 use bip300301::bitcoin;
 use bitcoin::hashes::Hash as _;
 use borsh::{BorshDeserialize, BorshSerialize};
-use heed::zerocopy::{self, AsBytes, FromBytes};
 use hex::FromHex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -132,7 +131,6 @@ impl std::fmt::Debug for MerkleRoot {
 }
 
 #[derive(
-    AsBytes,
     BorshDeserialize,
     BorshSerialize,
     Clone,
@@ -140,7 +138,6 @@ impl std::fmt::Debug for MerkleRoot {
     Default,
     Deserialize,
     Eq,
-    FromBytes,
     Hash,
     Ord,
     PartialEq,

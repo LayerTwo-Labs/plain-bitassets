@@ -1052,24 +1052,28 @@ impl State {
     pub const WITHDRAWAL_BUNDLE_FAILURE_GAP: u32 = 5;
 
     pub fn new(env: &heed::Env) -> Result<Self, Error> {
-        let tip = env.create_database(Some("tip"))?;
-        let height = env.create_database(Some("height"))?;
-        let amm_pools = env.create_database(Some("amm_pools"))?;
+        let mut rwtxn = env.write_txn()?;
+        let tip = env.create_database(&mut rwtxn, Some("tip"))?;
+        let height = env.create_database(&mut rwtxn, Some("height"))?;
+        let amm_pools = env.create_database(&mut rwtxn, Some("amm_pools"))?;
         let bitasset_reservations =
-            env.create_database(Some("bitasset_reservations"))?;
+            env.create_database(&mut rwtxn, Some("bitasset_reservations"))?;
         let bitasset_seq_to_bitasset =
-            env.create_database(Some("bitasset_seq_to_bitasset"))?;
+            env.create_database(&mut rwtxn, Some("bitasset_seq_to_bitasset"))?;
         let bitasset_to_bitasset_seq =
-            env.create_database(Some("bitasset_to_bitasset_seq"))?;
-        let bitassets = env.create_database(Some("bitassets"))?;
-        let dutch_auctions = env.create_database(Some("dutch_auctions"))?;
-        let utxos = env.create_database(Some("utxos"))?;
-        let stxos = env.create_database(Some("stxos"))?;
+            env.create_database(&mut rwtxn, Some("bitasset_to_bitasset_seq"))?;
+        let bitassets = env.create_database(&mut rwtxn, Some("bitassets"))?;
+        let dutch_auctions =
+            env.create_database(&mut rwtxn, Some("dutch_auctions"))?;
+        let utxos = env.create_database(&mut rwtxn, Some("utxos"))?;
+        let stxos = env.create_database(&mut rwtxn, Some("stxos"))?;
         let pending_withdrawal_bundle =
-            env.create_database(Some("pending_withdrawal_bundle"))?;
+            env.create_database(&mut rwtxn, Some("pending_withdrawal_bundle"))?;
         let withdrawal_bundles =
-            env.create_database(Some("withdrawal_bundles"))?;
-        let deposit_blocks = env.create_database(Some("deposit_blocks"))?;
+            env.create_database(&mut rwtxn, Some("withdrawal_bundles"))?;
+        let deposit_blocks =
+            env.create_database(&mut rwtxn, Some("deposit_blocks"))?;
+        rwtxn.commit()?;
         Ok(Self {
             tip,
             height,
