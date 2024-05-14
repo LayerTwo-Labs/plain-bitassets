@@ -1,4 +1,5 @@
 #![feature(let_chains)]
+#![feature(try_find)]
 #![feature(yeet_expr)]
 
 pub mod archive;

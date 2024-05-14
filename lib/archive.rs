@@ -255,7 +255,7 @@ impl Archive {
             .ok_or(Error::NoMainHeader(block_hash))
     }
 
-    /// Get blocks in which a tx was included
+    /// Get blocks in which a tx was included, and tx index within each block
     pub fn get_tx_inclusions(
         &self,
         rotxn: &RoTxn,

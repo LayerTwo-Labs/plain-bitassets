@@ -371,3 +371,10 @@ impl PartialOrd for AggregatedWithdrawal {
         Some(self.cmp(other))
     }
 }
+
+/// Transaction index
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct TxIn {
+    pub block_hash: BlockHash,
+    pub idx: u32,
+}

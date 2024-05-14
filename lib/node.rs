@@ -791,6 +791,9 @@ impl NetTask {
     }
 }
 
+pub type FilledTransactionWithPosition =
+    (Authorized<FilledTransaction>, Option<TxIn>);
+
 #[derive(Clone)]
 pub struct Node {
     archive: Archive,
@@ -1036,7 +1039,7 @@ impl Node {
         Ok(self.archive.get_height(&rotxn, block_hash)?)
     }
 
-    /// Get blocks in which a tx was included.
+    /// Get blocks in which a tx was included, and tx index within those blocks
     pub fn get_tx_inclusions(
         &self,
         txid: Txid,
@@ -1278,13 +1281,80 @@ impl Node {
         Ok((returned_transactions, fee))
     }
 
+    /// get a transaction from the archive or mempool, if it exists
+    pub fn try_get_transaction(
+        &self,
+        txid: Txid,
+    ) -> Result<Option<Transaction>, Error> {
+        let rotxn = self.env.read_txn()?;
+        if let Some((block_hash, txin)) = self
+            .archive
+            .get_tx_inclusions(&rotxn, txid)?
+            .first_key_value()
+        {
+            let body = self.archive.get_body(&rotxn, *block_hash)?;
+            let tx = body.transactions.into_iter().nth(*txin as usize).unwrap();
+            Ok(Some(tx))
+        } else if let Some(auth_tx) =
+            self.mempool.transactions.get(&rotxn, &txid)?
+        {
+            Ok(Some(auth_tx.transaction))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// get a filled transaction from the archive/state or mempool,
+    /// and the tx index, if the transaction exists
+    /// and can be filled with the current state.
+    /// a tx index of `None` indicates that the tx is in the mempool.
+    pub fn try_get_filled_transaction(
+        &self,
+        txid: Txid,
+    ) -> Result<Option<FilledTransactionWithPosition>, Error> {
+        let rotxn = self.env.read_txn()?;
+        let tip = self.state.get_tip(&rotxn)?;
+        let inclusions = self.archive.get_tx_inclusions(&rotxn, txid)?;
+        if let Some((block_hash, idx)) =
+            inclusions.into_iter().try_find(|(block_hash, _)| {
+                self.archive.is_descendant(&rotxn, *block_hash, tip)
+            })?
+        {
+            let body = self.archive.get_body(&rotxn, block_hash)?;
+            let auth_txs = body.authorized_transactions();
+            let auth_tx = auth_txs.into_iter().nth(idx as usize).unwrap();
+            let filled_tx = self
+                .state
+                .fill_transaction_from_stxos(&rotxn, auth_tx.transaction)?;
+            let auth_tx = Authorized {
+                transaction: filled_tx,
+                authorizations: auth_tx.authorizations,
+            };
+            let txin = TxIn { block_hash, idx };
+            let res = (auth_tx, Some(txin));
+            return Ok(Some(res));
+        }
+        if let Some(auth_tx) = self.mempool.transactions.get(&rotxn, &txid)? {
+            match self.state.fill_authorized_transaction(&rotxn, auth_tx) {
+                Ok(filled_tx) => {
+                    let res = (filled_tx, None);
+                    Ok(Some(res))
+                }
+                Err(state::Error::NoUtxo { .. }) => Ok(None),
+                Err(err) => Err(err.into()),
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn get_pending_withdrawal_bundle(
         &self,
     ) -> Result<Option<WithdrawalBundle>, Error> {
-        let txn = self.env.read_txn()?;
+        let rotxn = self.env.read_txn()?;
         let bundle = self
             .state
-            .get_pending_withdrawal_bundle(&txn)?
+            .get_pending_withdrawal_bundle(&rotxn)?
             .map(|(bundle, _)| bundle);
         Ok(bundle)
     }

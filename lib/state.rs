@@ -1250,7 +1250,7 @@ impl State {
     }
 
     /// Fill a transaction that has already been applied
-    fn fill_transaction_from_stxos(
+    pub fn fill_transaction_from_stxos(
         &self,
         rotxn: &RoTxn,
         tx: Transaction,

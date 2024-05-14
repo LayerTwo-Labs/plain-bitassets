@@ -11,9 +11,17 @@ use plain_bitassets::{
     types::{
         Address, AssetId, BitAssetData, BitAssetId, Block, BlockHash,
         DutchAuctionId, DutchAuctionParams, FilledOutput, OutPoint, Output,
-        Txid,
+        Transaction, TxIn, Txid,
     },
 };
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TxInfo {
+    pub confirmations: Option<u32>,
+    pub fee_sats: u64,
+    pub txin: Option<TxIn>,
+}
 
 #[rpc(client, server)]
 pub trait Rpc {
@@ -121,6 +129,20 @@ pub trait Rpc {
     /// Get a new address
     #[method(name = "get_new_address")]
     async fn get_new_address(&self) -> RpcResult<Address>;
+
+    /// Get transaction by txid
+    #[method(name = "get_transaction")]
+    async fn get_transaction(
+        &self,
+        txid: Txid,
+    ) -> RpcResult<Option<Transaction>>;
+
+    /// Get information about a transaction in the current chain
+    #[method(name = "get_transaction_info")]
+    async fn get_transaction_info(
+        &self,
+        txid: Txid,
+    ) -> RpcResult<Option<TxInfo>>;
 
     /// Get the current block count
     #[method(name = "getblockcount")]

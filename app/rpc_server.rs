@@ -18,7 +18,7 @@ use plain_bitassets::{
     },
     wallet,
 };
-use plain_bitassets_app_rpc_api::RpcServer;
+use plain_bitassets_app_rpc_api::{RpcServer, TxInfo};
 
 use crate::app::{self, App};
 
@@ -323,6 +323,50 @@ impl RpcServer for RpcServerImpl {
             .wallet
             .get_new_address()
             .map_err(convert_wallet_err)
+    }
+
+    async fn get_transaction(
+        &self,
+        txid: Txid,
+    ) -> RpcResult<Option<Transaction>> {
+        self.app
+            .node
+            .try_get_transaction(txid)
+            .map_err(convert_node_err)
+    }
+
+    async fn get_transaction_info(
+        &self,
+        txid: Txid,
+    ) -> RpcResult<Option<TxInfo>> {
+        let Some((filled_tx, txin)) = self
+            .app
+            .node
+            .try_get_filled_transaction(txid)
+            .map_err(convert_node_err)?
+        else {
+            return Ok(None);
+        };
+        let confirmations = match txin {
+            Some(txin) => {
+                let tip_height =
+                    self.app.node.get_tip_height().map_err(convert_node_err)?;
+                let height = self
+                    .app
+                    .node
+                    .get_height(txin.block_hash)
+                    .map_err(convert_node_err)?;
+                Some(tip_height - height)
+            }
+            None => None,
+        };
+        let fee_sats = filled_tx.transaction.bitcoin_fee().unwrap();
+        let res = TxInfo {
+            confirmations,
+            fee_sats,
+            txin,
+        };
+        Ok(Some(res))
     }
 
     async fn getblockcount(&self) -> RpcResult<u32> {
