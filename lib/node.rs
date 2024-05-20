@@ -35,7 +35,7 @@ use crate::{
     types::*,
 };
 
-pub const THIS_SIDECHAIN: u8 = 2;
+pub const THIS_SIDECHAIN: u8 = 4;
 
 #[derive(Debug, thiserror::Error)]
 pub enum GetAmmPoolStateError {
