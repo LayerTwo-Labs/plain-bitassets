@@ -24,6 +24,7 @@ pub fn update<T: serde::Serialize>(hasher: &mut blake3::Hasher, data: &T) {
 }
 
 #[derive(
+    BorshSerialize,
     Clone,
     Copy,
     Default,

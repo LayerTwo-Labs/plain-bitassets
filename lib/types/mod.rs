@@ -201,10 +201,24 @@ where
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+fn borsh_serialize_bitcoin_block_hash<W>(
+    block_hash: &bitcoin::BlockHash,
+    writer: &mut W,
+) -> borsh::io::Result<()>
+where
+    W: borsh::io::Write,
+{
+    let bytes: &[u8; 32] = block_hash.as_ref();
+    borsh::BorshSerialize::serialize(bytes, writer)
+}
+
+#[derive(
+    BorshSerialize, Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize,
+)]
 pub struct Header {
     pub merkle_root: MerkleRoot,
     pub prev_side_hash: BlockHash,
+    #[borsh(serialize_with = "borsh_serialize_bitcoin_block_hash")]
     pub prev_main_hash: bitcoin::BlockHash,
 }
 

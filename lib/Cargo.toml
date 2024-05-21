@@ -41,7 +41,7 @@ serde_with = "3.4.0"
 sha256 = "1.2.2"
 thiserror = "1.0.44"
 tiny-bip39 = "1.0.0"
-tokio = { version = "1.29.1", features = ["sync"] }
+tokio = { version = "1.29.1", features = ["rt-multi-thread", "sync"] }
 tokio-stream = "0.1.15"
 tokio-util = { version = "0.7.10", features = ["rt"] }
 tracing = "0.1.40"

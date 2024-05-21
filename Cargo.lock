@@ -3768,7 +3768,7 @@ checksum = "d231b230927b5e4ad203db57bbcbee2802f6bce620b1e4a9024a07d94e2907ec"
 
 [[package]]
 name = "plain_bitassets"
-version = "0.8.4"
+version = "0.8.5"
 dependencies = [
  "addr",
  "anyhow",
@@ -3816,7 +3816,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitassets_app"
-version = "0.8.4"
+version = "0.8.5"
 dependencies = [
  "anyhow",
  "async_zmq",
@@ -3856,7 +3856,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitassets_app_cli"
-version = "0.8.4"
+version = "0.8.5"
 dependencies = [
  "anyhow",
  "bip300301",
@@ -3870,7 +3870,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitassets_app_rpc_api"
-version = "0.8.4"
+version = "0.8.5"
 dependencies = [
  "bip300301",
  "fraction",
