@@ -1451,12 +1451,14 @@ impl State {
 
     /// Check that
     /// * If the tx is a BitAsset reservation, then the number of bitasset
-    /// reservations in the outputs is exactly one more than the number of
-    /// bitasset reservations in the inputs. If the tx is a BitAsset
-    /// registration, then the number of bitasset reservations in the outputs
-    /// is exactly one less than the number of bitasset reservations in the
-    /// inputs. Otherwise, the number of bitasset reservations in the outputs
-    /// is exactly equal to the number of bitasset reservations in the inputs.
+    ///   reservations in the outputs is exactly one more than the number of
+    ///   bitasset reservations in the inputs.
+    /// * If the tx is a BitAsset
+    ///   registration, then the number of bitasset reservations in the outputs
+    ///   is exactly one less than the number of bitasset reservations in the
+    ///   inputs.
+    /// * Otherwise, the number of bitasset reservations in the outputs
+    ///   is exactly equal to the number of bitasset reservations in the inputs.
     pub fn validate_reservations(
         &self,
         tx: &FilledTransaction,
@@ -1494,12 +1496,12 @@ impl State {
      *      prior to the registration tx.
      *    * The last output must be a BitAsset control coin
      *    * If the initial supply is nonzero,
-     *      the second-to-last output must be a BitAsset outputj
-     *    Otherwise,
-     *    * The number of BitAsset control coin outputs is exactly the number
-     *      of BitAsset control coin inputs
-     *    * The number of BitAsset outputs is at least
-     *      the number of unique BitAssets in the inputs.
+     *      the second-to-last output must be a BitAsset output
+     *    * Otherwise,
+     *      * The number of BitAsset control coin outputs is exactly the number
+     *        of BitAsset control coin inputs
+     *      * The number of BitAsset outputs is at least
+     *        the number of unique BitAssets in the inputs.
      *  * If the tx is a BitAsset update, then there must be at least one
      *    BitAsset control coin input and output.
      *  * If the tx is an AMM Burn, then
