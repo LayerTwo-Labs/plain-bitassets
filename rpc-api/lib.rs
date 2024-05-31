@@ -10,8 +10,8 @@ use plain_bitassets::{
     state::{AmmPoolState, BitAssetSeqId, DutchAuctionState},
     types::{
         Address, AssetId, BitAssetData, BitAssetId, Block, BlockHash,
-        DutchAuctionId, DutchAuctionParams, FilledOutput, OutPoint, Output,
-        Transaction, TxIn, Txid,
+        DutchAuctionId, DutchAuctionParams, FilledOutput, FilledOutputContent,
+        OutPoint, Output, PointedOutput, Transaction, TxIn, Txid,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -144,9 +144,25 @@ pub trait Rpc {
         txid: Txid,
     ) -> RpcResult<Option<TxInfo>>;
 
+    /// Get wallet addresses, sorted by base58 encoding
+    #[method(name = "get_wallet_addresses")]
+    async fn get_wallet_addresses(&self) -> RpcResult<Vec<Address>>;
+
+    /// Get wallet UTXOs
+    #[method(name = "get_wallet_utxos")]
+    async fn get_wallet_utxos(
+        &self,
+    ) -> RpcResult<Vec<PointedOutput<FilledOutputContent>>>;
+
     /// Get the current block count
     #[method(name = "getblockcount")]
     async fn getblockcount(&self) -> RpcResult<u32>;
+
+    /// List all UTXOs
+    #[method(name = "list_utxos")]
+    async fn list_utxos(
+        &self,
+    ) -> RpcResult<Vec<PointedOutput<FilledOutputContent>>>;
 
     /// Attempt to mine a sidechain block
     #[method(name = "mine")]

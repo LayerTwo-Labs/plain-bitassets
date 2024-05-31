@@ -25,7 +25,7 @@ pub use hashes::{
 pub use output::{
     AssetOutput, AssetOutputContent, BitcoinOutput, BitcoinOutputContent,
     FilledContent as FilledOutputContent, FilledOutput, Output, OutputContent,
-    SpentOutput,
+    Pointed as PointedOutput, SpentOutput,
 };
 pub use transaction::{
     AmmBurn, AmmMint, AmmSwap, Authorized, AuthorizedTransaction, BitAssetData,

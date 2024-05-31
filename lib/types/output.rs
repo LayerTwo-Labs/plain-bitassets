@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     serde_display_fromstr_human_readable, serde_hexstr_human_readable, Address,
-    AssetId, BitAssetId, DutchAuctionId, GetBitcoinValue, Hash, InPoint, Txid,
+    AssetId, BitAssetId, DutchAuctionId, GetBitcoinValue, Hash, InPoint,
+    OutPoint, Txid,
 };
 
 #[derive(
@@ -564,4 +565,12 @@ impl GetBitcoinValue for FilledOutput {
 pub struct SpentOutput<Content = FilledContent> {
     pub output: Output<Content>,
     pub inpoint: InPoint,
+}
+
+#[derive(
+    BorshSerialize, Clone, Debug, Deserialize, Eq, PartialEq, Serialize,
+)]
+pub struct Pointed<Content = OutputContent> {
+    pub outpoint: OutPoint,
+    pub output: Output<Content>,
 }

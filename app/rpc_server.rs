@@ -13,8 +13,8 @@ use plain_bitassets::{
     state::{self, AmmPair, AmmPoolState, BitAssetSeqId, DutchAuctionState},
     types::{
         Address, AssetId, BitAssetData, BitAssetId, Block, BlockHash,
-        DutchAuctionId, DutchAuctionParams, FilledOutput, OutPoint, Output,
-        Transaction, Txid,
+        DutchAuctionId, DutchAuctionParams, FilledOutput, FilledOutputContent,
+        OutPoint, Output, PointedOutput, Transaction, Txid,
     },
     wallet,
 };
@@ -369,8 +369,41 @@ impl RpcServer for RpcServerImpl {
         Ok(Some(res))
     }
 
+    async fn get_wallet_addresses(&self) -> RpcResult<Vec<Address>> {
+        let addrs = self
+            .app
+            .wallet
+            .get_addresses()
+            .map_err(convert_wallet_err)?;
+        let mut res: Vec<_> = addrs.into_iter().collect();
+        res.sort_by_key(|addr| addr.to_base58());
+        Ok(res)
+    }
+
+    async fn get_wallet_utxos(
+        &self,
+    ) -> RpcResult<Vec<PointedOutput<FilledOutputContent>>> {
+        let utxos = self.app.wallet.get_utxos().map_err(convert_wallet_err)?;
+        let utxos = utxos
+            .into_iter()
+            .map(|(outpoint, output)| PointedOutput { outpoint, output })
+            .collect();
+        Ok(utxos)
+    }
+
     async fn getblockcount(&self) -> RpcResult<u32> {
         self.app.node.get_tip_height().map_err(convert_node_err)
+    }
+
+    async fn list_utxos(
+        &self,
+    ) -> RpcResult<Vec<PointedOutput<FilledOutputContent>>> {
+        let utxos = self.app.node.get_all_utxos().map_err(convert_node_err)?;
+        let res = utxos
+            .into_iter()
+            .map(|(outpoint, output)| PointedOutput { outpoint, output })
+            .collect();
+        Ok(res)
     }
 
     async fn mine(&self, fee: Option<u64>) -> RpcResult<()> {

@@ -450,14 +450,21 @@ impl Node {
         Ok(())
     }
 
+    pub fn get_all_utxos(
+        &self,
+    ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
+        let rotxn = self.env.read_txn()?;
+        self.state.get_utxos(&rotxn).map_err(Error::from)
+    }
+
     pub fn get_spent_utxos(
         &self,
         outpoints: &[OutPoint],
     ) -> Result<Vec<(OutPoint, SpentOutput)>, Error> {
-        let txn = self.env.read_txn()?;
+        let rotxn = self.env.read_txn()?;
         let mut spent = vec![];
         for outpoint in outpoints {
-            if let Some(output) = self.state.stxos.get(&txn, outpoint)? {
+            if let Some(output) = self.state.stxos.get(&rotxn, outpoint)? {
                 spent.push((*outpoint, output));
             }
         }
@@ -487,10 +494,10 @@ impl Node {
         &self,
         addresses: &HashSet<Address>,
     ) -> Result<HashMap<OutPoint, Output>, Error> {
-        let txn = self.env.read_txn()?;
+        let rotxn = self.env.read_txn()?;
         let mut res = HashMap::new();
         let () = addresses.iter().try_for_each(|addr| {
-            let utxos = self.mempool.get_unconfirmed_utxos(&txn, addr)?;
+            let utxos = self.mempool.get_unconfirmed_utxos(&rotxn, addr)?;
             res.extend(utxos);
             Result::<(), Error>::Ok(())
         })?;
@@ -501,8 +508,8 @@ impl Node {
         &self,
         addresses: &HashSet<Address>,
     ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
-        let txn = self.env.read_txn()?;
-        let utxos = self.state.get_utxos_by_addresses(&txn, addresses)?;
+        let rotxn = self.env.read_txn()?;
+        let utxos = self.state.get_utxos_by_addresses(&rotxn, addresses)?;
         Ok(utxos)
     }
 
@@ -510,13 +517,13 @@ impl Node {
         &self,
         block_hash: BlockHash,
     ) -> Result<Option<Header>, Error> {
-        let txn = self.env.read_txn()?;
-        Ok(self.archive.try_get_header(&txn, block_hash)?)
+        let rotxn = self.env.read_txn()?;
+        Ok(self.archive.try_get_header(&rotxn, block_hash)?)
     }
 
     pub fn get_header(&self, block_hash: BlockHash) -> Result<Header, Error> {
-        let txn = self.env.read_txn()?;
-        Ok(self.archive.get_header(&txn, block_hash)?)
+        let rotxn = self.env.read_txn()?;
+        Ok(self.archive.get_header(&rotxn, block_hash)?)
     }
 
     /// Get the block hash at the specified height in the current chain,
@@ -723,18 +730,17 @@ impl Node {
     ) -> Result<bool, Error> {
         let block_hash = header.hash();
         // Store the header, if ancestors exist
-        match self.try_get_header(header.prev_side_hash)? {
-            None => {
-                tracing::error!(
-                    "Rejecting block {block_hash} due to missing ancestor headers",
-                );
-                return Ok(false);
-            }
-            Some(_) => {
-                let mut rwtxn = self.env.write_txn()?;
-                let () = self.archive.put_header(&mut rwtxn, header)?;
-                rwtxn.commit()?;
-            }
+        if header.prev_side_hash != BlockHash::default()
+            && self.try_get_header(header.prev_side_hash)?.is_none()
+        {
+            tracing::error!(
+                "Rejecting block {block_hash} due to missing ancestor headers",
+            );
+            return Ok(false);
+        } else {
+            let mut rwtxn = self.env.write_txn()?;
+            let () = self.archive.put_header(&mut rwtxn, header)?;
+            rwtxn.commit()?;
         }
         // Request mainchain headers if they do not exist
         let _: mainchain_task::Response = self

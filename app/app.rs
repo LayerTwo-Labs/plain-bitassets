@@ -20,7 +20,7 @@ use crate::cli::Config;
 #[derive(Clone)]
 pub struct App {
     pub node: Arc<Node>,
-    pub wallet: Arc<Wallet>,
+    pub wallet: Wallet,
     pub miner: Arc<TokioRwLock<Miner>>,
     pub utxos: Arc<RwLock<HashMap<OutPoint, FilledOutput>>>,
     pub unconfirmed_utxos: Arc<RwLock<HashMap<OutPoint, Output>>>,
@@ -93,7 +93,7 @@ impl App {
         };
         Ok(Self {
             node: Arc::new(node),
-            wallet: Arc::new(wallet),
+            wallet,
             miner: Arc::new(TokioRwLock::new(miner)),
             unconfirmed_utxos,
             utxos,
