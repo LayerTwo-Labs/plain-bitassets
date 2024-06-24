@@ -37,11 +37,12 @@ impl Miner {
     }
 
     pub async fn generate(&self) -> Result<(), Error> {
-        self.drivechain
-            .client
-            .generate(1)
-            .await
-            .map_err(bip300301::Error::from)?;
+        self.drivechain.client.generate(1).await.map_err(|source| {
+            bip300301::Error::Jsonrpsee {
+                source,
+                main_addr: self.drivechain.main_addr,
+            }
+        })?;
         Ok(())
     }
 
@@ -68,7 +69,10 @@ impl Miner {
                 prev_bytes,
             )
             .await
-            .map_err(bip300301::Error::from)?;
+            .map_err(|source| bip300301::Error::Jsonrpsee {
+                source,
+                main_addr: self.drivechain.main_addr,
+            })?;
         let txid = value["txid"]["txid"]
             .as_str()
             .map(|s| s.to_owned())
@@ -83,21 +87,28 @@ impl Miner {
 
     pub async fn confirm_bmm(
         &mut self,
-    ) -> Result<Option<(Header, Body)>, Error> {
+    ) -> Result<Option<(bitcoin::BlockHash, Header, Body)>, Error> {
         const VERIFY_BMM_POLL_INTERVAL: Duration = Duration::from_secs(15);
         if let Some((header, body)) = self.block.clone() {
-            let block_hash = header.hash().into();
+            let block_hash = header.hash();
             tracing::trace!(%block_hash, "verifying bmm...");
-            self.drivechain
-                .verify_bmm(
-                    &header.prev_main_hash,
-                    &block_hash,
+            let (bmm_verified, main_hash) = self
+                .drivechain
+                .verify_bmm_next_block(
+                    header.prev_main_hash,
+                    block_hash.into(),
                     VERIFY_BMM_POLL_INTERVAL,
                 )
                 .await?;
-            tracing::trace!(%block_hash, "verified bmm");
-            self.block = None;
-            return Ok(Some((header, body)));
+            if bmm_verified {
+                tracing::trace!(%block_hash, "verified bmm");
+                self.block = None;
+                return Ok(Some((main_hash, header, body)));
+            } else {
+                tracing::trace!(%block_hash, "bmm verification failed");
+                self.block = None;
+                return Ok(None);
+            }
         }
         Ok(None)
     }

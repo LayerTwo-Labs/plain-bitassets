@@ -10,6 +10,7 @@ use std::{
 use bip300301::{bitcoin, DepositInfo};
 use fallible_iterator::FallibleIterator;
 use fraction::Fraction;
+use futures::Stream;
 use tokio_util::task::LocalPoolHandle;
 
 use crate::{
@@ -22,10 +23,12 @@ use crate::{
     },
     types::{
         Address, AssetId, Authorized, AuthorizedTransaction, BitAssetData,
-        BitAssetId, Block, BlockHash, Body, DutchAuctionId, FilledOutput,
-        FilledTransaction, GetBitcoinValue, Header, InPoint, OutPoint, Output,
-        SpentOutput, Transaction, TxIn, Txid, WithdrawalBundle,
+        BitAssetId, Block, BlockHash, BmmResult, Body, DutchAuctionId,
+        FilledOutput, FilledTransaction, GetBitcoinValue, Header, InPoint,
+        OutPoint, Output, SpentOutput, Tip, Transaction, TxIn, Txid,
+        WithdrawalBundle,
     },
+    util::Watchable,
 };
 
 mod mainchain_task;
@@ -52,6 +55,8 @@ pub enum Error {
     Heed(#[from] heed::Error),
     #[error("quinn error")]
     Io(#[from] std::io::Error),
+    #[error("error requesting mainchain ancestors")]
+    MainchainAncestors(anyhow::Error),
     #[error("mempool error")]
     MemPool(#[from] mempool::Error),
     #[error("net error")]
@@ -68,6 +73,8 @@ pub enum Error {
     State(#[from] state::Error),
     #[error("Utreexo error: {0}")]
     Utreexo(String),
+    #[error("Verify BMM error")]
+    VerifyBmm(anyhow::Error),
 }
 
 /// Request any missing two way peg data up to the specified block hash.
@@ -228,12 +235,12 @@ impl Node {
         &self,
     ) -> Result<bitcoin::BlockHash, Error> {
         use bip300301::MainClient;
-        let res = self
-            .drivechain
-            .client
-            .getbestblockhash()
-            .await
-            .map_err(bip300301::Error::Jsonrpsee)?;
+        let res = self.drivechain.client.getbestblockhash().await.map_err(
+            |source| bip300301::Error::Jsonrpsee {
+                source,
+                main_addr: self.drivechain.main_addr,
+            },
+        )?;
         Ok(res)
     }
 
@@ -725,6 +732,7 @@ impl Node {
     /// or was rejected as the new tip.
     pub async fn submit_block(
         &self,
+        main_block_hash: bitcoin::BlockHash,
         header: &Header,
         body: &Body,
     ) -> Result<bool, Error> {
@@ -733,35 +741,62 @@ impl Node {
         if header.prev_side_hash != BlockHash::default()
             && self.try_get_header(header.prev_side_hash)?.is_none()
         {
-            tracing::error!(
+            tracing::error!(%block_hash,
                 "Rejecting block {block_hash} due to missing ancestor headers",
             );
             return Ok(false);
-        } else {
+        }
+        // Request mainchain headers if they do not exist
+        let mainchain_task::Response::AncestorHeaders(_, res): mainchain_task::Response = self
+            .mainchain_task
+            .request_oneshot(mainchain_task::Request::AncestorHeaders(
+                main_block_hash,
+            ))
+            .map_err(|_| Error::SendMainchainTaskRequest)?
+            .await
+            .map_err(|_| Error::ReceiveMainchainTaskResponse)?
+        else {
+            panic!("should be impossible")
+        };
+        let () = res.map_err(|err| Error::MainchainAncestors(err.into()))?;
+        // Verify BMM
+        let mainchain_task::Response::VerifyBmm(_, res) = self
+            .mainchain_task
+            .request_oneshot(mainchain_task::Request::VerifyBmm(
+                main_block_hash,
+            ))
+            .map_err(|_| Error::SendMainchainTaskRequest)?
+            .await
+            .map_err(|_| Error::ReceiveMainchainTaskResponse)?
+        else {
+            panic!("should be impossible")
+        };
+        if let Err(bip300301::BlockNotFoundError(missing_block)) =
+            res.map_err(|err| Error::VerifyBmm(err.into()))?
+        {
+            tracing::error!(%block_hash,
+                "Rejecting block {block_hash} due to missing mainchain block {missing_block}",
+            );
+            return Ok(false);
+        }
+        // Write header
+        tracing::trace!("Storing header: {block_hash}");
+        {
             let mut rwtxn = self.env.write_txn()?;
             let () = self.archive.put_header(&mut rwtxn, header)?;
             rwtxn.commit()?;
         }
-        // Request mainchain headers if they do not exist
-        let _: mainchain_task::Response = self
-            .mainchain_task
-            .request_oneshot(mainchain_task::Request::AncestorHeaders(
-                header.hash(),
-            ))
-            .map_err(|_| Error::SendMainchainTaskRequest)?
-            .await
-            .map_err(|_| Error::ReceiveMainchainTaskResponse)?;
-        // Verify BMM
-        let _: mainchain_task::Response = self
-            .mainchain_task
-            .request_oneshot(mainchain_task::Request::VerifyBmm(block_hash))
-            .map_err(|_| Error::SendMainchainTaskRequest)?
-            .await
-            .map_err(|_| Error::ReceiveMainchainTaskResponse)?;
+        tracing::trace!("Stored header: {block_hash}");
+        // Check BMM
         {
             let rotxn = self.env.read_txn()?;
-            if !self.archive.get_bmm_verification(&rotxn, block_hash)? {
-                tracing::error!(
+            if self.archive.get_bmm_result(
+                &rotxn,
+                block_hash,
+                main_block_hash,
+            )? == BmmResult::Failed
+            {
+                tracing::error!(%block_hash,
                     "Rejecting block {block_hash} due to failing BMM verification",
                 );
                 return Ok(false);
@@ -782,7 +817,7 @@ impl Node {
             if !(missing_bodies.is_empty()
                 || missing_bodies == vec![block_hash])
             {
-                tracing::error!(
+                tracing::error!(%block_hash,
                     "Rejecting block {block_hash} due to missing ancestor bodies",
                 );
                 return Ok(false);
@@ -795,7 +830,11 @@ impl Node {
             }
         }
         // Submit new tip
-        if !self.net_task.new_tip_ready_confirm(header.hash()).await? {
+        let new_tip = Tip {
+            block_hash,
+            main_block_hash,
+        };
+        if !self.net_task.new_tip_ready_confirm(new_tip).await? {
             return Ok(false);
         };
         let rotxn = self.env.read_txn()?;
@@ -818,5 +857,10 @@ impl Node {
                 .await?;
         }
         Ok(true)
+    }
+
+    /// Get a notification whenever the tip changes
+    pub fn watch_state(&self) -> impl Stream<Item = ()> {
+        self.state.watch()
     }
 }

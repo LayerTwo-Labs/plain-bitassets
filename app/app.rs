@@ -1,5 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
+use futures::{StreamExt, TryFutureExt};
 use parking_lot::RwLock;
 use plain_bitassets::{
     bip300301::{bitcoin, MainClient},
@@ -12,10 +13,47 @@ use plain_bitassets::{
     },
     wallet::{self, Wallet},
 };
-use tokio::sync::RwLock as TokioRwLock;
+use tokio::{spawn, sync::RwLock as TokioRwLock, task::JoinHandle};
 use tokio_util::task::LocalPoolHandle;
 
 use crate::cli::Config;
+
+fn update_wallet(node: &Node, wallet: &Wallet) -> Result<(), Error> {
+    let addresses = wallet.get_addresses()?;
+    let unconfirmed_utxos =
+        node.get_unconfirmed_utxos_by_addresses(&addresses)?;
+    let utxos = node.get_utxos_by_addresses(&addresses)?;
+    let confirmed_outpoints: Vec<_> = wallet.get_utxos()?.into_keys().collect();
+    let confirmed_spent = node
+        .get_spent_utxos(&confirmed_outpoints)?
+        .into_iter()
+        .map(|(outpoint, spent_output)| (outpoint, spent_output.inpoint));
+    let unconfirmed_outpoints: Vec<_> =
+        wallet.get_unconfirmed_utxos()?.into_keys().collect();
+    let unconfirmed_spent = node
+        .get_unconfirmed_spent_utxos(
+            confirmed_outpoints.iter().chain(&unconfirmed_outpoints),
+        )?
+        .into_iter();
+    let spent: Vec<_> = confirmed_spent.chain(unconfirmed_spent).collect();
+    wallet.put_utxos(&utxos)?;
+    wallet.put_unconfirmed_utxos(&unconfirmed_utxos)?;
+    wallet.spend_utxos(&spent)?;
+    Ok(())
+}
+
+/// Update (unconfirmed) utxos & wallet
+fn update(
+    node: &Node,
+    utxos: &mut HashMap<OutPoint, FilledOutput>,
+    unconfirmed_utxos: &mut HashMap<OutPoint, Output>,
+    wallet: &Wallet,
+) -> Result<(), Error> {
+    let () = update_wallet(node, wallet)?;
+    *utxos = wallet.get_utxos()?;
+    *unconfirmed_utxos = wallet.get_unconfirmed_utxos()?;
+    Ok(())
+}
 
 #[derive(Clone)]
 pub struct App {
@@ -25,6 +63,7 @@ pub struct App {
     pub utxos: Arc<RwLock<HashMap<OutPoint, FilledOutput>>>,
     pub unconfirmed_utxos: Arc<RwLock<HashMap<OutPoint, Output>>>,
     pub runtime: Arc<tokio::runtime::Runtime>,
+    task: Arc<JoinHandle<()>>,
     pub local_pool: LocalPoolHandle,
 }
 
@@ -47,6 +86,40 @@ pub enum Error {
 }
 
 impl App {
+    async fn task(
+        node: Arc<Node>,
+        utxos: Arc<RwLock<HashMap<OutPoint, FilledOutput>>>,
+        unconfirmed_utxos: Arc<RwLock<HashMap<OutPoint, Output>>>,
+        wallet: Wallet,
+    ) -> Result<(), Error> {
+        let mut state_changes = node.watch_state();
+        while let Some(()) = state_changes.next().await {
+            let () = update(
+                &node,
+                &mut utxos.write(),
+                &mut unconfirmed_utxos.write(),
+                &wallet,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn spawn_task(
+        node: Arc<Node>,
+        utxos: Arc<RwLock<HashMap<OutPoint, FilledOutput>>>,
+        unconfirmed_utxos: Arc<RwLock<HashMap<OutPoint, Output>>>,
+        wallet: Wallet,
+    ) -> JoinHandle<()> {
+        spawn(
+            Self::task(node, utxos, unconfirmed_utxos, wallet).unwrap_or_else(
+                |err| {
+                    let err = anyhow::Error::from(err);
+                    tracing::error!("{err:#}")
+                },
+            ),
+        )
+    }
+
     pub fn new(config: &Config) -> Result<Self, Error> {
         // Node launches some tokio tasks for p2p networking, that is why we need a tokio runtime
         // here.
@@ -76,7 +149,6 @@ impl App {
             #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
             config.zmq_addr,
         )?;
-        drop(rt_guard);
         let (unconfirmed_utxos, utxos) = {
             let mut utxos = wallet.get_utxos()?;
             let mut unconfirmed_utxos = wallet.get_unconfirmed_utxos()?;
@@ -91,21 +163,40 @@ impl App {
             let utxos = Arc::new(RwLock::new(utxos));
             (unconfirmed_utxos, utxos)
         };
+        let node = Arc::new(node);
+        let task = Self::spawn_task(
+            node.clone(),
+            utxos.clone(),
+            unconfirmed_utxos.clone(),
+            wallet.clone(),
+        );
+        drop(rt_guard);
         Ok(Self {
-            node: Arc::new(node),
+            node,
             wallet,
             miner: Arc::new(TokioRwLock::new(miner)),
             unconfirmed_utxos,
             utxos,
             runtime: Arc::new(runtime),
+            task: Arc::new(task),
             local_pool,
         })
+    }
+
+    /// Update utxos & wallet
+    fn update(&self) -> Result<(), Error> {
+        update(
+            self.node.as_ref(),
+            &mut self.utxos.write(),
+            &mut self.unconfirmed_utxos.write(),
+            &self.wallet,
+        )
     }
 
     pub fn sign_and_send(&self, tx: Transaction) -> Result<(), Error> {
         let authorized_transaction = self.wallet.authorize(tx)?;
         self.node.submit_transaction(authorized_transaction)?;
-        self.update_utxos()?;
+        let () = self.update()?;
         Ok(())
     }
 
@@ -175,55 +266,16 @@ impl App {
             .attempt_bmm(bribe.to_sat(), 0, header, body)
             .await?;
         tracing::trace!("confirming bmm...");
-        if let Some((header, body)) = miner_write.confirm_bmm().await? {
-            tracing::trace!("confirmed bmm, submitting block");
-            self.node.submit_block(&header, &body).await?;
+        if let Some((main_hash, header, body)) =
+            miner_write.confirm_bmm().await?
+        {
+            tracing::trace!(
+                "confirmed bmm, submitting block {}",
+                header.hash()
+            );
+            self.node.submit_block(main_hash, &header, &body).await?;
         }
-        self.update_wallet()?;
-        self.update_utxos()?;
-        Ok(())
-    }
-
-    fn update_wallet(&self) -> Result<(), Error> {
-        let addresses = self.wallet.get_addresses()?;
-        let unconfirmed_utxos =
-            self.node.get_unconfirmed_utxos_by_addresses(&addresses)?;
-        let utxos = self.node.get_utxos_by_addresses(&addresses)?;
-        let confirmed_outpoints: Vec<_> =
-            self.wallet.get_utxos()?.into_keys().collect();
-        let confirmed_spent = self
-            .node
-            .get_spent_utxos(&confirmed_outpoints)?
-            .into_iter()
-            .map(|(outpoint, spent_output)| (outpoint, spent_output.inpoint));
-        let unconfirmed_outpoints: Vec<_> =
-            self.wallet.get_unconfirmed_utxos()?.into_keys().collect();
-        let unconfirmed_spent = self
-            .node
-            .get_unconfirmed_spent_utxos(
-                confirmed_outpoints.iter().chain(&unconfirmed_outpoints),
-            )?
-            .into_iter();
-        let spent: Vec<_> = confirmed_spent.chain(unconfirmed_spent).collect();
-        self.wallet.put_utxos(&utxos)?;
-        self.wallet.put_unconfirmed_utxos(&unconfirmed_utxos)?;
-        self.wallet.spend_utxos(&spent)?;
-        Ok(())
-    }
-
-    /// Update all UTXOs, including unconfirmed UTXOs
-    fn update_utxos(&self) -> Result<(), Error> {
-        let mut unconfirmed_utxos = self.wallet.get_unconfirmed_utxos()?;
-        let mut utxos = self.wallet.get_utxos()?;
-        let transactions = self.node.get_all_transactions()?;
-        for transaction in &transactions {
-            for input in &transaction.transaction.inputs {
-                unconfirmed_utxos.remove(input);
-                utxos.remove(input);
-            }
-        }
-        *self.unconfirmed_utxos.write() = unconfirmed_utxos;
-        *self.utxos.write() = utxos;
+        let () = self.update()?;
         Ok(())
     }
 
@@ -250,5 +302,11 @@ impl App {
                 .await?;
             Ok(())
         })
+    }
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        self.task.abort()
     }
 }
