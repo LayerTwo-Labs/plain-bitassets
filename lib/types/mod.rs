@@ -9,8 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use bip300301::bitcoin;
 use thiserror::Error;
+use utoipa::ToSchema;
 
-use crate::authorization::Authorization;
+pub use crate::authorization::Authorization;
 
 mod address;
 pub mod constants;
@@ -213,7 +214,15 @@ where
 }
 
 #[derive(
-    BorshSerialize, Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize,
+    BorshSerialize,
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    PartialEq,
+    Serialize,
+    ToSchema,
 )]
 pub struct Header {
     pub merkle_root: MerkleRoot,
@@ -228,26 +237,26 @@ impl Header {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub enum WithdrawalBundleStatus {
     Failed,
     Confirmed,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct WithdrawalBundle {
     pub spend_utxos: BTreeMap<OutPoint, FilledOutput>,
     pub transaction: bitcoin::Transaction,
 }
 
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct TwoWayPegData {
     pub deposits: HashMap<OutPoint, Output>,
     pub deposit_block_hash: Option<bitcoin::BlockHash>,
     pub bundle_statuses: HashMap<bitcoin::Txid, WithdrawalBundleStatus>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct Body {
     pub coinbase: Vec<Output>,
     pub transactions: Vec<Transaction>,
@@ -336,7 +345,7 @@ impl Body {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct Block {
     #[serde(flatten)]
     pub header: Header,
@@ -387,8 +396,13 @@ impl PartialOrd for AggregatedWithdrawal {
 }
 
 /// Transaction index
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, ToSchema)]
 pub struct TxIn {
     pub block_hash: BlockHash,
     pub idx: u32,
+}
+
+pub mod open_api_schemas {
+    pub use super::output::open_api_schemas::*;
+    pub use super::transaction::open_api_schemas::*;
 }

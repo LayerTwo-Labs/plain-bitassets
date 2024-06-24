@@ -12,6 +12,7 @@ use heed::{types::SerdeBincode, Database, RoTxn, RwTxn};
 use itertools::Itertools;
 use nonempty::{nonempty, NonEmpty};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::{
     authorization::{Authorization, VerifyingKey},
@@ -514,7 +515,9 @@ impl AmmPair {
 }
 
 /// Current state of an AMM pool
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema,
+)]
 pub struct AmmPoolState {
     /// Reserve of the first asset
     pub reserve0: u64,

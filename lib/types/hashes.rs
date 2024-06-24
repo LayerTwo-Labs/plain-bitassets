@@ -90,6 +90,24 @@ impl FromStr for BlockHash {
     }
 }
 
+impl utoipa::PartialSchema for BlockHash {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        let obj = utoipa::openapi::Object::with_type(
+            utoipa::openapi::SchemaType::String,
+        );
+        utoipa::openapi::RefOr::T(utoipa::openapi::Schema::Object(obj))
+    }
+}
+
+impl utoipa::ToSchema<'static> for BlockHash {
+    fn schema() -> (
+        &'static str,
+        utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
+    ) {
+        ("BlockHash", <Self as utoipa::PartialSchema>::schema())
+    }
+}
+
 #[derive(
     BorshSerialize,
     Clone,
@@ -128,6 +146,24 @@ impl std::fmt::Display for MerkleRoot {
 impl std::fmt::Debug for MerkleRoot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", hex::encode(self.0))
+    }
+}
+
+impl utoipa::PartialSchema for MerkleRoot {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        let obj = utoipa::openapi::Object::with_type(
+            utoipa::openapi::SchemaType::String,
+        );
+        utoipa::openapi::RefOr::T(utoipa::openapi::Schema::Object(obj))
+    }
+}
+
+impl utoipa::ToSchema<'static> for MerkleRoot {
+    fn schema() -> (
+        &'static str,
+        utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
+    ) {
+        ("MerkleRoot", <Self as utoipa::PartialSchema>::schema())
     }
 }
 
@@ -200,6 +236,24 @@ impl FromStr for Txid {
     }
 }
 
+impl utoipa::PartialSchema for Txid {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        let obj = utoipa::openapi::Object::with_type(
+            utoipa::openapi::SchemaType::String,
+        );
+        utoipa::openapi::RefOr::T(utoipa::openapi::Schema::Object(obj))
+    }
+}
+
+impl utoipa::ToSchema<'static> for Txid {
+    fn schema() -> (
+        &'static str,
+        utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
+    ) {
+        ("Txid", <Self as utoipa::PartialSchema>::schema())
+    }
+}
+
 /// Identifier for a BitAsset
 #[derive(
     BorshDeserialize,
@@ -223,6 +277,24 @@ impl FromHex for BitAssetId {
 
     fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Self::Error> {
         Hash::from_hex(hex).map(Self)
+    }
+}
+
+impl utoipa::PartialSchema for BitAssetId {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        let obj = utoipa::openapi::Object::with_type(
+            utoipa::openapi::SchemaType::String,
+        );
+        utoipa::openapi::RefOr::T(utoipa::openapi::Schema::Object(obj))
+    }
+}
+
+impl utoipa::ToSchema<'static> for BitAssetId {
+    fn schema() -> (
+        &'static str,
+        utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
+    ) {
+        ("BitAssetId", <Self as utoipa::PartialSchema>::schema())
     }
 }
 
@@ -289,6 +361,24 @@ impl FromStr for AssetId {
     }
 }
 
+impl utoipa::PartialSchema for AssetId {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        let obj = utoipa::openapi::Object::with_type(
+            utoipa::openapi::SchemaType::String,
+        );
+        utoipa::openapi::RefOr::T(utoipa::openapi::Schema::Object(obj))
+    }
+}
+
+impl utoipa::ToSchema<'static> for AssetId {
+    fn schema() -> (
+        &'static str,
+        utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
+    ) {
+        ("AssetId", <Self as utoipa::PartialSchema>::schema())
+    }
+}
+
 /// Unique identifier for each Dutch auction
 #[derive(
     BorshDeserialize,
@@ -325,5 +415,23 @@ impl FromStr for DutchAuctionId {
     type Err = <Self as FromHex>::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::from_hex(s)
+    }
+}
+
+impl utoipa::PartialSchema for DutchAuctionId {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        let obj = utoipa::openapi::Object::with_type(
+            utoipa::openapi::SchemaType::String,
+        );
+        utoipa::openapi::RefOr::T(utoipa::openapi::Schema::Object(obj))
+    }
+}
+
+impl utoipa::ToSchema<'static> for DutchAuctionId {
+    fn schema() -> (
+        &'static str,
+        utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
+    ) {
+        ("DutchAuctionId", <Self as utoipa::PartialSchema>::schema())
     }
 }

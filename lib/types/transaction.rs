@@ -11,6 +11,10 @@ use clap::Parser;
 use educe::Educe;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use utoipa::{
+    openapi::{RefOr, Schema},
+    PartialSchema, ToSchema,
+};
 
 use super::{
     address::Address,
@@ -47,6 +51,7 @@ where
     PartialEq,
     PartialOrd,
     Serialize,
+    ToSchema,
 )]
 pub enum OutPoint {
     // Created by transactions.
@@ -64,6 +69,12 @@ pub enum OutPoint {
         #[borsh(serialize_with = "borsh_serialize_bitcoin_outpoint")]
         bitcoin::OutPoint,
     ),
+}
+
+impl PartialSchema for OutPoint {
+    fn schema() -> RefOr<utoipa::openapi::Schema> {
+        <Self as ToSchema>::schema().1
+    }
 }
 
 /// Reference to a tx input.
@@ -129,6 +140,7 @@ where
     Eq,
     PartialEq,
     Serialize,
+    ToSchema,
 )]
 #[educe(Hash)]
 pub struct BitAssetData {
@@ -154,6 +166,69 @@ pub enum Update<T> {
     Set(T),
 }
 
+impl<T> Update<T> {
+    /// Create a schema from a schema for `T`.
+    fn schema(schema_t: RefOr<Schema>) -> RefOr<Schema> {
+        let schema_delete = utoipa::openapi::ObjectBuilder::new()
+            .schema_type(utoipa::openapi::SchemaType::String)
+            .enum_values(Some(["Delete"]));
+        let schema_retain = utoipa::openapi::ObjectBuilder::new()
+            .schema_type(utoipa::openapi::SchemaType::String)
+            .enum_values(Some(["Retain"]));
+        let schema_set = utoipa::openapi::ObjectBuilder::new()
+            .property("Set", schema_t)
+            .required("Set");
+        let schema = utoipa::openapi::OneOfBuilder::new()
+            .item(schema_delete)
+            .item(schema_retain)
+            .item(schema_set)
+            .build()
+            .into();
+        RefOr::T(schema)
+    }
+}
+
+pub type UpdateHash = Update<Hash>;
+impl<'a> ToSchema<'a> for Update<Hash> {
+    fn schema() -> (&'a str, RefOr<Schema>) {
+        let schema_ref = utoipa::openapi::Ref::from_schema_name("Hash");
+        ("UpdateHash", Self::schema(schema_ref.into()))
+    }
+}
+
+pub type UpdateIpv4Addr = Update<Ipv4Addr>;
+impl<'a> ToSchema<'a> for Update<Ipv4Addr> {
+    fn schema() -> (&'a str, RefOr<Schema>) {
+        let schema_ref = utoipa::openapi::Ref::from_schema_name("Ipv4Addr");
+        ("UpdateIpv4Addr", Self::schema(schema_ref.into()))
+    }
+}
+
+pub type UpdateIpv6Addr = Update<Ipv6Addr>;
+impl<'a> ToSchema<'a> for Update<Ipv6Addr> {
+    fn schema() -> (&'a str, RefOr<Schema>) {
+        let schema_ref = utoipa::openapi::Ref::from_schema_name("Ipv6Addr");
+        ("UpdateIpv6Addr", Self::schema(schema_ref.into()))
+    }
+}
+
+pub type UpdateEncryptionPubKey = Update<EncryptionPubKey>;
+impl<'a> ToSchema<'a> for Update<EncryptionPubKey> {
+    fn schema() -> (&'a str, RefOr<Schema>) {
+        let schema_ref =
+            utoipa::openapi::Ref::from_schema_name("EncryptionPubKey");
+        ("UpdateEncryptionPubKey", Self::schema(schema_ref.into()))
+    }
+}
+
+pub type UpdateVerifyingKey = Update<VerifyingKey>;
+impl<'a> ToSchema<'a> for Update<VerifyingKey> {
+    fn schema() -> (&'a str, RefOr<Schema>) {
+        let schema_ref = utoipa::openapi::Ref::from_schema_name("VerifyingKey");
+        ("UpdateVerifyingKey", Self::schema(schema_ref.into()))
+    }
+}
+
 fn borsh_serialize_update_verifying_key<W>(
     update_verifying_key: &Update<VerifyingKey>,
     writer: &mut W,
@@ -175,24 +250,29 @@ where
 }
 
 /// Updates to the data associated with a BitAsset
-#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize)]
+#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct BitAssetDataUpdates {
     /// Commitment to arbitrary data
+    #[schema(value_type = UpdateHash)]
     pub commitment: Update<Hash>,
     /// Optional ipv4 addr
+    #[schema(value_type = UpdateIpv4Addr)]
     pub ipv4_addr: Update<Ipv4Addr>,
     /// Optional ipv6 addr
+    #[schema(value_type = UpdateIpv6Addr)]
     pub ipv6_addr: Update<Ipv6Addr>,
     /// Optional pubkey used for encryption
+    #[schema(value_type = UpdateEncryptionPubKey)]
     pub encryption_pubkey: Update<EncryptionPubKey>,
     /// Optional pubkey used for signing messages
     #[borsh(serialize_with = "borsh_serialize_update_verifying_key")]
+    #[schema(value_type = UpdateVerifyingKey)]
     pub signing_pubkey: Update<VerifyingKey>,
 }
 
 /// Parameters of a Dutch Auction
 #[derive(
-    BorshSerialize, Clone, Copy, Debug, Deserialize, Parser, Serialize,
+    BorshSerialize, Clone, Copy, Debug, Deserialize, Parser, Serialize, ToSchema,
 )]
 pub struct DutchAuctionParams {
     /// Block height at which the auction starts
@@ -219,7 +299,8 @@ pub struct DutchAuctionParams {
 }
 
 #[allow(clippy::enum_variant_names)]
-#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize)]
+#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize, ToSchema)]
+#[schema(as = TxData)]
 pub enum TransactionData {
     /// Burn an AMM position
     AmmBurn {
@@ -292,16 +373,18 @@ pub enum TransactionData {
 
 pub type TxData = TransactionData;
 
-#[derive(BorshSerialize, Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(
+    BorshSerialize, Clone, Debug, Default, Deserialize, Serialize, ToSchema,
+)]
 pub struct Transaction {
-    pub inputs: TxInputs,
-    pub outputs: TxOutputs,
+    pub inputs: Vec<OutPoint>,
+    pub outputs: Vec<Output>,
     #[serde(with = "serde_hexstr_human_readable")]
     pub memo: Vec<u8>,
-    pub data: Option<TransactionData>,
+    pub data: Option<TxData>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FilledTransaction {
     pub transaction: Transaction,
     pub spent_utxos: Vec<FilledOutput>,
@@ -1504,4 +1587,11 @@ impl FilledTransaction {
             })
             .collect()
     }
+}
+
+pub mod open_api_schemas {
+    pub use super::{
+        UpdateEncryptionPubKey, UpdateHash, UpdateIpv4Addr, UpdateIpv6Addr,
+        UpdateVerifyingKey,
+    };
 }

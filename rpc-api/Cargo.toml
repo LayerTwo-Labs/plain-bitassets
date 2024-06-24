@@ -10,6 +10,11 @@ fraction = { version = "0.14.0", features = ["with-serde-support"] }
 jsonrpsee = { version = "0.20.0", features = ["macros"] }
 plain_bitassets = { path = "../lib" }
 serde = { version = "1.0.179", features = ["derive"] }
+utoipa = "4.2.3"
+
+[dependencies.l2l-openapi]
+git = "https://github.com/Ash-L2L/l2l-openapi"
+rev = "6e440bb2715ec0d495050e9dbbda3f1590a07385"
 
 [lib]
 name = "plain_bitassets_app_rpc_api"

@@ -13,8 +13,8 @@ use plain_bitassets::{
     state::{self, AmmPair, AmmPoolState, BitAssetSeqId, DutchAuctionState},
     types::{
         Address, AssetId, BitAssetData, BitAssetId, Block, BlockHash,
-        DutchAuctionId, DutchAuctionParams, FilledOutput, FilledOutputContent,
-        OutPoint, Output, PointedOutput, Transaction, Txid,
+        DutchAuctionId, DutchAuctionParams, FilledOutputContent, PointedOutput,
+        Transaction, Txid,
     },
     wallet,
 };
@@ -414,7 +414,7 @@ impl RpcServer for RpcServerImpl {
         }).await.unwrap()
     }
 
-    async fn my_unconfirmed_utxos(&self) -> RpcResult<Vec<(OutPoint, Output)>> {
+    async fn my_unconfirmed_utxos(&self) -> RpcResult<Vec<PointedOutput>> {
         let addresses = self
             .app
             .wallet
@@ -424,19 +424,31 @@ impl RpcServer for RpcServerImpl {
             .app
             .node
             .get_unconfirmed_utxos_by_addresses(&addresses)
-            .map_err(convert_node_err)?;
-        Ok(Vec::from_iter(utxos))
+            .map_err(convert_node_err)?
+            .into_iter()
+            .map(|(outpoint, output)| PointedOutput { outpoint, output })
+            .collect();
+        Ok(utxos)
     }
 
-    async fn my_utxos(&self) -> RpcResult<Vec<FilledOutput>> {
+    async fn my_utxos(
+        &self,
+    ) -> RpcResult<Vec<PointedOutput<FilledOutputContent>>> {
         let utxos = self
             .app
             .wallet
             .get_utxos()
             .map_err(convert_wallet_err)?
-            .into_values()
+            .into_iter()
+            .map(|(outpoint, output)| PointedOutput { outpoint, output })
             .collect();
         Ok(utxos)
+    }
+
+    async fn openapi_schema(&self) -> RpcResult<utoipa::openapi::OpenApi> {
+        let res =
+            <plain_bitassets_app_rpc_api::RpcDoc as utoipa::OpenApi>::openapi();
+        Ok(res)
     }
 
     async fn reserve_bitasset(&self, plain_name: String) -> RpcResult<Txid> {

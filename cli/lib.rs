@@ -89,6 +89,9 @@ pub enum Command {
     MyUnconfirmedUtxos,
     /// List owned UTXOs
     MyUtxos,
+    /// Show OpenAPI schema
+    #[command(name = "openapi-schema")]
+    OpenApiSchema,
     /// Reserve a BitAsset
     ReserveBitasset { plaintext_name: String },
     /// Set the wallet seed from a mnemonic seed phrase
@@ -254,6 +257,11 @@ impl Cli {
             Command::MyUtxos => {
                 let utxos = rpc_client.my_utxos().await?;
                 serde_json::to_string_pretty(&utxos)?
+            }
+            Command::OpenApiSchema => {
+                let openapi =
+                    <plain_bitassets_app_rpc_api::RpcDoc as utoipa::OpenApi>::openapi();
+                openapi.to_pretty_json()?
             }
             Command::ReserveBitasset { plaintext_name } => {
                 let txid = rpc_client.reserve_bitasset(plaintext_name).await?;

@@ -1,6 +1,7 @@
 use bip300301::bitcoin;
 use borsh::BorshSerialize;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use super::{
     serde_display_fromstr_human_readable, serde_hexstr_human_readable, Address,
@@ -9,14 +10,22 @@ use super::{
 };
 
 #[derive(
-    BorshSerialize, Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize,
+    BorshSerialize,
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Serialize,
+    ToSchema,
 )]
 #[repr(transparent)]
 #[serde(transparent)]
 pub struct BitcoinOutputContent(pub u64);
 
 // The subset of output contents that correspond to assets
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, ToSchema)]
 pub enum AssetOutputContent {
     BitAsset(u64),
     BitAssetControl,
@@ -50,7 +59,14 @@ where
 }
 
 #[derive(
-    BorshSerialize, Clone, Debug, Deserialize, Eq, PartialEq, Serialize,
+    BorshSerialize,
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Serialize,
+    ToSchema,
 )]
 pub enum OutputContent {
     AmmLpToken(u64),
@@ -180,7 +196,7 @@ impl GetBitcoinValue for OutputContent {
 
 /** Representation of Output Content that includes asset type and/or
  *  reservation commitment */
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 pub enum FilledContent {
     AmmLpToken {
         asset0: AssetId,
@@ -358,11 +374,20 @@ impl GetBitcoinValue for FilledContent {
 }
 
 #[derive(
-    BorshSerialize, Clone, Debug, Deserialize, Eq, PartialEq, Serialize,
+    BorshSerialize,
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Serialize,
+    ToSchema,
 )]
 pub struct Output<Content = OutputContent> {
     #[serde(with = "serde_display_fromstr_human_readable")]
     pub address: Address,
+    // Utoipa can't handle generics properly
+    #[schema(value_type = Value)]
     pub content: Content,
     #[serde(with = "serde_hexstr_human_readable")]
     pub memo: Vec<u8>,
@@ -568,9 +593,24 @@ pub struct SpentOutput<Content = FilledContent> {
 }
 
 #[derive(
-    BorshSerialize, Clone, Debug, Deserialize, Eq, PartialEq, Serialize,
+    BorshSerialize,
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Serialize,
+    ToSchema,
+)]
+#[aliases(
+    PointedOutput = Pointed<OutputContent>,
+    PointedFilledOutput = Pointed<FilledContent>
 )]
 pub struct Pointed<Content = OutputContent> {
     pub outpoint: OutPoint,
     pub output: Output<Content>,
+}
+
+pub mod open_api_schemas {
+    pub use super::{PointedFilledOutput, PointedOutput};
 }
