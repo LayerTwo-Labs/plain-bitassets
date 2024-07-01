@@ -36,7 +36,8 @@ const DEFAULT_RPC_ADDR: SocketAddr =
     ipv4_socket_addr([127, 0, 0, 1], 6000 + THIS_SIDECHAIN as u16);
 
 #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
-const DEFAULT_ZMQ_ADDR: SocketAddr = ipv4_socket_addr([127, 0, 0, 1], 28332);
+const DEFAULT_ZMQ_ADDR: SocketAddr =
+    ipv4_socket_addr([127, 0, 0, 1], 28000 + THIS_SIDECHAIN as u16);
 
 /// Implement arg manually so that there is only a default if we can resolve
 /// the default data dir

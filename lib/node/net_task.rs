@@ -13,7 +13,7 @@ use futures::{
         mpsc::{self, UnboundedReceiver, UnboundedSender},
         oneshot,
     },
-    stream, StreamExt,
+    stream, StreamExt, TryFutureExt,
 };
 use heed::RwTxn;
 use thiserror::Error;
@@ -73,24 +73,22 @@ pub(super) struct ZmqPubHandler {
 #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
 impl ZmqPubHandler {
     // run the handler, obtaining a sender sink and the handler task
-    pub fn new(socket_addr: SocketAddr) -> Self {
-        use futures::SinkExt;
-        let (tx, mut rx) = mpsc::unbounded::<Vec<async_zmq::Message>>();
-        let handle = tokio::task::spawn(async move {
-            let mut zmq_pub =
-                async_zmq::publish(&format!("tcp://{socket_addr}"))
-                    .unwrap()
-                    .bind()
-                    .unwrap();
-
-            while let Some(msgs) = rx.next().await {
-                let () = zmq_pub.send(msgs.into()).await.unwrap();
-            }
+    pub fn new(socket_addr: SocketAddr) -> Result<Self, async_zmq::Error> {
+        let (tx, rx) = mpsc::unbounded::<Vec<async_zmq::Message>>();
+        let zmq_pub =
+            async_zmq::publish(&format!("tcp://{socket_addr}"))?.bind()?;
+        let handle = tokio::task::spawn({
+            rx.map(|msgs| Ok(msgs.into()))
+                .forward(zmq_pub)
+                .unwrap_or_else(|err| {
+                    let err = anyhow::Error::from(err);
+                    tracing::error!("{err:#}");
+                })
         });
-        Self {
+        Ok(Self {
             tx,
             _handle: handle,
-        }
+        })
     }
 }
 
