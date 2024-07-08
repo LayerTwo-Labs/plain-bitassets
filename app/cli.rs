@@ -6,7 +6,7 @@ use std::{
 };
 
 use clap::{Arg, Parser};
-use plain_bitassets::node::THIS_SIDECHAIN;
+use plain_bitassets::{node::THIS_SIDECHAIN, types::Network};
 
 const fn ipv4_socket_addr(ipv4_octets: [u8; 4], port: u16) -> SocketAddr {
     let [a, b, c, d] = ipv4_octets;
@@ -131,6 +131,9 @@ pub(super) struct Cli {
     /// Socket address to use for P2P networking
     #[arg(default_value_t = DEFAULT_NET_ADDR, long, short)]
     net_addr: SocketAddr,
+    /// Set the network. Setting this may affect other defaults.
+    #[arg(default_value_t, long, value_enum)]
+    network: Network,
     /// Socket address to host the RPC server
     #[arg(default_value_t = DEFAULT_RPC_ADDR, long, short)]
     rpc_addr: SocketAddr,
@@ -158,6 +161,7 @@ pub struct Config {
     pub mnemonic_seed_phrase_path: Option<PathBuf>,
     pub main_user: String,
     pub net_addr: SocketAddr,
+    pub network: Network,
     pub rpc_addr: SocketAddr,
     #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
     pub zmq_addr: SocketAddr,
@@ -191,6 +195,7 @@ impl Cli {
             main_user: self.user_main,
             mnemonic_seed_phrase_path: self.mnemonic_seed_phrase_path,
             net_addr: self.net_addr,
+            network: self.network,
             rpc_addr: self.rpc_addr,
             #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
             zmq_addr: self.zmq_addr,

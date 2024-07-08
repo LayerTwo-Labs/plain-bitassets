@@ -15,8 +15,10 @@ use quinn::{ClientConfig, Endpoint, ServerConfig};
 use tokio_stream::StreamNotifyClose;
 
 use crate::{
-    archive::Archive, node::THIS_SIDECHAIN, state::State,
-    types::AuthorizedTransaction,
+    archive::Archive,
+    node::THIS_SIDECHAIN,
+    state::State,
+    types::{AuthorizedTransaction, Network},
 };
 
 mod peer;
@@ -77,6 +79,21 @@ pub fn make_client_endpoint(bind_addr: SocketAddr) -> Result<Endpoint, Error> {
 // None indicates that the stream has ended
 pub type PeerInfoRx =
     mpsc::UnboundedReceiver<(SocketAddr, Option<PeerConnectionInfo>)>;
+
+const SIGNET_SEED_NODE_ADDRS: &[SocketAddr] = {
+    const SEED_NODE_ADDR: SocketAddr = SocketAddr::new(
+        std::net::IpAddr::V4(std::net::Ipv4Addr::new(172, 105, 148, 135)),
+        4000 + THIS_SIDECHAIN as u16,
+    );
+    &[SEED_NODE_ADDR]
+};
+
+const fn seed_node_addrs(network: Network) -> &'static [SocketAddr] {
+    match network {
+        Network::Signet => SIGNET_SEED_NODE_ADDRS,
+        Network::Regtest => &[],
+    }
+}
 
 // State.
 // Archive.
@@ -165,6 +182,7 @@ impl Net {
     pub fn new(
         env: &heed::Env,
         archive: Archive,
+        network: Network,
         state: State,
         bind_addr: SocketAddr,
     ) -> Result<(Self, PeerInfoRx), Error> {
@@ -178,13 +196,9 @@ impl Net {
                 None => {
                     let known_peers =
                         env.create_database(&mut rwtxn, Some("known_peers"))?;
-                    const SEED_NODE_ADDR: SocketAddr = SocketAddr::new(
-                        std::net::IpAddr::V4(std::net::Ipv4Addr::new(
-                            172, 105, 148, 135,
-                        )),
-                        4000 + THIS_SIDECHAIN as u16,
-                    );
-                    known_peers.put(&mut rwtxn, &SEED_NODE_ADDR, &())?;
+                    for seed_node_addr in seed_node_addrs(network) {
+                        known_peers.put(&mut rwtxn, seed_node_addr, &())?;
+                    }
                     known_peers
                 }
             };

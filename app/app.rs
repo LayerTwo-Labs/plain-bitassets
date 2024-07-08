@@ -143,6 +143,7 @@ impl App {
             config.net_addr,
             &config.datadir,
             config.main_addr,
+            config.network,
             &config.main_password,
             &config.main_user,
             local_pool.clone(),

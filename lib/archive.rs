@@ -723,6 +723,64 @@ impl Archive {
             &block_hash,
             &exponential_ancestors,
         )?;
+        // Populate BMM verifications
+        {
+            let mut bmm_results = self.get_bmm_results(rwtxn, block_hash)?;
+            let parent_bmm_results =
+                self.get_bmm_results(rwtxn, header.prev_side_hash)?;
+            let main_blocks =
+                self.get_main_successors(rwtxn, header.prev_main_hash)?;
+            for main_block in main_blocks {
+                let Some(commitment) =
+                    self.get_main_bmm_commitment(rwtxn, main_block)?
+                else {
+                    tracing::trace!(%block_hash, "Failed BMM @ {main_block}: missing commitment");
+                    bmm_results.insert(main_block, BmmResult::Failed);
+                    continue;
+                };
+                if commitment != block_hash {
+                    tracing::trace!(%block_hash, "Failed BMM @ {main_block}: commitment to other block ({commitment})");
+                    bmm_results.insert(main_block, BmmResult::Failed);
+                    continue;
+                }
+                let main_header = self.get_main_header(rwtxn, main_block)?;
+                if header.prev_main_hash != main_header.prev_blockhash {
+                    tracing::trace!(%block_hash, "Failed BMM @ {main_block}: should be impossible?");
+                    bmm_results.insert(main_block, BmmResult::Failed);
+                    continue;
+                }
+                if header.prev_side_hash == BlockHash::default() {
+                    tracing::trace!(%block_hash, "Verified BMM @ {main_block}: no parent");
+                    bmm_results.insert(main_block, BmmResult::Verified);
+                    continue;
+                }
+                // Check if there is a valid BMM commitment to the parent in the
+                // main ancestry
+                let main_ancestry_contains_valid_bmm_commitment_to_parent =
+                    parent_bmm_results
+                        .iter()
+                        .map(Ok)
+                        .transpose_into_fallible()
+                        .any(|(bmm_block, bmm_result)| {
+                            let parent_verified = *bmm_result
+                                == BmmResult::Verified
+                                && self.is_main_descendant(
+                                    rwtxn, *bmm_block, main_block,
+                                )?;
+                            Result::<bool, Error>::Ok(parent_verified)
+                        })?;
+                if main_ancestry_contains_valid_bmm_commitment_to_parent {
+                    tracing::trace!(%block_hash, "Verified BMM @ {main_block}: verified parent");
+                    bmm_results.insert(main_block, BmmResult::Verified);
+                    continue;
+                } else {
+                    tracing::trace!(%block_hash, "Failed BMM @ {main_block}: no valid BMM commitment to parent in main ancestry");
+                    bmm_results.insert(main_block, BmmResult::Failed);
+                    continue;
+                }
+            }
+            self.bmm_results.put(rwtxn, &block_hash, &bmm_results)?;
+        }
         Ok(())
     }
 
