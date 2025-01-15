@@ -107,7 +107,7 @@ impl UtxoCreator {
     ) {
         ui.horizontal(|ui| {
             ui.heading("Create");
-            egui::ComboBox::from_id_source("utxo_type")
+            egui::ComboBox::from_id_salt("utxo_type")
                 .selected_text(format!("{}", self.utxo_type))
                 .show_ui(ui, |ui| {
                     ui.selectable_value(
@@ -166,7 +166,7 @@ impl UtxoCreator {
         let memo_encoding_changed = ui
             .horizontal(|ui| {
                 ui.monospace("Memo:     ");
-                egui::ComboBox::from_id_source("memo_encoding")
+                egui::ComboBox::from_id_salt("memo_encoding")
                     .selected_text(match self.memo_encoding {
                         Some(MemoEncoding::Base16) => "hex",
                         Some(MemoEncoding::Plaintext) => "plaintext",

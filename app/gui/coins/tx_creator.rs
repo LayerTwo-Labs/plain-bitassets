@@ -476,7 +476,7 @@ impl TxCreator {
         TryFromStrErr: std::error::Error,
         ToStr: Fn(&T) -> String,
     {
-        let option_dropdown = egui::ComboBox::from_id_source(name)
+        let option_dropdown = egui::ComboBox::from_id_salt(name)
             .selected_text(if let Ok(None) = try_set.0 {
                 "do not set"
             } else {
@@ -734,7 +734,7 @@ impl TxCreator {
     ) -> anyhow::Result<()> {
         let Some(app) = app else { return Ok(()) };
         let tx_type_dropdown = ui.horizontal(|ui| {
-            let combobox = egui::ComboBox::from_id_source("tx_type")
+            let combobox = egui::ComboBox::from_id_salt("tx_type")
                 .selected_text(format!("{}", self.tx_type))
                 .show_ui(ui, |ui| {
                     use strum::IntoEnumIterator;

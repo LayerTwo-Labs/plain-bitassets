@@ -31,7 +31,7 @@ const DEFAULT_NET_ADDR: SocketAddr =
 const DEFAULT_RPC_ADDR: SocketAddr =
     ipv4_socket_addr([127, 0, 0, 1], 6000 + THIS_SIDECHAIN as u16);
 
-#[cfg(all(not(target_os = "windows"), feature = "zmq"))]
+#[cfg(feature = "zmq")]
 const DEFAULT_ZMQ_ADDR: SocketAddr =
     ipv4_socket_addr([127, 0, 0, 1], 28000 + THIS_SIDECHAIN as u16);
 
@@ -134,7 +134,7 @@ pub(super) struct Cli {
     #[arg(default_value_t = DEFAULT_RPC_ADDR, long, short)]
     rpc_addr: SocketAddr,
     /// ZMQ pub/sub address
-    #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
+    #[cfg(feature = "zmq")]
     #[arg(default_value_t = DEFAULT_ZMQ_ADDR, long, short)]
     pub zmq_addr: SocketAddr,
 }
@@ -183,7 +183,7 @@ impl Cli {
             net_addr: self.net_addr,
             network: self.network,
             rpc_addr: self.rpc_addr,
-            #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
+            #[cfg(feature = "zmq")]
             zmq_addr: self.zmq_addr,
         })
     }

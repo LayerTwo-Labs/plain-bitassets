@@ -129,12 +129,12 @@ fn main() -> anyhow::Result<()> {
             "Plain Bitassets",
             native_options,
             Box::new(move |cc| {
-                Box::new(gui::EguiApp::new(
+                Ok(Box::new(gui::EguiApp::new(
                     app,
                     cc,
                     line_buffer,
                     config.rpc_addr,
-                ))
+                )))
             }),
         )
         .map_err(|err| anyhow::anyhow!("failed to launch egui app: {err}"))?

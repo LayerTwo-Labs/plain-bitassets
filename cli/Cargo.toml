@@ -2,13 +2,15 @@
 name = "plain_bitassets_app_cli"
 authors.workspace = true
 edition.workspace = true
+license-file.workspace = true
+publish.workspace = true
 version.workspace = true
 
 [dependencies]
 anyhow = "1.0.72"
 bitcoin = "0.32.2"
 clap = { version = "4.5.4", features = ["derive"] }
-jsonrpsee = { version = "0.23.2", features = ["http-client"] }
+jsonrpsee = { version = "0.24.7", features = ["http-client"] }
 plain_bitassets = { path = "../lib", features = ["clap"] }
 plain_bitassets_app_rpc_api = { path = "../rpc-api" }
 serde_json = "1.0.113"

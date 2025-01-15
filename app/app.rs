@@ -232,16 +232,16 @@ impl App {
             .map(|wallet| Miner::new(cusf_mainchain.clone(), wallet))
             .transpose()?;
         let local_pool = LocalPoolHandle::new(1);
-        let node = Node::new(
+        let node = runtime.block_on(Node::new(
             config.net_addr,
             &config.datadir,
             config.network,
             cusf_mainchain,
             cusf_mainchain_wallet,
             local_pool.clone(),
-            #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
+            #[cfg(feature = "zmq")]
             config.zmq_addr,
-        )?;
+        ))?;
         let (unconfirmed_utxos, utxos) = {
             let mut utxos = wallet.get_utxos()?;
             let mut unconfirmed_utxos = wallet.get_unconfirmed_utxos()?;

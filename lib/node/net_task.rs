@@ -20,6 +20,7 @@ use thiserror::Error;
 use tokio::task::JoinHandle;
 use tokio_stream::StreamNotifyClose;
 use tokio_util::task::LocalPoolHandle;
+use zeromq::Socket;
 
 use super::mainchain_task::{self, MainchainTaskHandle};
 use crate::{
@@ -66,25 +67,34 @@ pub enum Error {
     State(#[from] state::Error),
 }
 
-#[cfg(all(not(target_os = "windows"), feature = "zmq"))]
+#[cfg(feature = "zmq")]
 #[derive(Debug)]
 pub(super) struct ZmqPubHandler {
-    pub(super) tx: mpsc::UnboundedSender<Vec<async_zmq::Message>>,
+    pub(super) tx: mpsc::UnboundedSender<zeromq::ZmqMessage>,
     _handle: JoinHandle<()>,
 }
 
-#[cfg(all(not(target_os = "windows"), feature = "zmq"))]
+#[cfg(feature = "zmq")]
 impl ZmqPubHandler {
     // run the handler, obtaining a sender sink and the handler task
-    pub fn new(socket_addr: SocketAddr) -> Result<Self, async_zmq::Error> {
+    pub async fn new(
+        socket_addr: SocketAddr,
+    ) -> Result<Self, zeromq::ZmqError> {
         use futures::TryFutureExt as _;
-        let (tx, rx) = mpsc::unbounded::<Vec<async_zmq::Message>>();
-        let zmq_pub =
-            async_zmq::publish(&format!("tcp://{socket_addr}"))?.bind()?;
+        let (tx, rx) = mpsc::unbounded::<zeromq::ZmqMessage>();
+        let zmq_pub_addr = format!("tcp://{socket_addr}");
+        let mut zmq_pub = zeromq::PubSocket::new();
+        let _zmq_endpoint = zmq_pub.bind(&zmq_pub_addr).await?;
         let handle = tokio::task::spawn({
-            rx.map(|msgs| Ok(msgs.into()))
-                .forward(zmq_pub)
-                .unwrap_or_else(|err| {
+            rx.map(Ok)
+                .forward(futures::sink::unfold(
+                    zmq_pub,
+                    |mut zmq_pub, zmq_msg| async {
+                        zeromq::SocketSend::send(&mut zmq_pub, zmq_msg).await?;
+                        Ok(zmq_pub)
+                    },
+                ))
+                .unwrap_or_else(|err: zeromq::ZmqError| {
                     let err = anyhow::Error::from(err);
                     tracing::error!("{err:#}");
                 })
@@ -260,8 +270,7 @@ async fn reorg_to_tip<Transport>(
     cusf_mainchain: &mut mainchain::ValidatorClient<Transport>,
     mempool: &MemPool,
     state: &State,
-    #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
-    zmq_pub_handler: &ZmqPubHandler,
+    #[cfg(feature = "zmq")] zmq_pub_handler: &ZmqPubHandler,
     new_tip: Tip,
 ) -> Result<bool, Error>
 where
@@ -325,19 +334,19 @@ where
     assert_eq!(tip, new_tip.block_hash);
     rwtxn.commit()?;
     tracing::info!("synced to tip: {}", new_tip.block_hash);
-    #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
+    #[cfg(feature = "zmq")]
     {
         for (idx, (header, _body)) in
             blocks_to_apply.into_iter().rev().enumerate()
         {
             let block_hash = header.hash();
             let height = common_ancestor_height + idx as u32 + 1;
-            let zmq_msgs = vec![
-                "hashblock".into(),
-                block_hash.0[..].into(),
-                height.to_le_bytes()[..].into(),
-            ];
-            zmq_pub_handler.tx.unbounded_send(zmq_msgs).unwrap();
+            let mut zmq_msg = zeromq::ZmqMessage::from("hashblock");
+            zmq_msg.push_back(bytes::Bytes::copy_from_slice(&block_hash.0));
+            zmq_msg.push_back(bytes::Bytes::copy_from_slice(
+                &height.to_le_bytes(),
+            ));
+            zmq_pub_handler.tx.unbounded_send(zmq_msg).unwrap();
         }
     }
     Ok(true)
@@ -352,7 +361,7 @@ struct NetTaskContext<MainchainTransport> {
     mempool: MemPool,
     net: Net,
     state: State,
-    #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
+    #[cfg(feature = "zmq")]
     zmq_pub_handler: Arc<ZmqPubHandler>,
 }
 
@@ -786,10 +795,7 @@ where
                         &mut self.ctxt.cusf_mainchain,
                         &self.ctxt.mempool,
                         &self.ctxt.state,
-                        #[cfg(all(
-                            not(target_os = "windows"),
-                            feature = "zmq"
-                        ))]
+                        #[cfg(feature = "zmq")]
                         &self.ctxt.zmq_pub_handler,
                         new_tip,
                     )
@@ -906,8 +912,7 @@ impl NetTaskHandle {
         net: Net,
         peer_info_rx: PeerInfoRx,
         state: State,
-        #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
-        zmq_pub_handler: Arc<ZmqPubHandler>,
+        #[cfg(feature = "zmq")] zmq_pub_handler: Arc<ZmqPubHandler>,
     ) -> Self
     where
         MainchainTransport: proto::Transport + Send + 'static,
@@ -920,7 +925,7 @@ impl NetTaskHandle {
             mempool,
             net,
             state,
-            #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
+            #[cfg(feature = "zmq")]
             zmq_pub_handler,
         };
         let (

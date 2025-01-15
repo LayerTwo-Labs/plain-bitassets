@@ -6,7 +6,7 @@ use std::{
 use futures::Stream;
 use heed::{types::SerdeBincode, Database, RoTxn, RwTxn};
 use itertools::Itertools;
-use nonempty::{nonempty, NonEmpty};
+use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -53,7 +53,7 @@ pub struct RollBack<T>(NonEmpty<T>);
 impl<T> RollBack<HeightStamped<T>> {
     fn new(value: T, height: u32) -> Self {
         let height_stamped = HeightStamped { value, height };
-        Self(nonempty![height_stamped])
+        Self(NonEmpty::new(height_stamped))
     }
 
     /// Pop the most recent value
@@ -94,7 +94,7 @@ impl<T> RollBack<TxidStamped<T>> {
             txid,
             height,
         };
-        Self(nonempty![txid_stamped])
+        Self(NonEmpty::new(txid_stamped))
     }
 
     /// pop the most recent value

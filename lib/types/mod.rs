@@ -4,7 +4,6 @@ use std::{
     sync::LazyLock,
 };
 
-use bech32::{FromBase32, ToBase32};
 use bitcoin::{amount::CheckedSum as _, hashes::Hash as _};
 use borsh::BorshSerialize;
 use serde::{Deserialize, Serialize};
@@ -120,7 +119,7 @@ pub trait GetBitcoinValue {
 #[derive(Debug, Error)]
 pub enum Bech32mDecodeError {
     #[error(transparent)]
-    Bech32m(#[from] bech32::Error),
+    Bech32m(#[from] bech32::DecodeError),
     #[error("Wrong Bech32 HRP. Perhaps this key is being used somewhere it shouldn't be.")]
     WrongHrp,
     #[error("Wrong decoded byte length. Must decode to 32 bytes of data.")]
@@ -158,31 +157,27 @@ pub struct EncryptionPubKey(
 
 impl EncryptionPubKey {
     /// HRP for Bech32m encoding
-    const BECH32M_HRP: &'static str = "ba-enc";
+    const BECH32M_HRP: bech32::Hrp = bech32::Hrp::parse_unchecked("ba-enc");
 
     /// Encode to Bech32m format
     pub fn bech32m_encode(&self) -> String {
-        bech32::encode(
-            Self::BECH32M_HRP,
-            self.0.as_bytes().to_base32(),
-            bech32::Variant::Bech32m,
-        )
-        .expect("Bech32m Encoding should not fail")
+        bech32::encode::<bech32::Bech32m>(Self::BECH32M_HRP, self.0.as_bytes())
+            .expect("Bech32m Encoding should not fail")
     }
 
     /// Decode from Bech32m format
     pub fn bech32m_decode(s: &str) -> Result<Self, Bech32mDecodeError> {
-        let (hrp, data5, variant) = bech32::decode(s)?;
-        if variant != bech32::Variant::Bech32m {
-            return Err(Bech32mDecodeError::WrongVariant);
-        }
+        let (hrp, data) = bech32::decode(s)?;
         if hrp != Self::BECH32M_HRP {
             return Err(Bech32mDecodeError::WrongHrp);
         }
-        let data8 = Vec::<u8>::from_base32(&data5)?;
-        let Ok(bytes) = <[u8; 32]>::try_from(data8) else {
+        let Ok(bytes) = <[u8; 32]>::try_from(data) else {
             return Err(Bech32mDecodeError::WrongSize);
         };
+        let res = Self::from(bytes);
+        if s != res.bech32m_encode() {
+            return Err(Bech32mDecodeError::WrongVariant);
+        }
         Ok(Self::from(bytes))
     }
 }

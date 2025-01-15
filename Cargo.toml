@@ -10,7 +10,9 @@ members = [
 [workspace.package]
 authors = [ "Ash Manning <ash@layertwolabs.com>" ]
 edition = "2021"
-version = "0.10.0"
+license-file = "LICENSE.txt"
+publish = false
+version = "0.10.1"
 
 [profile.release]
 # lto = "fat"

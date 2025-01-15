@@ -39,7 +39,7 @@ mod net_task;
 
 use mainchain_task::MainchainTaskHandle;
 use net_task::NetTaskHandle;
-#[cfg(all(not(target_os = "windows"), feature = "zmq"))]
+#[cfg(feature = "zmq")]
 use net_task::ZmqPubHandler;
 
 #[derive(Debug, thiserror::Error)]
@@ -80,9 +80,9 @@ pub enum Error {
     Utreexo(String),
     #[error("Verify BMM error")]
     VerifyBmm(anyhow::Error),
-    #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
+    #[cfg(feature = "zmq")]
     #[error("ZMQ error")]
-    Zmq(#[from] async_zmq::Error),
+    Zmq(#[from] zeromq::ZmqError),
 }
 
 /// Request any missing two way peg data up to the specified block hash.
@@ -158,7 +158,7 @@ pub struct Node<MainchainTransport = Channel> {
     net: Net,
     net_task: NetTaskHandle,
     state: State,
-    #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
+    #[cfg(feature = "zmq")]
     zmq_pub_handler: Arc<ZmqPubHandler>,
 }
 
@@ -167,7 +167,7 @@ where
     MainchainTransport: proto::Transport,
 {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub async fn new(
         bind_addr: SocketAddr,
         datadir: &Path,
         network: Network,
@@ -176,8 +176,7 @@ where
             mainchain::WalletClient<MainchainTransport>,
         >,
         local_pool: LocalPoolHandle,
-        #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
-        zmq_addr: SocketAddr,
+        #[cfg(feature = "zmq")] zmq_addr: SocketAddr,
     ) -> Result<Self, Error>
     where
         mainchain::ValidatorClient<MainchainTransport>: Clone,
@@ -201,8 +200,8 @@ where
                 .open(env_path)?
         };
         let state = State::new(&env)?;
-        #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
-        let zmq_pub_handler = Arc::new(ZmqPubHandler::new(zmq_addr)?);
+        #[cfg(feature = "zmq")]
+        let zmq_pub_handler = Arc::new(ZmqPubHandler::new(zmq_addr).await?);
         let archive = Archive::new(&env)?;
         let mempool = MemPool::new(&env)?;
         let (mainchain_task, mainchain_task_response_rx) =
@@ -226,7 +225,7 @@ where
             net.clone(),
             peer_info_rx,
             state.clone(),
-            #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
+            #[cfg(feature = "zmq")]
             zmq_pub_handler.clone(),
         );
         Ok(Self {
@@ -240,7 +239,7 @@ where
             net,
             net_task,
             state,
-            #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
+            #[cfg(feature = "zmq")]
             zmq_pub_handler: zmq_pub_handler.clone(),
         })
     }
@@ -868,16 +867,16 @@ where
         };
         let rotxn = self.env.read_txn()?;
         let bundle = self.state.get_pending_withdrawal_bundle(&rotxn)?;
-        #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
+        #[cfg(feature = "zmq")]
         {
             let height = self.state.get_height(&rotxn)?;
             let block_hash = header.hash();
-            let zmq_msgs = vec![
-                "hashblock".into(),
-                block_hash.0[..].into(),
-                height.to_le_bytes()[..].into(),
-            ];
-            self.zmq_pub_handler.tx.unbounded_send(zmq_msgs).unwrap();
+            let mut zmq_msg = zeromq::ZmqMessage::from("hashblock");
+            zmq_msg.push_back(bytes::Bytes::copy_from_slice(&block_hash.0));
+            zmq_msg.push_back(bytes::Bytes::copy_from_slice(
+                &height.to_le_bytes(),
+            ));
+            self.zmq_pub_handler.tx.unbounded_send(zmq_msg).unwrap();
         }
         if let Some((bundle, _)) = bundle {
             let m6id = bundle.compute_m6id();

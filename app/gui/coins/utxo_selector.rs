@@ -59,7 +59,7 @@ impl AssetInput {
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui) {
-        egui::ComboBox::from_id_source("asset_kind")
+        egui::ComboBox::from_id_salt("asset_kind")
             .selected_text(<&'static str>::from(self.asset_kind))
             .show_ui(ui, |ui| {
                 for asset_kind in AssetKind::iter() {
