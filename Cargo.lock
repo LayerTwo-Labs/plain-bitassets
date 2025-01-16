@@ -1336,12 +1336,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "derivation-path"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e5c37193a1db1d8ed868c03ec7b152175f26160a5b740e5e484143877e0adf0"
-
-[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1464,18 +1458,6 @@ dependencies = [
  "sha2",
  "subtle",
  "zeroize",
-]
-
-[[package]]
-name = "ed25519-dalek-bip32"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b49a684b133c4980d7ee783936af771516011c8cd15f429dbda77245e282f03"
-dependencies = [
- "derivation-path",
- "ed25519-dalek",
- "hmac",
- "sha2",
 ]
 
 [[package]]
@@ -4000,8 +3982,6 @@ dependencies = [
  "bytes",
  "clap",
  "ed25519-dalek",
- "ed25519-dalek-bip32",
- "educe",
  "fallible-iterator",
  "fraction",
  "futures",
@@ -4011,7 +3991,6 @@ dependencies = [
  "hex-literal",
  "itertools 0.12.1",
  "jsonrpsee",
- "lazy_static",
  "nonempty",
  "num",
  "parking_lot",

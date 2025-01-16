@@ -13,8 +13,8 @@ use plain_bitassets::{
     state::{self, AmmPair, AmmPoolState, BitAssetSeqId, DutchAuctionState},
     types::{
         Address, AssetId, BitAssetData, BitAssetId, Block, BlockHash,
-        DutchAuctionId, DutchAuctionParams, FilledOutputContent, PointedOutput,
-        Transaction, Txid,
+        DutchAuctionId, DutchAuctionParams, EncryptionPubKey,
+        FilledOutputContent, PointedOutput, Transaction, Txid, VerifyingKey,
     },
     wallet::{self, Balance},
 };
@@ -353,6 +353,20 @@ impl RpcServer for RpcServerImpl {
         self.app
             .wallet
             .get_new_address()
+            .map_err(convert_wallet_err)
+    }
+
+    async fn get_new_encryption_key(&self) -> RpcResult<EncryptionPubKey> {
+        self.app
+            .wallet
+            .get_new_encryption_key()
+            .map_err(convert_wallet_err)
+    }
+
+    async fn get_new_verifying_key(&self) -> RpcResult<VerifyingKey> {
+        self.app
+            .wallet
+            .get_new_verifying_key()
             .map_err(convert_wallet_err)
     }
 

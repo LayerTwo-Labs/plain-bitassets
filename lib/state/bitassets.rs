@@ -2,7 +2,6 @@
 
 use std::net::{Ipv4Addr, Ipv6Addr};
 
-use ed25519_dalek::VerifyingKey;
 use heed::{types::SerdeBincode, Database, RoTxn, RwTxn};
 use serde::{Deserialize, Serialize};
 
@@ -13,7 +12,7 @@ use crate::{
     },
     types::{
         BitAssetDataUpdates, BitAssetId, EncryptionPubKey, FilledTransaction,
-        Hash, Txid, Update,
+        Hash, Txid, Update, VerifyingKey,
     },
 };
 

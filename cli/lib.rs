@@ -81,6 +81,10 @@ pub enum Command {
     GetBlockcount,
     /// Get a new address
     GetNewAddress,
+    /// Get a new encryption pubkey
+    GetNewEncryptionKey,
+    /// Get a new verifying key
+    GetNewVerifyingKey,
     /// Get wallet addresses, sorted by base58 encoding
     GetWalletAddresses,
     /// Get wallet UTXOs
@@ -250,6 +254,14 @@ impl Cli {
             Command::GetNewAddress => {
                 let address = rpc_client.get_new_address().await?;
                 format!("{address}")
+            }
+            Command::GetNewEncryptionKey => {
+                let epk = rpc_client.get_new_encryption_key().await?;
+                format!("{epk}")
+            }
+            Command::GetNewVerifyingKey => {
+                let vk = rpc_client.get_new_verifying_key().await?;
+                format!("{vk}")
             }
             Command::GetWalletAddresses => {
                 let addresses = rpc_client.get_wallet_addresses().await?;

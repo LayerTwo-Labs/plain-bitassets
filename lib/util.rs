@@ -106,6 +106,10 @@ impl<KC, DC, C> WatchableDb<KC, DC, C> {
         self.db.last(rotxn)
     }
 
+    pub fn len(&self, rotxn: &RoTxn<'_>) -> heed::Result<u64> {
+        self.db.len(rotxn)
+    }
+
     /// Retrieves the value associated with a key.
     /// If the key does not exist, then None is returned.
     pub fn try_get<'a, 'rotxn>(

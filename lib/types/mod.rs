@@ -15,6 +15,7 @@ pub use crate::authorization::Authorization;
 mod address;
 pub mod bitasset_data;
 pub mod hashes;
+pub mod keys;
 pub mod proto;
 pub mod schema;
 mod transaction;
@@ -25,6 +26,7 @@ pub use hashes::{
     AssetId, BitAssetId, BlockHash, DutchAuctionId, Hash, M6id, MerkleRoot,
     Txid,
 };
+pub use keys::{EncryptionPubKey, VerifyingKey};
 pub use transaction::{
     AmmBurn, AmmMint, AmmSwap, AssetOutput, AssetOutputContent, Authorized,
     AuthorizedTransaction, BitcoinOutput, BitcoinOutputContent,
@@ -128,75 +130,6 @@ pub enum Bech32mDecodeError {
     WrongSize,
     #[error("Wrong Bech32 variant. Only Bech32m is accepted.")]
     WrongVariant,
-}
-
-fn borsh_serialize_x25519_pubkey<W>(
-    pk: &x25519_dalek::PublicKey,
-    writer: &mut W,
-) -> borsh::io::Result<()>
-where
-    W: borsh::io::Write,
-{
-    borsh::BorshSerialize::serialize(pk.as_bytes(), writer)
-}
-
-/// Wrapper around x25519 pubkeys
-#[derive(
-    BorshSerialize,
-    Clone,
-    Copy,
-    Debug,
-    Deserialize,
-    Eq,
-    Hash,
-    PartialEq,
-    Serialize,
-)]
-pub struct EncryptionPubKey(
-    #[borsh(serialize_with = "borsh_serialize_x25519_pubkey")]
-    pub  x25519_dalek::PublicKey,
-);
-
-impl EncryptionPubKey {
-    /// HRP for Bech32m encoding
-    const BECH32M_HRP: bech32::Hrp = bech32::Hrp::parse_unchecked("ba-enc");
-
-    /// Encode to Bech32m format
-    pub fn bech32m_encode(&self) -> String {
-        bech32::encode::<bech32::Bech32m>(Self::BECH32M_HRP, self.0.as_bytes())
-            .expect("Bech32m Encoding should not fail")
-    }
-
-    /// Decode from Bech32m format
-    pub fn bech32m_decode(s: &str) -> Result<Self, Bech32mDecodeError> {
-        let (hrp, data) = bech32::decode(s)?;
-        if hrp != Self::BECH32M_HRP {
-            return Err(Bech32mDecodeError::WrongHrp);
-        }
-        let Ok(bytes) = <[u8; 32]>::try_from(data) else {
-            return Err(Bech32mDecodeError::WrongSize);
-        };
-        let res = Self::from(bytes);
-        if s != res.bech32m_encode() {
-            return Err(Bech32mDecodeError::WrongVariant);
-        }
-        Ok(Self::from(bytes))
-    }
-}
-
-impl std::fmt::Display for EncryptionPubKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.bech32m_encode().fmt(f)
-    }
-}
-
-impl<T> From<T> for EncryptionPubKey
-where
-    x25519_dalek::PublicKey: From<T>,
-{
-    fn from(value: T) -> Self {
-        Self(value.into())
-    }
 }
 
 fn borsh_serialize_bitcoin_block_hash<W>(

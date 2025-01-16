@@ -12,9 +12,9 @@ use plain_bitassets::{
         schema as bitassets_schema, Address, AssetId, Authorization,
         BitAssetData, BitAssetDataUpdates, BitAssetId, BitcoinOutputContent,
         Block, BlockHash, Body, DutchAuctionId, DutchAuctionParams,
-        FilledOutputContent, Header, MerkleRoot, OutPoint, Output,
-        OutputContent, PointedOutput, Transaction, TxData, TxIn, Txid,
-        WithdrawalOutputContent,
+        EncryptionPubKey, FilledOutputContent, Header, MerkleRoot, OutPoint,
+        Output, OutputContent, PointedOutput, Transaction, TxData, TxIn, Txid,
+        VerifyingKey, WithdrawalOutputContent,
     },
     wallet::Balance,
 };
@@ -36,9 +36,9 @@ pub struct TxInfo {
     bitassets_schema::BitcoinAddr, bitassets_schema::BitcoinBlockHash,
     bitassets_schema::BitcoinOutPoint, Address, AssetId, Authorization,
     BitAssetData, BitAssetDataUpdates, BitAssetId, BitcoinOutputContent,
-    BlockHash, Body, DutchAuctionId, DutchAuctionParams, FilledOutputContent,
-    Header, MerkleRoot, OutPoint, Output, Output::<FilledOutputContent>, OutputContent, Transaction, TxData,
-    Txid, TxIn, WithdrawalOutputContent,
+    BlockHash, Body, DutchAuctionId, DutchAuctionParams, EncryptionPubKey,
+    Header, MerkleRoot, OutPoint, Output, OutputContent, Transaction, TxData,
+    Txid, TxIn, WithdrawalOutputContent, VerifyingKey,
 ])]
 #[rpc(client, server)]
 pub trait Rpc {
@@ -177,6 +177,14 @@ pub trait Rpc {
     /// Get a new address
     #[method(name = "get_new_address")]
     async fn get_new_address(&self) -> RpcResult<Address>;
+
+    /// Get new encryption key
+    #[method(name = "get_new_encryption_key")]
+    async fn get_new_encryption_key(&self) -> RpcResult<EncryptionPubKey>;
+
+    /// Get new verifying/signing key
+    #[method(name = "get_new_verifying_key")]
+    async fn get_new_verifying_key(&self) -> RpcResult<VerifyingKey>;
 
     /// Get transaction by txid
     #[method(name = "get_transaction")]

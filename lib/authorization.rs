@@ -5,10 +5,11 @@ use utoipa::ToSchema;
 
 use crate::types::{
     Address, AuthorizedTransaction, Body, GetAddress, Transaction, Verify,
+    VerifyingKey,
 };
 
 pub use ed25519_dalek::{
-    Signature, SignatureError, Signer, SigningKey, Verifier, VerifyingKey,
+    Signature, SignatureError, Signer, SigningKey, Verifier,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -25,16 +26,6 @@ pub enum Error {
         address: Address,
         hash_verifying_key: Address,
     },
-}
-
-fn borsh_serialize_verifying_key<W>(
-    vk: &VerifyingKey,
-    writer: &mut W,
-) -> borsh::io::Result<()>
-where
-    W: borsh::io::Write,
-{
-    borsh::BorshSerialize::serialize(&vk.to_bytes(), writer)
 }
 
 fn borsh_serialize_signature<W>(
@@ -58,7 +49,6 @@ where
     ToSchema,
 )]
 pub struct Authorization {
-    #[borsh(serialize_with = "borsh_serialize_verifying_key")]
     #[schema(schema_with = <String as utoipa::PartialSchema>::schema)]
     pub verifying_key: VerifyingKey,
     #[borsh(serialize_with = "borsh_serialize_signature")]
@@ -98,7 +88,7 @@ pub fn get_address(verifying_key: &VerifyingKey) -> Address {
 struct Package<'a> {
     messages: Vec<&'a [u8]>,
     signatures: Vec<Signature>,
-    verifying_keys: Vec<VerifyingKey>,
+    verifying_keys: Vec<ed25519_dalek::VerifyingKey>,
 }
 
 pub fn verify_authorized_transaction(
@@ -110,17 +100,19 @@ pub fn verify_authorized_transaction(
         transaction.authorizations.len(),
     )
     .collect();
-    let (verifying_keys, signatures): (Vec<VerifyingKey>, Vec<Signature>) =
-        transaction
-            .authorizations
-            .iter()
-            .map(
-                |Authorization {
-                     verifying_key,
-                     signature,
-                 }| (verifying_key, signature),
-            )
-            .unzip();
+    let (verifying_keys, signatures): (
+        Vec<ed25519_dalek::VerifyingKey>,
+        Vec<Signature>,
+    ) = transaction
+        .authorizations
+        .iter()
+        .map(
+            |Authorization {
+                 verifying_key,
+                 signature,
+             }| (verifying_key.0, signature),
+        )
+        .unzip();
     ed25519_dalek::verify_batch(&messages, &signatures, &verifying_keys)?;
     Ok(())
 }
@@ -160,7 +152,7 @@ pub fn verify_authorizations(body: &Body) -> Result<(), Error> {
         {
             package.messages.push(*message);
             package.signatures.push(authorization.signature);
-            package.verifying_keys.push(authorization.verifying_key);
+            package.verifying_keys.push(authorization.verifying_key.0);
         }
         packages.push(package);
     }
@@ -171,7 +163,7 @@ pub fn verify_authorizations(body: &Body) -> Result<(), Error> {
             .push(authorization.signature);
         packages[num_threads - 1]
             .verifying_keys
-            .push(authorization.verifying_key);
+            .push(authorization.verifying_key.0);
     }
     assert_eq!(
         packages.iter().map(|p| p.signatures.len()).sum::<usize>(),
@@ -211,8 +203,9 @@ pub fn authorize(
     let mut authorizations: Vec<Authorization> =
         Vec::with_capacity(addresses_signing_keys.len());
     let tx_bytes_canonical = borsh::to_vec(&transaction)?;
-    for (address, keypair) in addresses_signing_keys {
-        let hash_verifying_key = get_address(&keypair.verifying_key());
+    for (address, signing_key) in addresses_signing_keys {
+        let verifying_key = signing_key.verifying_key().into();
+        let hash_verifying_key = get_address(&verifying_key);
         if *address != hash_verifying_key {
             return Err(Error::WrongKeyForAddress {
                 address: *address,
@@ -220,8 +213,8 @@ pub fn authorize(
             });
         }
         let authorization = Authorization {
-            verifying_key: keypair.verifying_key(),
-            signature: keypair.sign(&tx_bytes_canonical),
+            verifying_key,
+            signature: signing_key.sign(&tx_bytes_canonical),
         };
         authorizations.push(authorization);
     }
