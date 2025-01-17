@@ -231,7 +231,7 @@ pub mod mainchain {
     use serde::{Deserialize, Serialize};
     use thiserror::Error;
 
-    use super::common::{ConsensusHex, Hex, ReverseHex};
+    use super::common::{ConsensusHex, ReverseHex};
     use crate::types::{
         BitcoinOutputContent, FilledOutput, FilledOutputContent, M6id,
         THIS_SIDECHAIN,
@@ -1038,7 +1038,7 @@ pub mod mainchain {
         ) -> Result<Txid, super::Error> {
             let request = generated::CreateDepositTransactionRequest {
                 sidechain_id: Some(THIS_SIDECHAIN as u32),
-                address: Some(Hex::encode(&address.0)),
+                address: Some(address.to_string()),
                 value_sats: Some(value_sats),
                 fee_sats: Some(fee_sats),
             };
