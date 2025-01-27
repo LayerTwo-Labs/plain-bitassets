@@ -63,9 +63,12 @@ fn set_tracing_subscriber(
         ("plain_bitassets_app", log_level),
     ]);
     let line_buffer = LineBuffer::default();
-    let stdout_layer = tracing_subscriber::fmt::layer()
+    let mut stdout_layer = tracing_subscriber::fmt::layer()
         .compact()
         .with_line_number(true);
+    let is_terminal =
+        std::io::IsTerminal::is_terminal(&stdout_layer.writer()());
+    stdout_layer.set_ansi(is_terminal);
     let (rolling_log_layer, rolling_log_guard) = match log_dir {
         None => (None, None),
         Some(log_dir) => {
