@@ -58,7 +58,7 @@ pub enum Error {
     #[error("quinn error")]
     Io(#[from] std::io::Error),
     #[error("error requesting mainchain ancestors")]
-    MainchainAncestors(anyhow::Error),
+    MainchainAncestors(#[source] mainchain_task::ResponseError),
     #[error("mempool error")]
     MemPool(#[from] mempool::Error),
     #[error("net error")]
@@ -801,7 +801,7 @@ where
         else {
             panic!("should be impossible")
         };
-        let () = res.map_err(|err| Error::MainchainAncestors(err.into()))?;
+        let () = res.map_err(Error::MainchainAncestors)?;
         // Verify BMM
         let mainchain_task::Response::VerifyBmm(_, res) = self
             .mainchain_task
