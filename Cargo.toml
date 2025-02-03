@@ -41,6 +41,9 @@ rev = "38c42ee637d083f1cdc807b546f6930b880dcad9"
 all = { level = "deny", priority = -1 }
 assertions_on_result_states = "allow"
 let_unit_value = "allow"
+print_stderr = "deny"
+print_stdout = "deny"
+significant_drop_in_scrutinee = "deny"
 wildcard_imports = "deny"
 
 [workspace.lints.rust]
