@@ -70,10 +70,8 @@ impl ConsoleLogs {
                 return;
             }
         };
-        let cli = plain_bitassets_app_cli_lib::Cli {
-            rpc_addr: self.rpc_addr,
-            command,
-        };
+        let cli =
+            plain_bitassets_app_cli_lib::Cli::new(command, self.rpc_addr, None);
         app.runtime.spawn({
             let running_command = self.running_command.clone();
             running_command.store(true, atomic::Ordering::SeqCst);

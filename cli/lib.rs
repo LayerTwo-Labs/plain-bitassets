@@ -1,4 +1,7 @@
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    time::Duration,
+};
 
 use clap::{Parser, Subcommand};
 use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
@@ -149,20 +152,39 @@ const DEFAULT_RPC_ADDR: SocketAddr = SocketAddr::new(
     6000 + THIS_SIDECHAIN as u16,
 );
 
+const DEFAULT_TIMEOUT_SECS: u64 = 60;
+
 #[derive(Clone, Debug, Parser)]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
+    #[command(subcommand)]
+    pub command: Command,
     /// address for use by the RPC server
     #[arg(default_value_t = DEFAULT_RPC_ADDR, long)]
     pub rpc_addr: SocketAddr,
+    /// Timeout for RPC requests in seconds.
+    #[arg(default_value_t = DEFAULT_TIMEOUT_SECS, long = "timeout")]
+    timeout_secs: u64,
+}
 
-    #[command(subcommand)]
-    pub command: Command,
+impl Cli {
+    pub fn new(
+        command: Command,
+        rpc_addr: SocketAddr,
+        timeout_secs: Option<u64>,
+    ) -> Self {
+        Self {
+            command,
+            rpc_addr,
+            timeout_secs: timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS),
+        }
+    }
 }
 
 impl Cli {
     pub async fn run(self) -> anyhow::Result<String> {
         let rpc_client: HttpClient = HttpClientBuilder::default()
+            .request_timeout(Duration::from_secs(self.timeout_secs))
             .build(format!("http://{}", self.rpc_addr))?;
         let res = match self.command {
             Command::AmmBurn {
