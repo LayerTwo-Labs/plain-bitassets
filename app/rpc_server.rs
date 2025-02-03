@@ -455,6 +455,13 @@ impl RpcServer for RpcServerImpl {
         self.app.node.get_tip_height().map_err(convert_node_err)
     }
 
+    async fn list_peers(&self) -> RpcResult<Vec<String>> {
+        let peers = self.app.node.get_active_peers();
+        let res: Vec<_> =
+            peers.into_iter().map(|addr| addr.to_string()).collect();
+        Ok(res)
+    }
+    
     async fn list_utxos(
         &self,
     ) -> RpcResult<Vec<PointedOutput<FilledOutputContent>>> {

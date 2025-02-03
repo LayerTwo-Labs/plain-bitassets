@@ -221,6 +221,12 @@ pub trait Rpc {
     #[method(name = "getblockcount")]
     async fn getblockcount(&self) -> RpcResult<u32>;
 
+    /// List peers
+    /// TODO: Use schema::SocketAddr. Cannot get it to work. Also, add more info about peers
+    #[open_api_method(output_schema(ToSchema))]
+    #[method(name = "list_peers")]
+    async fn list_peers(&self) -> RpcResult<Vec<String>>;
+
     /// List all UTXOs
     #[open_api_method(output_schema(
         ToSchema = "Vec<PointedOutput<FilledOutputContent>>"
