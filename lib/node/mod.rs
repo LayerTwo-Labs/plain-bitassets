@@ -611,6 +611,23 @@ where
         Ok(self.archive.get_body(&txn, block_hash)?)
     }
 
+    pub fn get_bmm_inclusions(
+        &self,
+        block_hash: BlockHash,
+    ) -> Result<Vec<bitcoin::BlockHash>, Error> {
+        let rotxn = self.env.read_txn()?;
+        let bmm_inclusions = self
+            .archive
+            .get_bmm_results(&rotxn, block_hash)?
+            .into_iter()
+            .filter_map(|(block_hash, bmm_res)| match bmm_res {
+                BmmResult::Verified => Some(block_hash),
+                BmmResult::Failed => None,
+            })
+            .collect();
+        Ok(bmm_inclusions)
+    }
+
     pub fn get_block(&self, block_hash: BlockHash) -> Result<Block, Error> {
         let rotxn = self.env.read_txn()?;
         Ok(self.archive.get_block(&rotxn, block_hash)?)

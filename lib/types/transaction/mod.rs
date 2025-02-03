@@ -333,6 +333,7 @@ pub struct Transaction {
     #[schema(schema_with = TxOutputs::schema)]
     pub outputs: TxOutputs,
     #[serde(with = "serde_hexstr_human_readable")]
+    #[schema(value_type = String)]
     pub memo: Vec<u8>,
     pub data: Option<TransactionData>,
 }

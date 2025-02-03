@@ -82,6 +82,10 @@ pub enum Command {
     GetBlock { block_hash: BlockHash },
     /// Get the current block count
     GetBlockcount,
+    /// Get mainchain blocks that commit to a specified block hash
+    GetBmmInclusions {
+        block_hash: plain_bitassets::types::BlockHash,
+    },
     /// Get a new address
     GetNewAddress,
     /// Get a new encryption pubkey
@@ -264,6 +268,11 @@ impl Cli {
             Command::GetBlockcount => {
                 let blockcount = rpc_client.getblockcount().await?;
                 format!("{blockcount}")
+            }
+            Command::GetBmmInclusions { block_hash } => {
+                let bmm_inclusions =
+                    rpc_client.get_bmm_inclusions(block_hash).await?;
+                serde_json::to_string_pretty(&bmm_inclusions)?
             }
             Command::GetNewAddress => {
                 let address = rpc_client.get_new_address().await?;

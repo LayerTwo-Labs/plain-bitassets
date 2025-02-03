@@ -37,9 +37,9 @@ pub struct TxInfo {
     bitassets_schema::BitcoinTransaction, bitassets_schema::BitcoinOutPoint,
     Address, AssetId, Authorization, BitAssetData, BitAssetDataUpdates,
     BitAssetId, BitcoinOutputContent, BlockHash, Body, DutchAuctionId,
-    DutchAuctionParams, EncryptionPubKey, Header, MerkleRoot, OutPoint, Output,
-    OutputContent, Transaction, TxData, Txid, TxIn, WithdrawalOutputContent,
-    VerifyingKey,
+    DutchAuctionParams, EncryptionPubKey, FilledOutputContent, Header,
+    MerkleRoot, OutPoint, Output, OutputContent, Transaction, TxData, Txid,
+    TxIn, WithdrawalOutputContent, VerifyingKey,
 ])]
 #[rpc(client, server)]
 pub trait Rpc {
@@ -181,6 +181,16 @@ pub trait Rpc {
     #[open_api_method(output_schema(ToSchema))]
     #[method(name = "get_block")]
     async fn get_block(&self, block_hash: BlockHash) -> RpcResult<Block>;
+
+    /// Get mainchain blocks that commit to a specified block hash
+    #[open_api_method(output_schema(
+        PartialSchema = "bitassets_schema::BitcoinBlockHash"
+    ))]
+    #[method(name = "get_bmm_inclusions")]
+    async fn get_bmm_inclusions(
+        &self,
+        block_hash: plain_bitassets::types::BlockHash,
+    ) -> RpcResult<Vec<bitcoin::BlockHash>>;
 
     /// Get a new address
     #[method(name = "get_new_address")]
