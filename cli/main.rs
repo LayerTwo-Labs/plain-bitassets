@@ -5,6 +5,9 @@ use plain_bitassets_app_cli_lib::Cli;
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let res = cli.run().await?;
-    println!("{res}");
+    #[allow(clippy::print_stdout)]
+    {
+        println!("{res}");
+    }
     Ok(())
 }

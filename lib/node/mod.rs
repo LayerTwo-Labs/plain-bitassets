@@ -628,7 +628,7 @@ where
             let inputs: HashSet<_> =
                 transaction.transaction.inputs.iter().copied().collect();
             if !spent_utxos.is_disjoint(&inputs) {
-                println!("UTXO double spent");
+                // UTXO double spent
                 self.mempool
                     .delete(&mut rwtxn, transaction.transaction.txid())?;
                 continue;
