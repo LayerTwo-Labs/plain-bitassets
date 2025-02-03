@@ -105,6 +105,9 @@ pub(super) struct Cli {
     /// Data directory for storing blockchain and wallet data
     #[command(flatten)]
     datadir: DatadirArg,
+    /// Log level for logs that get written to file
+    #[arg(default_value_t = tracing::Level::WARN, long)]
+    file_log_level: tracing::Level,
     /// If specified, the gui will not launch.
     #[arg(long)]
     headless: bool,
@@ -142,6 +145,7 @@ pub(super) struct Cli {
 #[derive(Clone, Debug)]
 pub struct Config {
     pub datadir: PathBuf,
+    pub file_log_level: tracing::Level,
     pub headless: bool,
     /// If None, logging to file should be disabled.
     pub log_dir: Option<PathBuf>,
@@ -175,6 +179,7 @@ impl Cli {
         };
         Ok(Config {
             datadir: self.datadir.0,
+            file_log_level: self.file_log_level,
             headless: self.headless,
             log_dir,
             log_level: self.log_level,

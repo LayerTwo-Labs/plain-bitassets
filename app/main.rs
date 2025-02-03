@@ -55,12 +55,12 @@ type RollingLoggerGuard = tracing_appender::non_blocking::WorkerGuard;
 /// to keep the file logger alive.
 fn rolling_logger<S>(
     log_dir: &Path,
+    log_level: tracing::Level,
 ) -> anyhow::Result<(impl Layer<S>, RollingLoggerGuard)>
 where
     S: tracing::Subscriber
         + for<'s> tracing_subscriber::registry::LookupSpan<'s>,
 {
-    const DEFAULT_LEVEL: tracing::Level = tracing::Level::WARN;
     const LOG_FILE_SUFFIX: &str = "log";
     let rolling_log_appender = tracing_appender::rolling::Builder::new()
         .rotation(tracing_appender::rolling::Rotation::DAILY)
@@ -68,8 +68,7 @@ where
         .build(log_dir)?;
     let (non_blocking_rolling_log_writer, rolling_log_guard) =
         tracing_appender::non_blocking(rolling_log_appender);
-    let level_filter =
-        tracing_filter::Targets::new().with_default(DEFAULT_LEVEL);
+    let level_filter = tracing_filter::Targets::new().with_default(log_level);
     let rolling_log_layer = tracing_subscriber::fmt::layer()
         .compact()
         .with_ansi(false)
@@ -82,6 +81,7 @@ where
 // If the file logger is set, returns a guard that must be held for the
 // lifetime of the program in order to keep the file logger alive.
 fn set_tracing_subscriber(
+    file_log_level: tracing::Level,
     log_dir: Option<&Path>,
     log_level: tracing::Level,
 ) -> anyhow::Result<(LineBuffer, Option<RollingLoggerGuard>)> {
@@ -113,7 +113,7 @@ fn set_tracing_subscriber(
     let (rolling_log_layer, rolling_log_guard) = match log_dir {
         None => (None, None),
         Some(log_dir) => {
-            let (layer, guard) = rolling_logger(log_dir)?;
+            let (layer, guard) = rolling_logger(log_dir, file_log_level)?;
             (Some(layer), Some(guard))
         }
     };
@@ -135,10 +135,13 @@ fn set_tracing_subscriber(
 fn main() -> anyhow::Result<()> {
     let cli = cli::Cli::parse();
     let config = cli.get_config()?;
-    let (line_buffer, _rolling_log_guard) =
-        set_tracing_subscriber(config.log_dir.as_deref(), config.log_level)?;
-    let app: Result<app::App, app::Error> =
-        app::App::new(&config).inspect(|app| {
+    let (line_buffer, _rolling_log_guard) = set_tracing_subscriber(
+        config.file_log_level,
+        config.log_dir.as_deref(),
+        config.log_level,
+    )?;
+    let app: Result<app::App, app::Error> = app::App::new(&config)
+        .inspect(|app| {
             // spawn rpc server
             app.runtime.spawn({
                 let app = app.clone();
@@ -146,6 +149,9 @@ fn main() -> anyhow::Result<()> {
                     rpc_server::run_server(app, config.rpc_addr).await.unwrap()
                 }
             });
+        })
+        .inspect_err(|err| {
+            tracing::error!("application error: {:?}", err);
         });
 
     if config.headless {
