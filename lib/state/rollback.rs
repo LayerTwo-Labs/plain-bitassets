@@ -47,7 +47,7 @@ impl<T> RollBack<HeightStamped<T>> {
         value: T,
         height: u32,
     ) -> Result<(), T> {
-        if self.0.last().height >= height {
+        if self.0.last().height > height {
             return Err(value);
         }
         let height_stamped = HeightStamped { value, height };

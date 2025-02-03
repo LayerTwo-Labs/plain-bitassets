@@ -32,7 +32,7 @@ use crate::{
     state::{self, State},
     types::{
         proto::{self, mainchain},
-        BlockHash, BmmResult, Body, Header, Tip,
+        BmmResult, Body, Header, Tip,
     },
 };
 
@@ -157,8 +157,9 @@ where
     let _fees: bitcoin::Amount = state.validate_block(rwtxn, header, body)?;
     if tracing::enabled!(tracing::Level::DEBUG) {
         let merkle_root = body.compute_merkle_root();
-        let height = state.get_height(rwtxn)?;
-        tracing::debug!(%height, %merkle_root, %block_hash,
+        let height = state.try_get_height(rwtxn)?;
+        let () = state.connect_block(rwtxn, header, body)?;
+        tracing::debug!(?height, %merkle_root, %block_hash,
                             "connected body")
     } else {
         let () = state.connect_block(rwtxn, header, body)?;
@@ -182,10 +183,11 @@ async fn disconnect_tip_<Transport>(
 where
     Transport: proto::Transport,
 {
-    let tip_block_hash = state.get_tip(rwtxn)?;
+    let tip_block_hash =
+        state.try_get_tip(rwtxn)?.ok_or(state::Error::NoTip)?;
     let tip_header = archive.get_header(rwtxn, tip_block_hash)?;
     let tip_body = archive.get_body(rwtxn, tip_block_hash)?;
-    let height = state.get_height(rwtxn)?;
+    let height = state.try_get_height(rwtxn)?.ok_or(state::Error::NoTip)?;
     let two_way_peg_data = {
         let last_applied_deposit_block = state
             .deposit_blocks
@@ -277,9 +279,9 @@ where
     Transport: proto::Transport,
 {
     let mut rwtxn = env.write_txn()?;
-    let tip_hash = state.get_tip(&rwtxn)?;
-    let tip_height = state.get_height(&rwtxn)?;
-    if tip_hash != BlockHash::default() {
+    let tip_hash = state.try_get_tip(&rwtxn)?;
+    let tip_height = state.try_get_height(&rwtxn)?;
+    if let Some(tip_hash) = tip_hash {
         let bmm_verification =
             archive.get_best_main_verification(&rwtxn, tip_hash)?;
         let tip = Tip {
@@ -288,15 +290,26 @@ where
         };
         // check that new tip is better than current tip
         if archive.better_tip(&rwtxn, tip, new_tip)? != Some(new_tip) {
+            tracing::debug!(
+                ?tip,
+                ?new_tip,
+                "New tip is not better than current tip"
+            );
             return Ok(false);
         }
     }
-    let common_ancestor =
-        archive.last_common_ancestor(&rwtxn, tip_hash, new_tip.block_hash)?;
+    let common_ancestor = if let Some(tip_hash) = tip_hash {
+        archive.last_common_ancestor(&rwtxn, tip_hash, new_tip.block_hash)?
+    } else {
+        None
+    };
     // Check that all necessary bodies exist before disconnecting tip
     let blocks_to_apply: Vec<(Header, Body)> = archive
         .ancestors(&rwtxn, new_tip.block_hash)
-        .take_while(|block_hash| Ok(*block_hash != common_ancestor))
+        .take_while(|block_hash| {
+            Ok(common_ancestor
+                .is_none_or(|common_ancestor| *block_hash != common_ancestor))
+        })
         .map(|block_hash| {
             let header = archive.get_header(&rwtxn, block_hash)?;
             let body = archive.get_body(&rwtxn, block_hash)?;
@@ -304,18 +317,37 @@ where
         })
         .collect()?;
     // Disconnect tip until common ancestor is reached
-    let common_ancestor_height = archive.get_height(&rwtxn, common_ancestor)?;
-    for _ in 0..tip_height - common_ancestor_height {
-        let () = disconnect_tip_(
-            &mut rwtxn,
-            archive,
-            cusf_mainchain,
-            mempool,
-            state,
-        )
-        .await?;
+    let mut common_ancestor_height = None;
+    if let Some(tip_height) = tip_height {
+        if let Some(common_ancestor) = common_ancestor {
+            common_ancestor_height =
+                Some(archive.get_height(&rwtxn, common_ancestor)?);
+        }
+        tracing::debug!(
+            ?tip_hash,
+            ?tip_height,
+            ?common_ancestor,
+            ?common_ancestor_height,
+            "Disconnecting tip until common ancestor is reached"
+        );
+        let disconnects =
+            if let Some(common_ancestor_height) = common_ancestor_height {
+                tip_height - common_ancestor_height
+            } else {
+                tip_height + 1
+            };
+        for _ in 0..disconnects {
+            let () = disconnect_tip_(
+                &mut rwtxn,
+                archive,
+                cusf_mainchain,
+                mempool,
+                state,
+            )
+            .await?;
+        }
     }
-    let tip = state.get_tip(&rwtxn)?;
+    let tip = state.try_get_tip(&rwtxn)?;
     assert_eq!(tip, common_ancestor);
     // Apply blocks until new tip is reached
     for (header, body) in blocks_to_apply.iter().rev() {
@@ -330,8 +362,8 @@ where
         )
         .await?;
     }
-    let tip = state.get_tip(&rwtxn)?;
-    assert_eq!(tip, new_tip.block_hash);
+    let tip = state.try_get_tip(&rwtxn)?;
+    assert_eq!(tip, Some(new_tip.block_hash));
     rwtxn.commit()?;
     tracing::info!("synced to tip: {}", new_tip.block_hash);
     #[cfg(feature = "zmq")]
@@ -340,7 +372,8 @@ where
             blocks_to_apply.into_iter().rev().enumerate()
         {
             let block_hash = header.hash();
-            let height = common_ancestor_height + idx as u32 + 1;
+            let height =
+                common_ancestor_height.map(|h| h + 1).unwrap_or(0) + idx as u32;
             let mut zmq_msg = zeromq::ZmqMessage::from("hashblock");
             zmq_msg.push_back(bytes::Bytes::copy_from_slice(&block_hash.0));
             zmq_msg.push_back(bytes::Bytes::copy_from_slice(
@@ -424,7 +457,7 @@ where
                 req @ PeerRequest::GetBlock {
                     block_hash,
                     descendant_tip: Some(descendant_tip),
-                    ancestor: Some(ancestor),
+                    ancestor,
                     peer_state_id: Some(peer_state_id),
                 },
                 ref resp @ PeerResponse::Block {
@@ -463,7 +496,7 @@ where
                 // and send new tip ready if so
                 {
                     let rotxn = ctxt.env.read_txn()?;
-                    let tip_hash = ctxt.state.get_tip(&rotxn)?;
+                    let tip_hash = ctxt.state.try_get_tip(&rotxn)?;
                     // Find the BMM verification that is an ancestor of
                     // `main_descendant_tip`
                     let main_block_hash = ctxt
@@ -504,12 +537,15 @@ where
                         return Ok(());
                     };
                     for (descendant_tip, sources) in descendant_tips {
-                        let common_ancestor =
+                        let common_ancestor = if let Some(tip_hash) = tip_hash {
                             ctxt.archive.last_common_ancestor(
                                 &rotxn,
                                 descendant_tip.block_hash,
                                 tip_hash,
-                            )?;
+                            )?
+                        } else {
+                            None
+                        };
                         let missing_bodies = ctxt.archive.get_missing_bodies(
                             &rotxn,
                             descendant_tip.block_hash,
@@ -534,7 +570,7 @@ where
                 PeerRequest::GetBlock {
                     block_hash: req_block_hash,
                     descendant_tip: Some(_),
-                    ancestor: Some(_),
+                    ancestor: _,
                     peer_state_id: Some(_),
                 },
                 PeerResponse::NoBlock {
@@ -565,19 +601,28 @@ where
                 // Must be at least one header due to previous check
                 let start_hash = headers.first().unwrap().prev_side_hash;
                 // check that the first header is after a start block
-                if !(start.contains(&start_hash)
-                    || start_hash == BlockHash::default())
+                if let Some(start_hash) = start_hash
+                    && !start.contains(&start_hash)
                 {
-                    tracing::warn!(%addr, ?req, ?start_hash, "Invalid response from peer; invalid start hash");
+                    tracing::warn!(%addr, ?req, %start_hash, "Invalid response from peer; invalid start hash");
                     let () = ctxt.net.remove_active_peer(addr);
                     return Ok(());
                 }
                 // check that the end header height is as expected
                 {
                     let rotxn = ctxt.env.read_txn()?;
-                    let start_height =
-                        ctxt.archive.get_height(&rotxn, start_hash)?;
-                    if start_height + headers.len() as u32 != height {
+                    let start_height = if let Some(start_hash) = start_hash {
+                        Some(ctxt.archive.get_height(&rotxn, start_hash)?)
+                    } else {
+                        None
+                    };
+                    let end_height = match start_height {
+                        Some(start_height) => {
+                            start_height + headers.len() as u32
+                        }
+                        None => headers.len() as u32 - 1,
+                    };
+                    if end_height != height {
                         tracing::warn!(%addr, ?req, ?start_hash, "Invalid response from peer; invalid end height");
                         let () = ctxt.net.remove_active_peer(addr);
                         return Ok(());
@@ -591,7 +636,7 @@ where
                         let () = ctxt.net.remove_active_peer(addr);
                         return Ok(());
                     }
-                    prev_side_hash = header.hash();
+                    prev_side_hash = Some(header.hash());
                 }
                 // Store new headers
                 let mut rwtxn = ctxt.env.write_txn()?;
@@ -602,15 +647,15 @@ where
                         .try_get_header(&rwtxn, block_hash)?
                         .is_none()
                     {
-                        if header.prev_side_hash == BlockHash::default()
-                            || ctxt
+                        if let Some(parent) = header.prev_side_hash
+                            && ctxt
                                 .archive
-                                .try_get_header(&rwtxn, header.prev_side_hash)?
-                                .is_some()
+                                .try_get_header(&rwtxn, parent)?
+                                .is_none()
                         {
-                            ctxt.archive.put_header(&mut rwtxn, header)?;
-                        } else {
                             break;
+                        } else {
+                            ctxt.archive.put_header(&mut rwtxn, header)?;
                         }
                     }
                 }

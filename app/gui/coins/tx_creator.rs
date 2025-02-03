@@ -336,7 +336,10 @@ impl TxCreator {
         let bid_size = u64::from_str(bid_size).map_err(|err| {
             anyhow::anyhow!("Failed to parse bid size: {err}")
         })?;
-        let height = app.node.get_tip_height()?;
+        let height = app
+            .node
+            .try_get_tip_height()?
+            .ok_or_else(|| anyhow::anyhow!("No tip"))?;
         let auction_state = app
             .node
             .get_dutch_auction_state(auction_id)

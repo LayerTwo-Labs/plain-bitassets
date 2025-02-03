@@ -4,7 +4,7 @@ use std::{
     sync::LazyLock,
 };
 
-use bitcoin::{amount::CheckedSum as _, hashes::Hash as _};
+use bitcoin::amount::CheckedSum as _;
 use borsh::BorshSerialize;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -156,7 +156,7 @@ where
 )]
 pub struct Header {
     pub merkle_root: MerkleRoot,
-    pub prev_side_hash: BlockHash,
+    pub prev_side_hash: Option<BlockHash>,
     #[borsh(serialize_with = "borsh_serialize_bitcoin_block_hash")]
     #[schema(value_type = crate::types::schema::BitcoinBlockHash)]
     pub prev_main_hash: bitcoin::BlockHash,
@@ -202,9 +202,10 @@ enum WithdrawalBundleErrorInner {
 #[error("Withdrawal bundle error")]
 pub struct WithdrawalBundleError(#[from] WithdrawalBundleErrorInner);
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct WithdrawalBundle {
     spend_utxos: BTreeMap<OutPoint, FilledOutput>,
+    #[schema(value_type = schema::BitcoinTransaction)]
     tx: bitcoin::Transaction,
 }
 
@@ -468,15 +469,6 @@ pub struct Tip {
     pub block_hash: BlockHash,
     #[borsh(serialize_with = "borsh_serialize_bitcoin_block_hash")]
     pub main_block_hash: bitcoin::BlockHash,
-}
-
-impl Default for Tip {
-    fn default() -> Self {
-        Self {
-            block_hash: BlockHash::default(),
-            main_block_hash: bitcoin::BlockHash::all_zeros(),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]

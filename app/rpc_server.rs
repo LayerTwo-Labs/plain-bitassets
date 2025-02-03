@@ -15,6 +15,7 @@ use plain_bitassets::{
         Address, AssetId, BitAssetData, BitAssetId, Block, BlockHash,
         DutchAuctionId, DutchAuctionParams, EncryptionPubKey,
         FilledOutputContent, PointedOutput, Transaction, Txid, VerifyingKey,
+        WithdrawalBundle,
     },
     wallet::{self, Balance},
 };
@@ -404,8 +405,12 @@ impl RpcServer for RpcServerImpl {
         };
         let confirmations = match txin {
             Some(txin) => {
-                let tip_height =
-                    self.app.node.get_tip_height().map_err(convert_node_err)?;
+                let tip_height = self
+                    .app
+                    .node
+                    .try_get_tip_height()
+                    .map_err(convert_node_err)?
+                    .expect("Height should exist for tip");
                 let height = self
                     .app
                     .node
@@ -452,7 +457,24 @@ impl RpcServer for RpcServerImpl {
     }
 
     async fn getblockcount(&self) -> RpcResult<u32> {
-        self.app.node.get_tip_height().map_err(convert_node_err)
+        let height = self
+            .app
+            .node
+            .try_get_tip_height()
+            .map_err(convert_node_err)?;
+        let block_count = height.map_or(0, |height| height + 1);
+        Ok(block_count)
+    }
+
+    async fn latest_failed_withdrawal_bundle_height(
+        &self,
+    ) -> RpcResult<Option<u32>> {
+        let height = self
+            .app
+            .node
+            .get_latest_failed_withdrawal_bundle_height()
+            .map_err(convert_node_err)?;
+        Ok(height)
     }
 
     async fn list_peers(&self) -> RpcResult<Vec<SocketAddr>> {
@@ -514,6 +536,15 @@ impl RpcServer for RpcServerImpl {
         let res =
             <plain_bitassets_app_rpc_api::RpcDoc as utoipa::OpenApi>::openapi();
         Ok(res)
+    }
+
+    async fn pending_withdrawal_bundle(
+        &self,
+    ) -> RpcResult<Option<WithdrawalBundle>> {
+        self.app
+            .node
+            .get_pending_withdrawal_bundle()
+            .map_err(convert_node_err)
     }
 
     async fn reserve_bitasset(&self, plain_name: String) -> RpcResult<Txid> {

@@ -15,13 +15,13 @@ impl BlockExplorer {
     }
 
     pub fn show(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
-        let Some(app) = app else {
-            return;
-        };
-        let max_height = app.node.get_tip_height().unwrap_or(0);
+        let max_height = app
+            .and_then(|app| app.node.try_get_tip_height().ok().flatten())
+            .unwrap_or(0);
         let block: Option<(Header, Body)> = {
-            if let Ok(Some(block_hash)) =
-                app.node.try_get_block_hash(self.height)
+            if let Some(app) = app
+                && let Ok(Some(block_hash)) =
+                    app.node.try_get_block_hash(self.height)
                 && let Ok(header) = app.node.get_header(block_hash)
                 && let Ok(body) = app.node.get_body(block_hash)
             {
@@ -47,7 +47,7 @@ impl BlockExplorer {
             if let Some((header, body)) = block {
                 let hash = &format!("{}", header.hash());
                 let merkle_root = &format!("{}", header.merkle_root);
-                let prev_side_hash = &format!("{}", header.prev_side_hash);
+                let prev_side_hash = &format!("{:?}", header.prev_side_hash);
                 let prev_main_hash = &format!("{}", header.prev_main_hash);
                 let body_size =
                     bincode::serialize(&body).unwrap_or(vec![]).len();

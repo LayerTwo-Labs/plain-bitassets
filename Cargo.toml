@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "app",
     "cli",
+    "integration_tests",
     "lib",
     "rpc-api",
 ]
@@ -25,13 +26,24 @@ serde = "1.0.179"
 serde_json = "1.0.113"
 serde_with = "3.4.0"
 strum = { version = "0.26.3", default-features = false }
-thiserror = "2.0.10"
+thiserror = "2.0.11"
 tiny-bip39 = "2.0.0"
 tokio = { version = "1.29.1", default-features = false }
 tokio-util = "0.7.10"
 tonic = "0.12.3"
 tracing = "0.1.40"
+tracing-subscriber = "0.3.18"
 utoipa = { version = "5.2.0", default-features = false }
+
+[workspace.dependencies.bip300301_enforcer_lib]
+default-features = false
+git = "https://github.com/Ash-L2L/bip300301_enforcer"
+rev = "0ec335eeaffef8ef693c86e7f0ff6515ebf4a124"
+
+[workspace.dependencies.bip300301_enforcer_integration_tests]
+default-features = false
+git = "https://github.com/Ash-L2L/bip300301_enforcer"
+rev = "0ec335eeaffef8ef693c86e7f0ff6515ebf4a124"
 
 [workspace.dependencies.l2l-openapi]
 git = "https://github.com/Ash-L2L/l2l-openapi"
@@ -55,6 +67,12 @@ edition = "2021"
 license-file = "LICENSE.txt"
 publish = false
 version = "0.10.7"
+
+# temp-dir does not leak correctly after clone
+# https://gitlab.com/leonhard-llc/ops/-/issues/17
+[patch.crates-io.temp-dir]
+git = "https://gitlab.com/A-Manning/leonhard-llc-ops.git"
+branch = "temp-dir-leak"
 
 [profile.release]
 # lto = "fat"
