@@ -157,10 +157,10 @@ pub enum InvalidHeader {
         expected: BlockHash,
         computed: BlockHash,
     },
-    #[error("expected previous sidechain block hash {expected}, but received {received}")]
+    #[error("expected previous sidechain block hash {expected:?}, but received {received:?}")]
     PrevSideHash {
-        expected: BlockHash,
-        received: BlockHash,
+        expected: Option<BlockHash>,
+        received: Option<BlockHash>,
     },
 }
 
@@ -209,6 +209,8 @@ pub enum Error {
     NotEnoughFees,
     #[error("value in is less than value out")]
     NotEnoughValueIn,
+    #[error("no tip")]
+    NoTip,
     #[error("stxo {outpoint} doesn't exist")]
     NoStxo { outpoint: OutPoint },
     #[error("utxo {outpoint} doesn't exist")]

@@ -29,6 +29,8 @@ pub use dutch_auction::DutchAuctionState;
 pub use error::Error;
 use rollback::{HeightStamped, RollBack};
 
+pub const WITHDRAWAL_BUNDLE_FAILURE_GAP: u32 = 4;
+
 type WithdrawalBundlesDb = Database<
     SerdeBincode<M6id>,
     SerdeBincode<(
@@ -69,7 +71,6 @@ pub struct State {
 
 impl State {
     pub const NUM_DBS: u32 = bitassets::Dbs::NUM_DBS + 11;
-    pub const WITHDRAWAL_BUNDLE_FAILURE_GAP: u32 = 5;
 
     pub fn new(env: &heed::Env) -> Result<Self, Error> {
         let mut rwtxn = env.write_txn()?;
@@ -112,13 +113,16 @@ impl State {
         })
     }
 
-    pub fn get_tip(&self, rotxn: &RoTxn) -> Result<BlockHash, Error> {
-        let tip = self.tip.try_get(rotxn, &UnitKey)?.unwrap_or_default();
+    pub fn try_get_tip(
+        &self,
+        rotxn: &RoTxn,
+    ) -> Result<Option<BlockHash>, Error> {
+        let tip = self.tip.try_get(rotxn, &UnitKey)?;
         Ok(tip)
     }
 
-    pub fn get_height(&self, rotxn: &RoTxn) -> Result<u32, Error> {
-        let height = self.height.get(rotxn, &UnitKey)?.unwrap_or_default();
+    pub fn try_get_height(&self, rotxn: &RoTxn) -> Result<Option<u32>, Error> {
+        let height = self.height.get(rotxn, &UnitKey)?;
         Ok(height)
     }
 
@@ -150,7 +154,7 @@ impl State {
     }
 
     /// Get the latest failed withdrawal bundle, and the height at which it failed
-    fn get_latest_failed_withdrawal_bundle(
+    pub fn get_latest_failed_withdrawal_bundle(
         &self,
         rotxn: &RoTxn,
     ) -> Result<Option<(u32, WithdrawalBundle)>, Error> {
@@ -268,10 +272,10 @@ impl State {
                     .value
                     .checked_add(withdrawal.value)
                     .ok_or(AmountOverflowError)?;
-                // Set maximum mainchain fee.
-                if withdrawal.main_fee > aggregated.main_fee {
-                    aggregated.main_fee = withdrawal.main_fee;
-                }
+                aggregated.main_fee = aggregated
+                    .main_fee
+                    .checked_add(withdrawal.main_fee)
+                    .ok_or(AmountOverflowError)?;
                 aggregated.spend_utxos.insert(outpoint, output);
             }
         }
@@ -587,7 +591,7 @@ impl State {
         header: &Header,
         body: &Body,
     ) -> Result<bitcoin::Amount, Error> {
-        let tip_hash = self.get_tip(rotxn)?;
+        let tip_hash = self.try_get_tip(rotxn)?;
         if header.prev_side_hash != tip_hash {
             let err = error::InvalidHeader::PrevSideHash {
                 expected: tip_hash,
@@ -675,7 +679,7 @@ impl State {
         rwtxn: &mut RwTxn,
         two_way_peg_data: &TwoWayPegData,
     ) -> Result<(), Error> {
-        let block_height = self.get_height(rwtxn)?;
+        let block_height = self.try_get_height(rwtxn)?.ok_or(Error::NoTip)?;
         tracing::trace!(%block_height, "Connecting 2WPD...");
         // Handle deposits.
         if let Some(latest_deposit_block_hash) =
@@ -688,7 +692,7 @@ impl State {
             self.deposit_blocks.put(
                 rwtxn,
                 &deposit_block_seq_idx,
-                &(latest_deposit_block_hash, block_height - 1),
+                &(latest_deposit_block_hash, block_height),
             )?;
         }
         for deposit in two_way_peg_data
@@ -711,7 +715,7 @@ impl State {
             self.withdrawal_bundle_event_blocks.put(
                 rwtxn,
                 &withdrawal_bundle_event_block_seq_idx,
-                &(*latest_withdrawal_bundle_event_block_hash, block_height - 1),
+                &(*latest_withdrawal_bundle_event_block_hash, block_height),
             )?;
         }
         let last_withdrawal_bundle_failure_height = self
@@ -719,7 +723,7 @@ impl State {
             .map(|(height, _bundle)| height)
             .unwrap_or_default();
         if block_height - last_withdrawal_bundle_failure_height
-            > Self::WITHDRAWAL_BUNDLE_FAILURE_GAP
+            >= WITHDRAWAL_BUNDLE_FAILURE_GAP
             && self
                 .pending_withdrawal_bundle
                 .get(rwtxn, &UnitKey)?
@@ -729,14 +733,6 @@ impl State {
                 self.collect_withdrawal_bundle(rwtxn, block_height)?
             {
                 let m6id = bundle.compute_m6id();
-                for (outpoint, spend_output) in bundle.spend_utxos() {
-                    self.utxos.delete(rwtxn, outpoint)?;
-                    let spent_output = SpentOutput {
-                        output: spend_output.clone(),
-                        inpoint: InPoint::Withdrawal { m6id },
-                    };
-                    self.stxos.put(rwtxn, outpoint, &spent_output)?;
-                }
                 self.pending_withdrawal_bundle.put(
                     rwtxn,
                     &UnitKey,
@@ -769,16 +765,25 @@ impl State {
                             m6id: event.m6id,
                         });
                     };
-                    assert_eq!(bundle_block_height, block_height - 2);
+                    assert_eq!(bundle_block_height, block_height - 1);
                     if bundle.compute_m6id() != event.m6id {
                         return Err(Error::UnknownWithdrawalBundle {
                             m6id: event.m6id,
                         });
                     }
                     tracing::debug!(
+                        %block_height,
                         m6id = %event.m6id,
                         "Withdrawal bundle successfully submitted"
                     );
+                    for (outpoint, spend_output) in bundle.spend_utxos() {
+                        self.utxos.delete(rwtxn, outpoint)?;
+                        let spent_output = SpentOutput {
+                            output: spend_output.clone(),
+                            inpoint: InPoint::Withdrawal { m6id: event.m6id },
+                        };
+                        self.stxos.put(rwtxn, outpoint, &spent_output)?;
+                    }
                     self.withdrawal_bundles.put(
                         rwtxn,
                         &event.m6id,
@@ -821,6 +826,10 @@ impl State {
                     )?;
                 }
                 WithdrawalBundleStatus::Failed => {
+                    tracing::debug!(
+                        %block_height,
+                        m6id = %event.m6id,
+                        "Handling failed withdrawal bundle");
                     let Some((bundle, mut bundle_status)) =
                         self.withdrawal_bundles.get(rwtxn, &event.m6id)?
                     else {
@@ -884,7 +893,9 @@ impl State {
         rwtxn: &mut RwTxn,
         two_way_peg_data: &TwoWayPegData,
     ) -> Result<(), Error> {
-        let block_height = self.get_height(rwtxn)?;
+        let block_height = self
+            .try_get_height(rwtxn)?
+            .expect("Height should not be None");
         // Restore pending withdrawal bundle
         for (_, event) in two_way_peg_data.withdrawal_bundle_events().rev() {
             match event.status {
@@ -910,10 +921,19 @@ impl State {
                         WithdrawalBundleStatus::Submitted
                     );
                     assert_eq!(bundle_status.height, block_height);
+                    for (outpoint, output) in bundle.spend_utxos().iter().rev()
+                    {
+                        if !self.stxos.delete(rwtxn, outpoint)? {
+                            return Err(Error::NoStxo {
+                                outpoint: *outpoint,
+                            });
+                        };
+                        self.utxos.put(rwtxn, outpoint, output)?;
+                    }
                     self.pending_withdrawal_bundle.put(
                         rwtxn,
                         &UnitKey,
-                        &(bundle, bundle_status.height - 2),
+                        &(bundle, bundle_status.height - 1),
                     )?;
                     self.withdrawal_bundles.delete(rwtxn, &event.m6id)?;
                 }
@@ -1053,10 +1073,10 @@ impl State {
             .map(|(height, _bundle)| height)
             .unwrap_or_default();
         if block_height - last_withdrawal_bundle_failure_height
-            > Self::WITHDRAWAL_BUNDLE_FAILURE_GAP
+            > WITHDRAWAL_BUNDLE_FAILURE_GAP
             && let Some((bundle, bundle_height)) =
                 self.pending_withdrawal_bundle.get(rwtxn, &UnitKey)?
-            && bundle_height == block_height - 2
+            && bundle_height == block_height - 1
         {
             self.pending_withdrawal_bundle.delete(rwtxn, &UnitKey)?;
             for (outpoint, output) in bundle.spend_utxos().iter().rev() {
@@ -1107,8 +1127,8 @@ impl State {
         header: &Header,
         body: &Body,
     ) -> Result<(), Error> {
-        let height = self.get_height(rwtxn)?;
-        let tip_hash = self.get_tip(rwtxn)?;
+        let height = self.try_get_height(rwtxn)?.map_or(0, |height| height + 1);
+        let tip_hash = self.try_get_tip(rwtxn)?;
         if tip_hash != header.prev_side_hash {
             let err = error::InvalidHeader::PrevSideHash {
                 expected: tip_hash,
@@ -1258,7 +1278,7 @@ impl State {
         }
         let block_hash = header.hash();
         self.tip.put(rwtxn, &UnitKey, &block_hash)?;
-        self.height.put(rwtxn, &UnitKey, &(height + 1))?;
+        self.height.put(rwtxn, &UnitKey, &height)?;
         Ok(())
     }
 
@@ -1268,7 +1288,8 @@ impl State {
         header: &Header,
         body: &Body,
     ) -> Result<(), Error> {
-        let tip_hash = self.get_tip(rwtxn)?;
+        let tip_hash =
+            self.tip.try_get(rwtxn, &UnitKey)?.ok_or(Error::NoTip)?;
         if tip_hash != header.hash() {
             let err = error::InvalidHeader::BlockHash {
                 expected: tip_hash,
@@ -1284,7 +1305,9 @@ impl State {
             };
             return Err(err);
         }
-        let height = self.get_height(rwtxn)?;
+        let height = self
+            .try_get_height(rwtxn)?
+            .expect("Height should not be None");
         // revert txs, last-to-first
         let mut filled_txs: Vec<FilledTransaction> = Vec::new();
         body.transactions.iter().rev().try_for_each(|tx| {
@@ -1404,8 +1427,17 @@ impl State {
                 }
             },
         )?;
-        self.tip.put(rwtxn, &UnitKey, &header.prev_side_hash)?;
-        self.height.put(rwtxn, &UnitKey, &(height - 1))?;
+        match (header.prev_side_hash, height) {
+            (None, 0) => {
+                self.tip.delete(rwtxn, &UnitKey)?;
+                self.height.delete(rwtxn, &UnitKey)?;
+            }
+            (None, _) | (_, 0) => return Err(Error::NoTip),
+            (Some(prev_side_hash), height) => {
+                self.tip.put(rwtxn, &UnitKey, &prev_side_hash)?;
+                self.height.put(rwtxn, &UnitKey, &(height - 1))?;
+            }
+        }
         Ok(())
     }
 

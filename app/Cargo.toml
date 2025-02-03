@@ -6,11 +6,6 @@ license-file.workspace = true
 publish.workspace = true
 version.workspace = true
 
-[dev-dependencies.bip300301]
-git = "https://github.com/Ash-L2L/bip300301.git"
-rev = "45f74e37b8295207d29ddbbce10d563ec9f67151"
-features = ["tracing"]
-
 [dependencies]
 anyhow = { workspace = true }
 bincode = { workspace = true }
@@ -45,20 +40,12 @@ tonic = { workspace = true }
 tonic-health = "0.12.3"
 tracing = { workspace = true }
 tracing-appender = "0.2.3"
-tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 utoipa = { workspace = true }
 
 [dependencies.libes]
 version = "0.9.1"
 features = ["AES256-GCM", "ECIES-MAC", "HMAC-SHA256", "x25519"]
-
-[dev-dependencies]
-base64 = "0.22.1"
-futures = { workspace = true, features = ["async-await"] }
-jsonrpsee = { workspace = true, features = ["async-client", "http-client"] }
-tempfile = "3.10.0"
-test-log = { version = "0.2.14", features = ["trace"] }
-tokio = { workspace = true, features = ["process", "rt-multi-thread"] }
 
 [features]
 default = ["zmq"]

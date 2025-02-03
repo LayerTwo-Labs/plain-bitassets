@@ -14,7 +14,7 @@ use plain_bitassets::{
         Block, BlockHash, Body, DutchAuctionId, DutchAuctionParams,
         EncryptionPubKey, FilledOutputContent, Header, MerkleRoot, OutPoint,
         Output, OutputContent, PointedOutput, Transaction, TxData, TxIn, Txid,
-        VerifyingKey, WithdrawalOutputContent,
+        VerifyingKey, WithdrawalBundle, WithdrawalOutputContent,
     },
     wallet::Balance,
 };
@@ -34,11 +34,12 @@ pub struct TxInfo {
 
 #[open_api(ref_schemas[
     bitassets_schema::BitcoinAddr, bitassets_schema::BitcoinBlockHash,
-    bitassets_schema::BitcoinOutPoint, Address, AssetId, Authorization,
-    BitAssetData, BitAssetDataUpdates, BitAssetId, BitcoinOutputContent,
-    BlockHash, Body, DutchAuctionId, DutchAuctionParams, EncryptionPubKey,
-    Header, MerkleRoot, OutPoint, Output, OutputContent, Transaction, TxData,
-    Txid, TxIn, WithdrawalOutputContent, VerifyingKey,
+    bitassets_schema::BitcoinTransaction, bitassets_schema::BitcoinOutPoint,
+    Address, AssetId, Authorization, BitAssetData, BitAssetDataUpdates,
+    BitAssetId, BitcoinOutputContent, BlockHash, Body, DutchAuctionId,
+    DutchAuctionParams, EncryptionPubKey, Header, MerkleRoot, OutPoint, Output,
+    OutputContent, Transaction, TxData, Txid, TxIn, WithdrawalOutputContent,
+    VerifyingKey,
 ])]
 #[rpc(client, server)]
 pub trait Rpc {
@@ -221,6 +222,12 @@ pub trait Rpc {
     #[method(name = "getblockcount")]
     async fn getblockcount(&self) -> RpcResult<u32>;
 
+    /// Get the height of the latest failed withdrawal bundle
+    #[method(name = "latest_failed_withdrawal_bundle_height")]
+    async fn latest_failed_withdrawal_bundle_height(
+        &self,
+    ) -> RpcResult<Option<u32>>;
+
     /// List peers
     /// TODO: Use schema::SocketAddr. Cannot get it to work. Also, add more info about peers
     #[open_api_method(output_schema(PartialSchema = "schema::SocketAddr"))]
@@ -255,6 +262,13 @@ pub trait Rpc {
     async fn my_utxos(
         &self,
     ) -> RpcResult<Vec<PointedOutput<FilledOutputContent>>>;
+
+    /// Get pending withdrawal bundle
+    #[open_api_method(output_schema(ToSchema))]
+    #[method(name = "pending_withdrawal_bundle")]
+    async fn pending_withdrawal_bundle(
+        &self,
+    ) -> RpcResult<Option<WithdrawalBundle>>;
 
     /// Get OpenRPC schema
     #[open_api_method(output_schema(ToSchema = "schema::OpenApi"))]

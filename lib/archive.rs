@@ -114,10 +114,11 @@ pub struct Archive {
         SerdeBincode<bitcoin::BlockHash>,
         SerdeBincode<HashSet<bitcoin::BlockHash>>,
     >,
-    /// Successor blocks. ALL known block hashes, INCLUDING the zero hash,
-    /// MUST be present.
-    successors:
-        Database<SerdeBincode<BlockHash>, SerdeBincode<HashSet<BlockHash>>>,
+    /// Successor blocks. ALL known block hashes MUST be present.
+    successors: Database<
+        SerdeBincode<Option<BlockHash>>,
+        SerdeBincode<HashSet<BlockHash>>,
+    >,
     /// Total work for mainchain headers with BMM verifications.
     /// All ancestors of any block should always be present
     total_work:
@@ -162,12 +163,8 @@ impl Archive {
             )?;
         }
         let successors = env.create_database(&mut rwtxn, Some("successors"))?;
-        if successors.get(&rwtxn, &BlockHash::default())?.is_none() {
-            successors.put(
-                &mut rwtxn,
-                &BlockHash::default(),
-                &HashSet::new(),
-            )?;
+        if successors.get(&rwtxn, &None)?.is_none() {
+            successors.put(&mut rwtxn, &None, &HashSet::new())?;
         }
         let total_work = env.create_database(&mut rwtxn, Some("total_work"))?;
         let txid_to_inclusions =
@@ -198,13 +195,9 @@ impl Archive {
         rotxn: &RoTxn,
         block_hash: BlockHash,
     ) -> Result<Option<u32>, Error> {
-        if block_hash == BlockHash::default() {
-            Ok(Some(0))
-        } else {
-            self.block_hash_to_height
-                .get(rotxn, &block_hash)
-                .map_err(Error::from)
-        }
+        self.block_hash_to_height
+            .get(rotxn, &block_hash)
+            .map_err(Error::from)
     }
 
     /** Get the height of a block from it's hash.
@@ -438,7 +431,10 @@ impl Archive {
                 });
             }
             if n == 1 {
-                let parent = self.get_header(rotxn, block_hash)?.prev_side_hash;
+                let parent = self
+                    .get_header(rotxn, block_hash)?
+                    .prev_side_hash
+                    .expect("block with height >= 1 should have a parent");
                 return Ok(parent);
             } else {
                 let exp_ancestor_index = u32::ilog2(n) - 1;
@@ -491,15 +487,14 @@ impl Archive {
         rotxn: &RoTxn,
         block_hash: BlockHash,
     ) -> Result<Vec<BlockHash>, Error> {
-        if block_hash == BlockHash::default() {
-            return Ok(Vec::new());
-        }
         let header = self.get_header(rotxn, block_hash)?;
         let mut res =
             self.exponential_ancestors.get(rotxn, &block_hash)?.unwrap();
-        res.reverse();
-        res.push(header.prev_side_hash);
-        res.reverse();
+        if let Some(parent) = header.prev_side_hash {
+            res.reverse();
+            res.push(parent);
+            res.reverse();
+        }
         Ok(res)
     }
 
@@ -575,22 +570,27 @@ impl Archive {
             .ok_or(Error::NoMainBlockHash(block_hash))
     }
 
+    /// If block_hash is None, get genesis blocks
     pub fn try_get_successors(
         &self,
         rotxn: &RoTxn,
-        block_hash: BlockHash,
+        block_hash: Option<BlockHash>,
     ) -> Result<Option<HashSet<BlockHash>>, Error> {
         let successors = self.successors.get(rotxn, &block_hash)?;
         Ok(successors)
     }
 
+    /// If block_hash is None, get genesis blocks
     pub fn get_successors(
         &self,
         rotxn: &RoTxn,
-        block_hash: BlockHash,
+        block_hash: Option<BlockHash>,
     ) -> Result<HashSet<BlockHash>, Error> {
-        self.try_get_successors(rotxn, block_hash)?
-            .ok_or(Error::NoBlockHash(block_hash))
+        self.try_get_successors(rotxn, block_hash)?.ok_or_else(|| {
+            Error::NoBlockHash(
+                block_hash.expect("Successors to None should always be known"),
+            )
+        })
     }
 
     pub fn try_get_total_work(
@@ -668,12 +668,14 @@ impl Archive {
         rwtxn: &mut RwTxn,
         header: &Header,
     ) -> Result<(), Error> {
-        let Some(prev_height) =
-            self.try_get_height(rwtxn, header.prev_side_hash)?
-        else {
-            return Err(Error::InvalidPrevSideHash);
+        let height = match header.prev_side_hash {
+            None => 0,
+            Some(parent) => {
+                self.try_get_height(rwtxn, parent)?
+                    .ok_or(Error::InvalidPrevSideHash)?
+                    + 1
+            }
         };
-        let height = prev_height + 1;
         let block_hash = header.hash();
         self.block_hash_to_height.put(rwtxn, &block_hash, &height)?;
         self.headers.put(rwtxn, &block_hash, header)?;
@@ -691,15 +693,18 @@ impl Archive {
         // Store successors
         {
             let successors = self
-                .try_get_successors(rwtxn, block_hash)?
+                .try_get_successors(rwtxn, Some(block_hash))?
                 .unwrap_or_default();
-            self.successors.put(rwtxn, &block_hash, &successors)?;
+            self.successors.put(rwtxn, &Some(block_hash), &successors)?;
         }
         // populate exponential ancestors
         let mut exponential_ancestors = Vec::<BlockHash>::new();
         if height >= 2 {
-            let grandparent =
-                self.get_nth_ancestor(rwtxn, header.prev_side_hash, 1)?;
+            let grandparent = self.get_nth_ancestor(
+                rwtxn,
+                header.prev_side_hash.unwrap(),
+                1,
+            )?;
             exponential_ancestors.push(grandparent);
             let mut next_exponential_ancestor_depth = 4u64;
             while height as u64 >= next_exponential_ancestor_depth {
@@ -720,8 +725,12 @@ impl Archive {
         // Populate BMM verifications
         {
             let mut bmm_results = self.get_bmm_results(rwtxn, block_hash)?;
-            let parent_bmm_results =
-                self.get_bmm_results(rwtxn, header.prev_side_hash)?;
+            let parent_bmm_results = if let Some(parent) = header.prev_side_hash
+            {
+                Some(self.get_bmm_results(rwtxn, parent)?)
+            } else {
+                None
+            };
             let main_blocks =
                 self.get_main_successors(rwtxn, header.prev_main_hash)?;
             for main_block in main_blocks {
@@ -744,11 +753,12 @@ impl Archive {
                     bmm_results.insert(main_block, BmmResult::Failed);
                     continue;
                 }
-                if header.prev_side_hash == BlockHash::default() {
+                let Some(parent_bmm_results) = parent_bmm_results.as_ref()
+                else {
                     tracing::trace!(%block_hash, "Verified BMM @ {main_block}: no parent");
                     bmm_results.insert(main_block, BmmResult::Verified);
                     continue;
-                }
+                };
                 // Check if there is a valid BMM commitment to the parent in the
                 // main ancestry
                 let main_ancestry_contains_valid_bmm_commitment_to_parent =
@@ -881,13 +891,10 @@ impl Archive {
             != main_header_info.prev_block_hash
         {
             BmmResult::Failed
-        } else if header.prev_side_hash == BlockHash::default() {
-            BmmResult::Verified
-        } else {
+        } else if let Some(parent) = header.prev_side_hash {
             // Check if there is a valid BMM commitment to the parent in the
             // main ancestry
-            let parent_bmm_results =
-                self.get_bmm_results(rwtxn, header.prev_side_hash)?;
+            let parent_bmm_results = self.get_bmm_results(rwtxn, parent)?;
             let main_ancestry_contains_valid_bmm_commitment_to_parent =
                 parent_bmm_results
                     .into_iter()
@@ -905,6 +912,8 @@ impl Archive {
             } else {
                 BmmResult::Failed
             }
+        } else {
+            BmmResult::Verified
         };
         let mut bmm_results = self.get_bmm_results(rwtxn, commitment)?;
         bmm_results.insert(main_hash, bmm_result);
@@ -917,16 +926,15 @@ impl Archive {
     pub fn ancestors<'a>(
         &'a self,
         rotxn: &'a RoTxn,
-        mut block_hash: BlockHash,
+        block_hash: BlockHash,
     ) -> impl FallibleIterator<Item = BlockHash, Error = Error> + 'a {
-        fallible_iterator::from_fn(move || {
-            if block_hash == BlockHash::default() {
-                Ok(None)
-            } else {
-                let res = Some(block_hash);
-                let header = self.get_header(rotxn, block_hash)?;
+        let mut block_hash = Some(block_hash);
+        fallible_iterator::from_fn(move || match block_hash {
+            None => Ok(None),
+            Some(res) => {
+                let header = self.get_header(rotxn, res)?;
                 block_hash = header.prev_side_hash;
-                Ok(res)
+                Ok(Some(res))
             }
         })
     }
@@ -939,12 +947,14 @@ impl Archive {
         &self,
         rotxn: &RoTxn,
         block_hash: BlockHash,
-        ancestor: BlockHash,
+        ancestor: Option<BlockHash>,
     ) -> Result<Vec<BlockHash>, Error> {
         // TODO: check that ancestor is nth ancestor of block_hash
         let mut res: Vec<BlockHash> = self
             .ancestors(rotxn, block_hash)
-            .take_while(|block_hash| Ok(*block_hash != ancestor))
+            .take_while(|block_hash| {
+                Ok(ancestor.is_none_or(|ancestor| *block_hash != ancestor))
+            })
             .filter_map(|block_hash| {
                 match self.try_get_body(rotxn, block_hash)? {
                     Some(_) => Ok(None),
@@ -983,7 +993,7 @@ impl Archive {
         rotxn: &RoTxn,
         mut block_hash0: BlockHash,
         mut block_hash1: BlockHash,
-    ) -> Result<BlockHash, Error> {
+    ) -> Result<Option<BlockHash>, Error> {
         let mut height0 = self.get_height(rotxn, block_hash0)?;
         let height1 = self.get_height(rotxn, block_hash1)?;
         // Equalize heights to min(height0, height1)
@@ -1007,7 +1017,17 @@ impl Archive {
         }
         // if the block hashes are the same, return early
         if block_hash0 == block_hash1 {
-            return Ok(block_hash0);
+            return Ok(Some(block_hash0));
+        }
+        // if there is no shared lineage, return None
+        {
+            let oldest_ancestor_0 =
+                self.get_nth_ancestor(rotxn, block_hash0, height0)?;
+            let oldest_ancestor_1 =
+                self.get_nth_ancestor(rotxn, block_hash1, height0)?;
+            if oldest_ancestor_0 != oldest_ancestor_1 {
+                return Ok(None);
+            }
         }
         // use a binary search to find the last common ancestor
         let mut lo_depth = 1;
@@ -1025,6 +1045,7 @@ impl Archive {
             }
         }
         self.get_nth_ancestor(rotxn, block_hash0, hi_depth)
+            .map(Some)
     }
 
     /// Find the last common mainchain ancestor of two blocks,
@@ -1193,24 +1214,20 @@ impl Archive {
                 let tip0_ancestor_height = self
                     .ancestors(rotxn, block_hash0)
                     .find_map(|tip0_ancestor| {
-                        if tip0_ancestor == BlockHash::default() {
-                            return Ok(Some(0));
-                        }
-                        let header = self.get_header(rotxn, tip0_ancestor)?;
-                        if !self.is_main_descendant(
-                            rotxn,
-                            header.prev_main_hash,
-                            main_ancestor,
-                        )? {
-                            return Ok(None);
-                        }
-                        if header.prev_main_hash == main_ancestor {
-                            return Ok(None);
-                        }
-                        self.get_height(rotxn, tip0_ancestor).map(Some)
-                    })?
-                    .unwrap();
-                if tip0_ancestor_height >= height1 {
+                    let header = self.get_header(rotxn, tip0_ancestor)?;
+                    if !self.is_main_descendant(
+                        rotxn,
+                        header.prev_main_hash,
+                        main_ancestor,
+                    )? {
+                        return Ok(None);
+                    }
+                    if header.prev_main_hash == main_ancestor {
+                        return Ok(None);
+                    }
+                    self.get_height(rotxn, tip0_ancestor).map(Some)
+                })?;
+                if tip0_ancestor_height >= Some(height1) {
                     Ok(Some(tip0))
                 } else {
                     Ok(Some(tip1))
@@ -1227,24 +1244,20 @@ impl Archive {
                 let tip1_ancestor_height = self
                     .ancestors(rotxn, block_hash1)
                     .find_map(|tip1_ancestor| {
-                        if tip1_ancestor == BlockHash::default() {
-                            return Ok(Some(0));
-                        }
-                        let header = self.get_header(rotxn, tip1_ancestor)?;
-                        if !self.is_main_descendant(
-                            rotxn,
-                            header.prev_main_hash,
-                            main_ancestor,
-                        )? {
-                            return Ok(None);
-                        }
-                        if header.prev_main_hash == main_ancestor {
-                            return Ok(None);
-                        }
-                        self.get_height(rotxn, tip1_ancestor).map(Some)
-                    })?
-                    .unwrap();
-                if tip1_ancestor_height < height0 {
+                    let header = self.get_header(rotxn, tip1_ancestor)?;
+                    if !self.is_main_descendant(
+                        rotxn,
+                        header.prev_main_hash,
+                        main_ancestor,
+                    )? {
+                        return Ok(None);
+                    }
+                    if header.prev_main_hash == main_ancestor {
+                        return Ok(None);
+                    }
+                    self.get_height(rotxn, tip1_ancestor).map(Some)
+                })?;
+                if tip1_ancestor_height < Some(height0) {
                     Ok(Some(tip0))
                 } else {
                     Ok(Some(tip1))
@@ -1267,9 +1280,6 @@ impl Archive {
                 let (tip0_ancestor_height, tip0_ancestor_work) = self
                     .ancestors(rotxn, block_hash0)
                     .find_map(|tip0_ancestor| {
-                        if tip0_ancestor == BlockHash::default() {
-                            return Ok(Some((0, None)));
-                        }
                         let header = self.get_header(rotxn, tip0_ancestor)?;
                         if !self.is_main_descendant(
                             rotxn,
@@ -1296,15 +1306,14 @@ impl Archive {
                             )?
                         };
                         let work = self.get_total_work(rotxn, main_block)?;
-                        Ok(Some((height, Some(work))))
+                        Ok(Some((height, work)))
                     })?
-                    .unwrap();
+                    .map_or((None, None), |(height, work)| {
+                        (Some(height), Some(work))
+                    });
                 let (tip1_ancestor_height, tip1_ancestor_work) = self
                     .ancestors(rotxn, block_hash1)
                     .find_map(|tip1_ancestor| {
-                        if tip1_ancestor == BlockHash::default() {
-                            return Ok(Some((0, None)));
-                        }
                         let header = self.get_header(rotxn, tip1_ancestor)?;
                         if !self.is_main_descendant(
                             rotxn,
@@ -1331,9 +1340,11 @@ impl Archive {
                             )?
                         };
                         let work = self.get_total_work(rotxn, main_block)?;
-                        Ok(Some((height, Some(work))))
+                        Ok(Some((height, work)))
                     })?
-                    .unwrap();
+                    .map_or((None, None), |(height, work)| {
+                        (Some(height), Some(work))
+                    });
                 match (
                     tip0_ancestor_work.cmp(&tip1_ancestor_work),
                     tip0_ancestor_height.cmp(&tip1_ancestor_height),

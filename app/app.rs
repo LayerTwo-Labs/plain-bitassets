@@ -78,9 +78,11 @@ fn update(
     unconfirmed_utxos: &mut HashMap<OutPoint, Output>,
     wallet: &Wallet,
 ) -> Result<(), Error> {
+    tracing::trace!("Updating wallet");
     let () = update_wallet(node, wallet)?;
     *utxos = wallet.get_utxos()?;
     *unconfirmed_utxos = wallet.get_unconfirmed_utxos()?;
+    tracing::trace!("Updated wallet");
     Ok(())
 }
 
@@ -343,7 +345,7 @@ impl App {
             let txs = txs.into_iter().map(|tx| tx.into()).collect();
             Body::new(txs, coinbase)
         };
-        let prev_side_hash = self.node.get_tip()?;
+        let prev_side_hash = self.node.try_get_tip()?;
         let prev_main_hash = {
             let mut miner_write = miner.write().await;
             let prev_main_hash =

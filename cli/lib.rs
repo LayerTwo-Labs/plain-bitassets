@@ -92,6 +92,8 @@ pub enum Command {
     GetWalletAddresses,
     /// Get wallet UTXOs
     GetWalletUtxos,
+    /// Get the height of the latest failed withdrawal bundle
+    LatestFailedWithdrawalBundleHeight,
     /// List peers
     ListPeers,
     /// List all UTXOs
@@ -108,6 +110,8 @@ pub enum Command {
     /// Show OpenAPI schema
     #[command(name = "openapi-schema")]
     OpenApiSchema,
+    /// Get pending withdrawal bundle
+    PendingWithdrawalBundle,
     /// Reserve a BitAsset
     ReserveBitasset { plaintext_name: String },
     /// Set the wallet seed from a mnemonic seed phrase
@@ -281,6 +285,11 @@ impl Cli {
                 let utxos = rpc_client.get_wallet_utxos().await?;
                 serde_json::to_string_pretty(&utxos)?
             }
+            Command::LatestFailedWithdrawalBundleHeight => {
+                let height =
+                    rpc_client.latest_failed_withdrawal_bundle_height().await?;
+                serde_json::to_string_pretty(&height)?
+            }
             Command::ListPeers => {
                 let peers = rpc_client.list_peers().await?;
                 serde_json::to_string_pretty(&peers)?
@@ -305,6 +314,11 @@ impl Cli {
                 let openapi =
                     <plain_bitassets_app_rpc_api::RpcDoc as utoipa::OpenApi>::openapi();
                 openapi.to_pretty_json()?
+            }
+            Command::PendingWithdrawalBundle => {
+                let withdrawal_bundle =
+                    rpc_client.pending_withdrawal_bundle().await?;
+                serde_json::to_string_pretty(&withdrawal_bundle)?
             }
             Command::ReserveBitasset { plaintext_name } => {
                 let txid = rpc_client.reserve_bitasset(plaintext_name).await?;
