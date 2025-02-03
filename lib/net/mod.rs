@@ -136,7 +136,7 @@ impl Net {
             hash_map::Entry::Occupied(_) => {
                 tracing::error!(%addr, "already connected");
                 Err(Error::AlreadyConnected(addr))
-            },
+            }
             hash_map::Entry::Vacant(active_peer_entry) => {
                 active_peer_entry.insert(peer_connection_handle);
                 Ok(())

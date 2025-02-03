@@ -459,7 +459,7 @@ impl RpcServer for RpcServerImpl {
         let peers = self.app.node.get_active_peers();
         Ok(peers)
     }
-    
+
     async fn list_utxos(
         &self,
     ) -> RpcResult<Vec<PointedOutput<FilledOutputContent>>> {

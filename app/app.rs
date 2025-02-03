@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use futures::{StreamExt as _, TryFutureExt as _};
 use parking_lot::RwLock;
