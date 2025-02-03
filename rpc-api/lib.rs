@@ -223,9 +223,9 @@ pub trait Rpc {
 
     /// List peers
     /// TODO: Use schema::SocketAddr. Cannot get it to work. Also, add more info about peers
-    #[open_api_method(output_schema(ToSchema))]
+    #[open_api_method(output_schema(PartialSchema = "schema::SocketAddr"))]
     #[method(name = "list_peers")]
-    async fn list_peers(&self) -> RpcResult<Vec<String>>;
+    async fn list_peers(&self) -> RpcResult<Vec<SocketAddr>>;
 
     /// List all UTXOs
     #[open_api_method(output_schema(
