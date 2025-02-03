@@ -4772,7 +4772,7 @@ checksum = "953ec861398dccce10c670dfeaf3ec4911ca479e9c02154b3a215178c5f566f2"
 
 [[package]]
 name = "plain_bitassets"
-version = "0.10.7"
+version = "0.11.0"
 dependencies = [
  "addr",
  "anyhow",
@@ -4805,6 +4805,7 @@ dependencies = [
  "rayon",
  "rcgen",
  "rustls",
+ "semver",
  "serde",
  "serde_json",
  "serde_with",
@@ -4824,7 +4825,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitassets_app"
-version = "0.10.7"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "bincode",
@@ -4866,7 +4867,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitassets_app_cli"
-version = "0.10.7"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "bitcoin",
@@ -4881,7 +4882,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitassets_app_rpc_api"
-version = "0.10.7"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "bitcoin",
@@ -4897,7 +4898,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitassets_integration_tests"
-version = "0.10.7"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "bip300301_enforcer_integration_tests",
@@ -5717,6 +5718,9 @@ name = "semver"
 version = "1.0.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f79dfe2d285b0488816f30e700a7438c5a73d816b5b7d3ac72fbc48b0d185e03"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "send_wrapper"

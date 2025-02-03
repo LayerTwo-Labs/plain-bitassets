@@ -485,3 +485,42 @@ pub enum Network {
     Signet,
     Regtest,
 }
+
+/// Semver-compatible version
+#[derive(
+    BorshSerialize,
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    PartialEq,
+    Serialize,
+)]
+pub struct Version {
+    pub major: u64,
+    pub minor: u64,
+    pub patch: u64,
+}
+impl From<semver::Version> for Version {
+    fn from(version: semver::Version) -> Self {
+        let semver::Version {
+            major,
+            minor,
+            patch,
+            pre: _,
+            build: _,
+        } = version;
+        Self {
+            major,
+            minor,
+            patch,
+        }
+    }
+}
+// Do not make this public outside of this crate, as it could break semver
+pub(crate) static VERSION: LazyLock<Version> = LazyLock::new(|| {
+    const VERSION_STR: &str = env!("CARGO_PKG_VERSION");
+    semver::Version::parse(VERSION_STR).unwrap().into()
+});

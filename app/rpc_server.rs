@@ -27,26 +27,34 @@ pub struct RpcServerImpl {
     app: App,
 }
 
-fn custom_err(err_msg: impl Into<String>) -> ErrorObject<'static> {
+fn custom_err_msg(err_msg: impl Into<String>) -> ErrorObject<'static> {
     ErrorObject::owned(-1, err_msg.into(), Option::<()>::None)
+}
+
+fn custom_err<Error>(error: Error) -> ErrorObject<'static>
+where
+    anyhow::Error: From<Error>,
+{
+    let error = anyhow::Error::from(error);
+    custom_err_msg(format!("{error:#}"))
 }
 
 fn convert_app_err(err: app::Error) -> ErrorObject<'static> {
     let err = anyhow::anyhow!(err);
     tracing::error!("{err:#}");
-    custom_err(err.to_string())
+    custom_err(err)
 }
 
 fn convert_node_err(err: node::Error) -> ErrorObject<'static> {
     let err = anyhow::anyhow!(err);
     tracing::error!("{err:#}");
-    custom_err(err.to_string())
+    custom_err(err)
 }
 
 fn convert_wallet_err(err: wallet::Error) -> ErrorObject<'static> {
     let err = anyhow::anyhow!(err);
     tracing::error!("{err:#}");
-    custom_err(err.to_string())
+    custom_err(err)
 }
 
 #[async_trait]
@@ -360,6 +368,16 @@ impl RpcServer for RpcServerImpl {
         Ok(block)
     }
 
+    async fn get_bmm_inclusions(
+        &self,
+        block_hash: plain_bitassets::types::BlockHash,
+    ) -> RpcResult<Vec<bitcoin::BlockHash>> {
+        self.app
+            .node
+            .get_bmm_inclusions(block_hash)
+            .map_err(custom_err)
+    }
+
     async fn get_new_address(&self) -> RpcResult<Address> {
         self.app
             .wallet
@@ -423,7 +441,7 @@ impl RpcServer for RpcServerImpl {
         let fee_sats = filled_tx
             .transaction
             .bitcoin_fee()
-            .map_err(|err| custom_err(format!("{err:#}")))?
+            .map_err(custom_err)?
             .unwrap()
             .to_sat();
         let res = TxInfo {
@@ -588,8 +606,7 @@ impl RpcServer for RpcServerImpl {
         let memo = match memo {
             None => None,
             Some(memo) => {
-                let hex = hex::decode(memo)
-                    .map_err(|err| custom_err(err.to_string()))?;
+                let hex = hex::decode(memo).map_err(custom_err)?;
                 Some(hex)
             }
         };

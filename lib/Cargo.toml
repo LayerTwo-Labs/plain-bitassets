@@ -42,6 +42,7 @@ quinn = "0.11.6"
 rayon = "1.7.0"
 rcgen = "0.13.2"
 rustls = { version = "0.23.21", default-features = false, features = ["ring"] }
+semver = { version = "1.0.25", features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_with = {  workspace = true }

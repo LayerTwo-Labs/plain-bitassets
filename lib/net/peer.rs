@@ -23,7 +23,7 @@ use crate::{
     state::{self, State},
     types::{
         hashes::hash, proto::mainchain, AuthorizedTransaction, BlockHash,
-        BmmResult, Body, Hash, Header, Tip, Txid,
+        BmmResult, Body, Hash, Header, Tip, Txid, Version, VERSION,
     },
 };
 
@@ -103,11 +103,10 @@ pub struct TipInfo {
     total_work: Work,
 }
 
-#[derive(
-    BorshSerialize, Clone, Copy, Debug, Default, Deserialize, Serialize,
-)]
+#[derive(BorshSerialize, Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct PeerState {
     tip_info: Option<TipInfo>,
+    version: Version,
 }
 
 /// Unique identifier for a peer state
@@ -1201,8 +1200,10 @@ impl ConnectionTask {
                             total_work,
                         })
                     };
-                    let heartbeat_msg =
-                        Request::Heartbeat(PeerState { tip_info });
+                    let heartbeat_msg = Request::Heartbeat(PeerState {
+                        tip_info,
+                        version: *VERSION,
+                    });
                     task_set.spawn({
                         let connection = self.connection.clone();
                         let response_tx = response_tx.clone();
