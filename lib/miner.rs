@@ -57,7 +57,7 @@ where
                 header.prev_main_hash,
             )
             .await?;
-        tracing::info!("created BMM tx: {txid}");
+        tracing::info!(%txid, "created BMM tx");
         assert_eq!(header.merkle_root, body.compute_merkle_root());
         self.block = Some((header, body));
         Ok(txid)
@@ -81,7 +81,7 @@ where
                     block_info,
                 } => {
                     if block_info.bmm_commitment == Some(block_hash) {
-                        tracing::trace!(%block_hash, "verified bmm");
+                        tracing::debug!(%block_hash, "verified bmm");
                         self.block = None;
                         return Ok(Some((
                             header_info.block_hash,
@@ -90,10 +90,12 @@ where
                         )));
                     }
                 }
+                // BMM requests expire after one block, so if we we weren't able to
+                // get it in, the request failed.
                 Event::DisconnectBlock { .. } => (),
             }
         };
-        tracing::trace!(%block_hash, "bmm verification failed");
+        tracing::debug!(%block_hash, "bmm verification failed");
         self.block = None;
         Ok(None)
     }
