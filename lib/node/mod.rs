@@ -55,7 +55,7 @@ pub enum Error {
     CusfMainchain(#[from] proto::Error),
     #[error("heed error")]
     Heed(#[from] heed::Error),
-    #[error("quinn error")]
+    #[error("I/O error")]
     Io(#[from] std::io::Error),
     #[error("error requesting mainchain ancestors")]
     MainchainAncestors(#[source] mainchain_task::ResponseError),
@@ -763,6 +763,10 @@ where
         self.net
             .connect_peer(self.env.clone(), addr)
             .map_err(Error::from)
+    }
+
+    pub fn get_active_peers(&self) -> Vec<SocketAddr> {
+        self.net.get_active_peers()
     }
 
     /// Attempt to submit a block.
