@@ -7,6 +7,7 @@ use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use l2l_openapi::open_api;
 
 use plain_bitassets::{
+    net::{Peer, PeerConnectionStatus},
     state::{AmmPoolState, BitAssetSeqId, DutchAuctionState},
     types::{
         schema as bitassets_schema, Address, AssetId, Authorization,
@@ -35,11 +36,12 @@ pub struct TxInfo {
 #[open_api(ref_schemas[
     bitassets_schema::BitcoinAddr, bitassets_schema::BitcoinBlockHash,
     bitassets_schema::BitcoinTransaction, bitassets_schema::BitcoinOutPoint,
-    Address, AssetId, Authorization, BitAssetData, BitAssetDataUpdates,
-    BitAssetId, BitcoinOutputContent, BlockHash, Body, DutchAuctionId,
-    DutchAuctionParams, EncryptionPubKey, FilledOutputContent, Header,
-    MerkleRoot, OutPoint, Output, OutputContent, Transaction, TxData, Txid,
-    TxIn, WithdrawalOutputContent, VerifyingKey,
+    bitassets_schema::SocketAddr, Address, AssetId, Authorization,
+    BitAssetData, BitAssetDataUpdates, BitAssetId, BitcoinOutputContent,
+    BlockHash, Body, DutchAuctionId, DutchAuctionParams, EncryptionPubKey,
+    FilledOutputContent, Header, MerkleRoot, OutPoint, Output, OutputContent,
+    PeerConnectionStatus, Transaction, TxData, Txid, TxIn,
+    WithdrawalOutputContent, VerifyingKey,
 ])]
 #[rpc(client, server)]
 pub trait Rpc {
@@ -107,7 +109,9 @@ pub trait Rpc {
     #[method(name = "connect_peer")]
     async fn connect_peer(
         &self,
-        #[open_api_method_arg(schema(ToSchema = "schema::SocketAddr"))]
+        #[open_api_method_arg(schema(
+            ToSchema = "bitassets_schema::SocketAddr"
+        ))]
         addr: SocketAddr,
     ) -> RpcResult<()>;
 
@@ -239,10 +243,8 @@ pub trait Rpc {
     ) -> RpcResult<Option<u32>>;
 
     /// List peers
-    /// TODO: Use schema::SocketAddr. Cannot get it to work. Also, add more info about peers
-    #[open_api_method(output_schema(PartialSchema = "schema::SocketAddr"))]
     #[method(name = "list_peers")]
-    async fn list_peers(&self) -> RpcResult<Vec<SocketAddr>>;
+    async fn list_peers(&self) -> RpcResult<Vec<Peer>>;
 
     /// List all UTXOs
     #[open_api_method(output_schema(
