@@ -66,7 +66,7 @@ authors = [ "Ash Manning <ash@layertwolabs.com>" ]
 edition = "2021"
 license-file = "LICENSE.txt"
 publish = false
-version = "0.11.0"
+version = "0.11.1"
 
 # temp-dir does not leak correctly after clone
 # https://gitlab.com/leonhard-llc/ops/-/issues/17
