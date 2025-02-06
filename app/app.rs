@@ -31,8 +31,6 @@ pub enum Error {
     AmountOverflow(#[from] AmountOverflowError),
     #[error("CUSF mainchain proto error")]
     CusfMainchain(#[from] plain_bitassets::types::proto::Error),
-    #[error("gRPC reflection client error")]
-    GrpcReflection(#[from] tonic::Status),
     #[error("io error")]
     Io(#[from] std::io::Error),
     #[error("miner error: {0}")]
@@ -43,6 +41,13 @@ pub enum Error {
     NoCusfMainchainWalletClient,
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+    #[error(
+        "Unable to verify existence of CUSF mainchain service(s) at {address}"
+    )]
+    VerifyMainchainServices {
+        address: std::net::SocketAddr,
+        source: tonic::Status,
+    },
     #[error("wallet error")]
     Wallet(#[from] wallet::Error),
 }
@@ -221,8 +226,11 @@ impl App {
         .concurrency_limit(256)
         .connect_lazy();
         let (cusf_mainchain, cusf_mainchain_wallet) = if runtime
-            .block_on(Self::check_proto_support(transport.clone()))?
-        {
+            .block_on(Self::check_proto_support(transport.clone()))
+            .map_err(|err| Error::VerifyMainchainServices {
+                address: config.main_addr,
+                source: err,
+            })? {
             (
                 mainchain::ValidatorClient::new(transport.clone()),
                 Some(mainchain::WalletClient::new(transport)),
