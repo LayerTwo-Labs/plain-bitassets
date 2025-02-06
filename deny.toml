@@ -113,7 +113,7 @@ confidence-threshold = 0.8
 exceptions = [
     # Each entry is the crate and version constraint, and its specific allow
     # list
-    { allow = ["LicenseRef-UFL-1.0", "OFL-1.1"], name = "epaint_default_fonts", version = "0.30.0" },
+    { allow = ["LicenseRef-UFL-1.0", "OFL-1.1", "Ubuntu-font-1.0"], name = "epaint_default_fonts", version = "0.31.0" },
     { allow = ["MPL-2.0"], name = "bitmaps", version = "3.2.1" },
     { allow = ["MPL-2.0"], name = "imbl", version = "3.0.0" },
     { allow = ["MPL-2.0"], name = "imbl-sized-chunks", version = "0.1.3" },
