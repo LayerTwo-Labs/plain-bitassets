@@ -18,7 +18,7 @@ use tonic::transport::Channel;
 use crate::{
     archive::{self, Archive},
     mempool::{self, MemPool},
-    net::{self, Net},
+    net::{self, Net, Peer},
     state::{
         self, AmmPair, AmmPoolState, BitAssetSeqId, DutchAuctionState, State,
     },
@@ -802,7 +802,7 @@ where
             .map_err(Error::from)
     }
 
-    pub fn get_active_peers(&self) -> Vec<SocketAddr> {
+    pub fn get_active_peers(&self) -> Vec<Peer> {
         self.net.get_active_peers()
     }
 

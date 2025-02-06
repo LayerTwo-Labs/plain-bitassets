@@ -9,6 +9,7 @@ use jsonrpsee::{
 };
 
 use plain_bitassets::{
+    net::Peer,
     state::{self, AmmPair, AmmPoolState, BitAssetSeqId, DutchAuctionState},
     types::{
         Address, AssetId, BitAssetData, BitAssetId, Block, BlockHash,
@@ -440,7 +441,7 @@ impl RpcServer for RpcServerImpl {
         Ok(height)
     }
 
-    async fn list_peers(&self) -> RpcResult<Vec<SocketAddr>> {
+    async fn list_peers(&self) -> RpcResult<Vec<Peer>> {
         let peers = self.app.node.get_active_peers();
         Ok(peers)
     }
