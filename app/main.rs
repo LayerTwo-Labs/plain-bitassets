@@ -144,16 +144,13 @@ fn run_egui_app(
     app: Option<crate::app::App>,
 ) -> Result<(), eframe::Error> {
     let native_options = eframe::NativeOptions::default();
+    let rpc_addr = url::Url::parse(&format!("http://{}", config.rpc_addr))
+        .expect("failed to parse rpc addr");
     eframe::run_native(
         "Plain Bitassets",
         native_options,
         Box::new(move |cc| {
-            Ok(Box::new(gui::EguiApp::new(
-                app,
-                cc,
-                line_buffer,
-                config.rpc_addr,
-            )))
+            Ok(Box::new(gui::EguiApp::new(app, cc, line_buffer, rpc_addr)))
         }),
     )
 }

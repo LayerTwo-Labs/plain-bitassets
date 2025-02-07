@@ -1,9 +1,6 @@
-use std::{
-    net::SocketAddr,
-    sync::{
-        atomic::{self, AtomicBool},
-        Arc,
-    },
+use std::sync::{
+    atomic::{self, AtomicBool},
+    Arc,
 };
 
 use clap::Parser;
@@ -32,16 +29,16 @@ pub struct ConsoleCommand {
 pub struct ConsoleLogs {
     line_buffer: LineBuffer,
     command_input: String,
-    rpc_addr: SocketAddr,
+    rpc_url: url::Url,
     running_command: Arc<AtomicBool>,
 }
 
 impl ConsoleLogs {
-    pub fn new(line_buffer: LineBuffer, rpc_addr: SocketAddr) -> Self {
+    pub fn new(line_buffer: LineBuffer, rpc_url: url::Url) -> Self {
         Self {
             line_buffer,
             command_input: String::new(),
-            rpc_addr,
+            rpc_url,
             running_command: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -70,8 +67,11 @@ impl ConsoleLogs {
                 return;
             }
         };
-        let cli =
-            plain_bitassets_app_cli_lib::Cli::new(command, self.rpc_addr, None);
+        let cli = plain_bitassets_app_cli_lib::Cli::new(
+            command,
+            self.rpc_url.clone(),
+            None,
+        );
         app.runtime.spawn({
             let running_command = self.running_command.clone();
             running_command.store(true, atomic::Ordering::SeqCst);
