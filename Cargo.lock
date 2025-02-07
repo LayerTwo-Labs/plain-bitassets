@@ -4864,6 +4864,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "url",
  "utoipa",
 ]
 
@@ -4879,6 +4880,7 @@ dependencies = [
  "plain_bitassets_app_rpc_api",
  "serde_json",
  "tokio",
+ "url",
  "utoipa",
 ]
 

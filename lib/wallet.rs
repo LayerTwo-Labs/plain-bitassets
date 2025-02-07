@@ -71,13 +71,15 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("no index for address {address}")]
     NoIndex { address: Address },
-    #[error("wallet doesn't have a seed")]
+    #[error(
+        "wallet does not have a seed (set with RPC `set-seed-from-mnemonic`)"
+    )]
     NoSeed,
     #[error("could not find bitasset reservation for `{plain_name}`")]
     NoBitassetReservation { plain_name: String },
     #[error("not enough funds")]
     NotEnoughFunds,
-    #[error("utxo doesn't exist")]
+    #[error("utxo does not exist")]
     NoUtxo,
     #[error("failed to parse mnemonic seed phrase")]
     ParseMnemonic(#[from] bip39::ErrorKind),

@@ -7,6 +7,7 @@ use std::{
 
 use clap::{Arg, Parser};
 use plain_bitassets::types::{Network, THIS_SIDECHAIN};
+use url::{Host, Url};
 
 const fn ipv4_socket_addr(ipv4_octets: [u8; 4], port: u16) -> SocketAddr {
     let [a, b, c, d] = ipv4_octets;
@@ -23,7 +24,9 @@ static DEFAULT_DATA_DIR: LazyLock<Option<PathBuf>> =
         Some(data_dir) => Some(data_dir.join("plain_bitassets")),
     });
 
-const DEFAULT_MAIN_ADDR: SocketAddr = ipv4_socket_addr([127, 0, 0, 1], 50051);
+const DEFAULT_MAIN_HOST: Host = Host::Ipv4(Ipv4Addr::LOCALHOST);
+
+const DEFAULT_MAIN_PORT: u16 = 50051;
 
 const DEFAULT_NET_ADDR: SocketAddr =
     ipv4_socket_addr([0, 0, 0, 0], 4000 + THIS_SIDECHAIN as u16);
@@ -121,9 +124,12 @@ pub(super) struct Cli {
     /// Log level
     #[arg(default_value_t = tracing::Level::DEBUG, long)]
     log_level: tracing::Level,
-    /// Socket address to connect to mainchain node gRPC server
-    #[arg(default_value_t = DEFAULT_MAIN_ADDR, long, short)]
-    main_addr: SocketAddr,
+    /// Connect to mainchain node gRPC server running on this host/port
+    #[arg(default_value_t = DEFAULT_MAIN_HOST, long, value_parser = Host::parse)]
+    mainchain_grpc_host: Host,
+    /// Connect to mainchain node gRPC server running on this host/port
+    #[arg(default_value_t = DEFAULT_MAIN_PORT, long)]
+    mainchain_grpc_port: u16,
     /// Path to a mnemonic seed phrase
     #[arg(long)]
     mnemonic_seed_phrase_path: Option<PathBuf>,
@@ -142,25 +148,17 @@ pub(super) struct Cli {
     pub zmq_addr: SocketAddr,
 }
 
-#[derive(Clone, Debug)]
-pub struct Config {
-    pub datadir: PathBuf,
-    pub file_log_level: tracing::Level,
-    pub headless: bool,
-    /// If None, logging to file should be disabled.
-    pub log_dir: Option<PathBuf>,
-    pub log_level: tracing::Level,
-    pub main_addr: SocketAddr,
-    pub mnemonic_seed_phrase_path: Option<PathBuf>,
-    pub net_addr: SocketAddr,
-    pub network: Network,
-    pub rpc_addr: SocketAddr,
-    #[cfg(feature = "zmq")]
-    pub zmq_addr: SocketAddr,
-}
-
 impl Cli {
+    pub fn mainchain_grpc_url(&self) -> Url {
+        Url::parse(&format!(
+            "http://{}:{}",
+            self.mainchain_grpc_host, self.mainchain_grpc_port
+        ))
+        .unwrap()
+    }
+
     pub fn get_config(self) -> anyhow::Result<Config> {
+        let mainchain_grpc_url = self.mainchain_grpc_url();
         let log_dir = match self.log_dir {
             None => {
                 let version_dir_name =
@@ -183,7 +181,7 @@ impl Cli {
             headless: self.headless,
             log_dir,
             log_level: self.log_level,
-            main_addr: self.main_addr,
+            mainchain_grpc_url,
             mnemonic_seed_phrase_path: self.mnemonic_seed_phrase_path,
             net_addr: self.net_addr,
             network: self.network,
@@ -192,4 +190,21 @@ impl Cli {
             zmq_addr: self.zmq_addr,
         })
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct Config {
+    pub datadir: PathBuf,
+    pub file_log_level: tracing::Level,
+    pub headless: bool,
+    /// If None, logging to file should be disabled.
+    pub log_dir: Option<PathBuf>,
+    pub log_level: tracing::Level,
+    pub mainchain_grpc_url: url::Url,
+    pub mnemonic_seed_phrase_path: Option<PathBuf>,
+    pub net_addr: SocketAddr,
+    pub network: Network,
+    pub rpc_addr: SocketAddr,
+    #[cfg(feature = "zmq")]
+    pub zmq_addr: SocketAddr,
 }
