@@ -8,12 +8,12 @@ use fallible_iterator::{FallibleIterator, IteratorExt};
 use heed::types::SerdeBincode;
 use sneed::{
     db::{self, error::Error as DbError},
-    env, rwtxn, DatabaseUnique, EnvError, RoTxn, RwTxn, RwTxnError,
+    env, rwtxn, DatabaseUnique, EnvError, RoTxn, RwTxn, RwTxnError, UnitKey,
 };
 
 use crate::types::{
     proto::mainchain::{self, Deposit},
-    Block, BlockHash, BmmResult, Body, Header, Tip, Txid,
+    Block, BlockHash, BmmResult, Body, Header, Tip, Txid, Version, VERSION,
 };
 
 #[derive(thiserror::Error, transitive::Transitive, Debug)]
@@ -146,10 +146,11 @@ pub struct Archive {
         SerdeBincode<Txid>,
         SerdeBincode<BTreeMap<BlockHash, u32>>,
     >,
+    _version: DatabaseUnique<UnitKey, SerdeBincode<Version>>,
 }
 
 impl Archive {
-    pub const NUM_DBS: u32 = 14;
+    pub const NUM_DBS: u32 = 15;
 
     pub fn new(env: &sneed::Env) -> Result<Self, Error> {
         let mut rwtxn = env.write_txn()?;
@@ -201,6 +202,11 @@ impl Archive {
         let total_work = DatabaseUnique::create(env, &mut rwtxn, "total_work")?;
         let txid_to_inclusions =
             DatabaseUnique::create(env, &mut rwtxn, "txid_to_inclusions")?;
+        let version =
+            DatabaseUnique::create(env, &mut rwtxn, "archive_version")?;
+        if version.try_get(&rwtxn, &())?.is_none() {
+            version.put(&mut rwtxn, &(), &*VERSION)?;
+        }
         rwtxn.commit()?;
         Ok(Self {
             block_hash_to_height,
@@ -217,6 +223,7 @@ impl Archive {
             successors,
             total_work,
             txid_to_inclusions,
+            _version: version,
         })
     }
 
