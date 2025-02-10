@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use heed::{RoTxn, RwTxn};
+use sneed::{RoTxn, RwTxn};
 
 use crate::{
     state::{amm, dutch_auction, error, Error, State},
@@ -11,7 +11,6 @@ use crate::{
         FilledOutputContent, GetAddress as _, GetBitcoinValue as _, Header,
         InPoint, OutPoint, OutputContent, SpentOutput, TxData, Verify as _,
     },
-    util::UnitKey,
 };
 
 /// Validate a block, returning the merkle root and fees
@@ -134,7 +133,7 @@ pub fn connect(
         for (vin, input) in filled_tx.inputs().iter().enumerate() {
             let spent_output = state
                 .utxos
-                .get(rwtxn, input)?
+                .try_get(rwtxn, input)?
                 .ok_or(Error::NoUtxo { outpoint: *input })?;
             let spent_output = SpentOutput {
                 output: spent_output,
@@ -231,8 +230,8 @@ pub fn connect(
         }
     }
     let block_hash = header.hash();
-    state.tip.put(rwtxn, &UnitKey, &block_hash)?;
-    state.height.put(rwtxn, &UnitKey, &height)?;
+    state.tip.put(rwtxn, &(), &block_hash)?;
+    state.height.put(rwtxn, &(), &height)?;
     Ok(())
 }
 
@@ -242,7 +241,7 @@ pub fn disconnect_tip(
     header: &Header,
     body: &Body,
 ) -> Result<(), Error> {
-    let tip_hash = state.tip.try_get(rwtxn, &UnitKey)?.ok_or(Error::NoTip)?;
+    let tip_hash = state.tip.try_get(rwtxn, &())?.ok_or(Error::NoTip)?;
     if tip_hash != header.hash() {
         let err = error::InvalidHeader::BlockHash {
             expected: tip_hash,
@@ -348,7 +347,7 @@ pub fn disconnect_tip(
         )?;
         // unspend STXOs, last-to-first
         tx.inputs.iter().rev().try_for_each(|outpoint| {
-            if let Some(spent_output) = state.stxos.get(rwtxn, outpoint)? {
+            if let Some(spent_output) = state.stxos.try_get(rwtxn, outpoint)? {
                 state.stxos.delete(rwtxn, outpoint)?;
                 state.utxos.put(rwtxn, outpoint, &spent_output.output)?;
                 Ok(())
@@ -375,13 +374,13 @@ pub fn disconnect_tip(
     )?;
     match (header.prev_side_hash, height) {
         (None, 0) => {
-            state.tip.delete(rwtxn, &UnitKey)?;
-            state.height.delete(rwtxn, &UnitKey)?;
+            state.tip.delete(rwtxn, &())?;
+            state.height.delete(rwtxn, &())?;
         }
         (None, _) | (_, 0) => return Err(Error::NoTip),
         (Some(prev_side_hash), height) => {
-            state.tip.put(rwtxn, &UnitKey, &prev_side_hash)?;
-            state.height.put(rwtxn, &UnitKey, &(height - 1))?;
+            state.tip.put(rwtxn, &(), &prev_side_hash)?;
+            state.height.put(rwtxn, &(), &(height - 1))?;
         }
     }
     Ok(())

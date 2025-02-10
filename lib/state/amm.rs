@@ -1,5 +1,6 @@
-use heed::{types::SerdeBincode, Database, RwTxn};
+use heed::types::SerdeBincode;
 use serde::{Deserialize, Serialize};
+use sneed::{DatabaseUnique, RoDatabaseUnique, RwTxn};
 use utoipa::ToSchema;
 
 use crate::{
@@ -327,7 +328,10 @@ impl PoolState {
     }
 }
 
-pub type PoolsDb = Database<SerdeBincode<AmmPair>, SerdeBincode<PoolState>>;
+pub type PoolsDb =
+    DatabaseUnique<SerdeBincode<AmmPair>, SerdeBincode<PoolState>>;
+pub type RoPoolsDb =
+    RoDatabaseUnique<SerdeBincode<AmmPair>, SerdeBincode<PoolState>>;
 
 // Apply AMM burn
 pub(in crate::state) fn apply_burn(
@@ -343,7 +347,7 @@ pub(in crate::state) fn apply_burn(
         amount1,
     } = filled_tx.amm_burn().ok_or(Error::InvalidBurn)?;
     let amm_pair = AmmPair::new(asset0, asset1);
-    let amm_pool_state = pools.get(rwtxn, &amm_pair)?.ok_or_else(|| {
+    let amm_pool_state = pools.try_get(rwtxn, &amm_pair)?.ok_or_else(|| {
         Error::MissingPoolState {
             asset0: amm_pair.asset0(),
             asset1: amm_pair.asset1(),
@@ -377,7 +381,7 @@ pub(in crate::state) fn revert_burn(
         amount1,
     } = filled_tx.amm_burn().ok_or(Error::InvalidBurn)?;
     let amm_pair = AmmPair::new(asset0, asset1);
-    let amm_pool_state = pools.get(rwtxn, &amm_pair)?.ok_or_else(|| {
+    let amm_pool_state = pools.try_get(rwtxn, &amm_pair)?.ok_or_else(|| {
         Error::MissingPoolState {
             asset0: amm_pair.asset0(),
             asset1: amm_pair.asset1(),
@@ -407,7 +411,7 @@ pub(in crate::state) fn apply_mint(
     }
     let amm_pair = AmmPair::new(asset0, asset1);
     let amm_pool_state = pools
-        .get(rwtxn, &amm_pair)?
+        .try_get(rwtxn, &amm_pair)?
         .unwrap_or_else(|| PoolState::new(filled_tx.txid()));
     let new_amm_pool_state = amm_pool_state.mint(amount0, amount1)?;
     let lp_tokens_minted = new_amm_pool_state
@@ -438,7 +442,7 @@ pub(in crate::state) fn revert_mint(
         return Err(Error::InvalidMint);
     }
     let amm_pair = AmmPair::new(asset0, asset1);
-    let amm_pool_state = pools.get(rwtxn, &amm_pair)?.ok_or_else(|| {
+    let amm_pool_state = pools.try_get(rwtxn, &amm_pair)?.ok_or_else(|| {
         Error::MissingPoolState {
             asset0: amm_pair.asset0(),
             asset1: amm_pair.asset1(),
@@ -467,7 +471,7 @@ pub(in crate::state) fn apply_swap(
         amount_receive,
     } = filled_tx.amm_swap().ok_or(Error::InvalidSwap)?;
     let amm_pair = AmmPair::new(asset_spend, asset_receive);
-    let amm_pool_state = pools.get(rwtxn, &amm_pair)?.ok_or_else(|| {
+    let amm_pool_state = pools.try_get(rwtxn, &amm_pair)?.ok_or_else(|| {
         Error::MissingPoolState {
             asset0: amm_pair.asset0(),
             asset1: amm_pair.asset1(),
@@ -506,7 +510,7 @@ pub(in crate::state) fn revert_swap(
         amount_receive: _,
     } = filled_tx.amm_swap().ok_or(Error::InvalidSwap)?;
     let amm_pair = AmmPair::new(asset_spend, asset_receive);
-    let amm_pool_state = pools.get(rwtxn, &amm_pair)?.ok_or_else(|| {
+    let amm_pool_state = pools.try_get(rwtxn, &amm_pair)?.ok_or_else(|| {
         Error::MissingPoolState {
             asset0: amm_pair.asset0(),
             asset1: amm_pair.asset1(),

@@ -1,7 +1,8 @@
 //! Functions and types related to Dutch Auctions
 
-use heed::{types::SerdeBincode, Database, RwTxn};
+use heed::types::SerdeBincode;
 use serde::{Deserialize, Serialize};
+use sneed::{DatabaseUnique, RoDatabaseUnique, RwTxn};
 
 use crate::{
     state::{
@@ -189,8 +190,15 @@ impl DutchAuctionState {
 }
 
 /// Associates Dutch auction sequence numbers with auction state
-pub type Db =
-    Database<SerdeBincode<DutchAuctionId>, SerdeBincode<DutchAuctionState>>;
+pub type Db = DatabaseUnique<
+    SerdeBincode<DutchAuctionId>,
+    SerdeBincode<DutchAuctionState>,
+>;
+/// Associates Dutch auction sequence numbers with auction state
+pub type RoDb = RoDatabaseUnique<
+    SerdeBincode<DutchAuctionId>,
+    SerdeBincode<DutchAuctionState>,
+>;
 
 // Apply Dutch auction bid
 pub(in crate::state) fn apply_bid(
@@ -209,7 +217,7 @@ pub(in crate::state) fn apply_bid(
         .dutch_auction_bid()
         .ok_or(error::Bid::InvalidTxData)?;
     let dutch_auction_state = db
-        .get(rwtxn, &auction_id)?
+        .try_get(rwtxn, &auction_id)?
         .ok_or(error::Bid::MissingAuction)?;
     if asset_receive != dutch_auction_state.base_asset {
         do yeet error::Bid::IncorrectReceiveAsset
@@ -249,7 +257,7 @@ pub(in crate::state) fn revert_bid(
         .dutch_auction_bid()
         .ok_or(error::Bid::InvalidTxData)?;
     let dutch_auction_state = db
-        .get(rwtxn, &auction_id)?
+        .try_get(rwtxn, &auction_id)?
         .ok_or(error::Bid::MissingAuction)?;
     if asset_receive != dutch_auction_state.base_asset {
         do yeet error::Bid::IncorrectReceiveAsset
@@ -361,7 +369,7 @@ pub(in crate::state) fn apply_collect(
         .dutch_auction_collect()
         .ok_or(error::Collect::InvalidTxData)?;
     let mut auction_state = db
-        .get(rwtxn, &auction_id)?
+        .try_get(rwtxn, &auction_id)?
         .ok_or(error::Collect::MissingAuction)?;
     if auction_state.base_asset != asset_offered {
         do yeet error::Collect::IncorrectOfferedAsset
@@ -407,8 +415,9 @@ pub(in crate::state) fn revert_collect(
         .dutch_auction_collect()
         .ok_or(error::Collect::InvalidTxData)?;
     let txid = filled_tx.txid();
-    let mut auction_state =
-        db.get(rwtxn, &auction_id)?.ok_or(error::Collect::Revert)?;
+    let mut auction_state = db
+        .try_get(rwtxn, &auction_id)?
+        .ok_or(error::Collect::Revert)?;
     assert!(auction_state
         .base_amount_remaining
         .pop()
