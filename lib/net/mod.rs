@@ -9,14 +9,16 @@ use futures::{channel::mpsc, StreamExt};
 use heed::types::{SerdeBincode, Unit};
 use parking_lot::RwLock;
 use quinn::{ClientConfig, Endpoint, ServerConfig};
-use sneed::{db, env, rwtxn, DatabaseUnique, DbError, EnvError, RwTxnError};
+use sneed::{
+    db, env, rwtxn, DatabaseUnique, DbError, EnvError, RwTxnError, UnitKey,
+};
 use tokio_stream::StreamNotifyClose;
 use tracing::instrument;
 
 use crate::{
     archive::Archive,
     state::State,
-    types::{AuthorizedTransaction, Network, THIS_SIDECHAIN},
+    types::{AuthorizedTransaction, Network, Version, THIS_SIDECHAIN, VERSION},
 };
 
 mod peer;
@@ -33,6 +35,7 @@ pub use peer::{
 
 #[derive(thiserror::Error, transitive::Transitive, Debug)]
 #[transitive(from(db::error::Put))]
+#[transitive(from(db::error::TryGet))]
 #[transitive(from(env::error::CreateDb))]
 #[transitive(from(env::error::OpenDb))]
 #[transitive(from(env::error::WriteTxn))]
@@ -221,10 +224,11 @@ pub struct Net {
     peer_info_tx:
         mpsc::UnboundedSender<(SocketAddr, Option<PeerConnectionInfo>)>,
     known_peers: DatabaseUnique<SerdeBincode<SocketAddr>, Unit>,
+    _version: DatabaseUnique<UnitKey, SerdeBincode<Version>>,
 }
 
 impl Net {
-    pub const NUM_DBS: u32 = 1;
+    pub const NUM_DBS: u32 = 2;
 
     fn add_active_peer(
         &self,
@@ -335,6 +339,10 @@ impl Net {
                     known_peers
                 }
             };
+        let version = DatabaseUnique::create(env, &mut rwtxn, "net_version")?;
+        if version.try_get(&rwtxn, &())?.is_none() {
+            version.put(&mut rwtxn, &(), &*VERSION)?;
+        }
         rwtxn.commit()?;
         let (peer_info_tx, peer_info_rx) = mpsc::unbounded();
         let net = Net {
@@ -344,6 +352,7 @@ impl Net {
             active_peers,
             peer_info_tx,
             known_peers,
+            _version: version,
         };
         #[allow(clippy::let_and_return)]
         let known_peers: Vec<_> = {

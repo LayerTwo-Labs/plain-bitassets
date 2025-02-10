@@ -14,7 +14,8 @@ use crate::{
         Authorized, AuthorizedTransaction, BitAssetId, BlockHash, Body,
         FilledOutput, FilledTransaction, GetAddress as _, GetBitcoinValue as _,
         Header, InPoint, M6id, OutPoint, SpentOutput, Transaction, TxData,
-        Verify as _, WithdrawalBundle, WithdrawalBundleStatus,
+        Verify as _, Version, WithdrawalBundle, WithdrawalBundleStatus,
+        VERSION,
     },
     util::Watchable,
 };
@@ -99,10 +100,11 @@ pub struct State {
         SerdeBincode<u32>,
         SerdeBincode<(bitcoin::BlockHash, u32)>,
     >,
+    _version: DatabaseUnique<UnitKey, SerdeBincode<Version>>,
 }
 
 impl State {
-    pub const NUM_DBS: u32 = bitassets::Dbs::NUM_DBS + 11;
+    pub const NUM_DBS: u32 = bitassets::Dbs::NUM_DBS + 12;
 
     pub fn new(env: &sneed::Env) -> Result<Self, Error> {
         let mut rwtxn = env.write_txn()?;
@@ -133,6 +135,10 @@ impl State {
             &mut rwtxn,
             "withdrawal_bundle_event_blocks",
         )?;
+        let version = DatabaseUnique::create(env, &mut rwtxn, "state_version")?;
+        if version.try_get(&rwtxn, &())?.is_none() {
+            version.put(&mut rwtxn, &(), &*VERSION)?;
+        }
         rwtxn.commit()?;
         Ok(Self {
             tip,
@@ -147,6 +153,7 @@ impl State {
             withdrawal_bundles,
             withdrawal_bundle_event_blocks,
             deposit_blocks,
+            _version: version,
         })
     }
 
