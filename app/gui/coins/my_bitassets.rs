@@ -1,15 +1,21 @@
 use eframe::egui;
 use itertools::{Either, Itertools};
 
-use plain_bitassets::types::FilledOutput;
+use plain_bitassets::types::{BitAssetId, FilledOutput, Hash, Txid};
 
 use crate::{app::App, gui::util::UiExt};
+
+type KnownNameReservation = (Txid, Hash, String);
+type UnknownNameReservation = (Txid, Hash);
 
 #[derive(Debug, Default)]
 pub struct MyBitAssets;
 
 impl MyBitAssets {
-    pub fn show_reservations(&mut self, app: &mut App, ui: &mut egui::Ui) {
+    /// Returns BitAsset reservations with known and unknown names
+    fn get_bitasset_reservations(
+        app: &App,
+    ) -> (Vec<KnownNameReservation>, Vec<UnknownNameReservation>) {
         let utxos_read = app.utxos.read();
         // all bitasset reservations
         let bitasset_reservations = utxos_read
@@ -41,6 +47,17 @@ impl MyBitAssets {
         );
         // sort name-unknown bitasset reservations by txid
         unknown_name_bitasset_reservations.sort_by_key(|(txid, _)| *txid);
+        (
+            known_name_bitasset_reservations,
+            unknown_name_bitasset_reservations,
+        )
+    }
+
+    pub fn show_reservations(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
+        let (
+            known_name_bitasset_reservations,
+            unknown_name_bitasset_reservations,
+        ) = app.map(Self::get_bitasset_reservations).unwrap_or_default();
         let _response = egui::SidePanel::left("My BitAsset Reservations")
             .exact_width(350.)
             .resizable(false)
@@ -92,7 +109,10 @@ impl MyBitAssets {
             });
     }
 
-    pub fn show_bitassets(&mut self, app: &mut App, ui: &mut egui::Ui) {
+    /// Returns BitAssets with known and unknown names
+    fn get_bitassets(
+        app: &App,
+    ) -> (Vec<(BitAssetId, String)>, Vec<BitAssetId>) {
         let utxos_read = app.utxos.read();
         // all owned bitassets
         let bitassets = utxos_read.values().filter_map(FilledOutput::bitasset);
@@ -118,6 +138,12 @@ impl MyBitAssets {
         });
         // sort name-unknown bitassets by bitasset value
         unknown_name_bitassets.sort();
+        (known_name_bitassets, unknown_name_bitassets)
+    }
+
+    pub fn show_bitassets(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
+        let (known_name_bitassets, unknown_name_bitassets) =
+            app.map(Self::get_bitassets).unwrap_or_default();
         egui::SidePanel::left("My BitAssets")
             .exact_width(350.)
             .resizable(false)
@@ -157,7 +183,7 @@ impl MyBitAssets {
             });
     }
 
-    pub fn show(&mut self, app: &mut App, ui: &mut egui::Ui) {
+    pub fn show(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
         let _reservations_response = self.show_reservations(app, ui);
         let _bitassets_response = self.show_bitassets(app, ui);
     }

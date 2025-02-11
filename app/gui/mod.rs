@@ -26,50 +26,81 @@ use fonts::FONT_DEFINITIONS;
 use miner::Miner;
 use parent_chain::ParentChain;
 use seed::SetSeed;
-use util::{show_btc_amount_from_sats, UiExt, BITCOIN_LOGO_FA, BITCOIN_ORANGE};
+use util::{show_btc_amount, UiExt, BITCOIN_LOGO_FA, BITCOIN_ORANGE};
+
+/// Bottom panel, if initialized
+struct BottomPanelInitialized {
+    app: App,
+    wallet_updated: PromiseStream<<Wallet as Watchable<()>>::WatchStream>,
+}
+
+impl BottomPanelInitialized {
+    fn new(app: App) -> Self {
+        let wallet_updated = {
+            let rt_guard = app.runtime.enter();
+            let wallet_updated = PromiseStream::from(app.wallet.watch());
+            drop(rt_guard);
+            wallet_updated
+        };
+        Self {
+            app,
+            wallet_updated,
+        }
+    }
+}
 
 struct BottomPanel {
-    wallet_updated: PromiseStream<<Wallet as Watchable<()>>::WatchStream>,
+    initialized: Option<BottomPanelInitialized>,
     /// None if uninitialized
     /// Some(None) if failed to initialize
-    balance_sats: Option<Option<u64>>,
+    balance: Option<Option<bitcoin::Amount>>,
 }
 
 impl BottomPanel {
     /// MUST be run from within a tokio runtime
-    fn new(wallet: &Wallet) -> Self {
-        let wallet_updated = PromiseStream::from(wallet.watch());
+    fn new(app: Option<App>) -> Self {
+        let initialized = app.map(BottomPanelInitialized::new);
         Self {
-            wallet_updated,
-            balance_sats: None,
+            initialized,
+            balance: None,
         }
     }
 
-    /// Updates values
-    fn update(&mut self, app: &App) {
-        self.balance_sats = match app.wallet.get_bitcoin_balance() {
-            Ok(balance) => Some(Some(balance)),
-            Err(err) => {
-                let err = anyhow::Error::from(err);
-                tracing::error!("Failed to update balance: {err:#}");
-                Some(None)
+    /// Updates values if the wallet has been updated
+    fn update(&mut self) {
+        let Some(initialized) = &mut self.initialized else {
+            return;
+        };
+        let rt_guard = initialized.app.runtime.enter();
+        match initialized.wallet_updated.poll_next() {
+            Some(Poll::Ready(())) => {
+                self.balance =
+                    match initialized.app.wallet.get_bitcoin_balance() {
+                        Ok(balance) => Some(Some(balance.total)),
+                        Err(err) => {
+                            let err = anyhow::Error::from(err);
+                            tracing::error!(
+                                "Failed to update balance: {err:#}"
+                            );
+                            Some(None)
+                        }
+                    }
             }
+            Some(Poll::Pending) | None => (),
         }
+        drop(rt_guard);
     }
 
     fn show_balance(&self, ui: &mut egui::Ui) {
-        match self.balance_sats {
-            Some(Some(balance_sats)) => {
+        match self.balance {
+            Some(Some(balance)) => {
                 ui.monospace(
                     RichText::new(BITCOIN_LOGO_FA.to_string())
                         .color(BITCOIN_ORANGE),
                 );
                 ui.monospace_selectable_singleline(
                     false,
-                    format!(
-                        "Balance: {}",
-                        show_btc_amount_from_sats(balance_sats)
-                    ),
+                    format!("Balance: {}", show_btc_amount(balance)),
                 );
             }
             Some(None) => {
@@ -84,16 +115,9 @@ impl BottomPanel {
         }
     }
 
-    fn show(&mut self, app: &App, miner: &mut Miner, ui: &mut egui::Ui) {
+    fn show(&mut self, miner: &mut Miner, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            let rt_guard = app.runtime.enter();
-            match self.wallet_updated.poll_next() {
-                Some(Poll::Ready(())) => {
-                    self.update(app);
-                }
-                Some(Poll::Pending) | None => (),
-            }
-            drop(rt_guard);
+            self.update();
             self.show_balance(ui);
             // Fill center space,
             // see https://github.com/emilk/egui/discussions/3908#discussioncomment-8270353
@@ -112,7 +136,12 @@ impl BottomPanel {
 
             ui.add_space(this_target_width);
             ui.separator();
-            miner.show(app, ui);
+            miner.show(
+                self.initialized
+                    .as_ref()
+                    .map(|initialized| &initialized.app),
+                ui,
+            );
             // this frame others width
             // == this frame final min rect width - this frame target width
             ui.data_mut(|data| {
@@ -127,7 +156,7 @@ impl BottomPanel {
 
 pub struct EguiApp {
     activity: Activity,
-    app: App,
+    app: Option<App>,
     bitassets: BitAssets,
     bottom_panel: BottomPanel,
     coins: Coins,
@@ -158,7 +187,7 @@ enum Tab {
 
 impl EguiApp {
     pub fn new(
-        app: App,
+        app: Option<App>,
         cc: &eframe::CreationContext<'_>,
         logs_capture: LineBuffer,
         rpc_addr: SocketAddr,
@@ -184,13 +213,11 @@ impl EguiApp {
 
         cc.egui_ctx.set_style(style);
 
-        let activity = Activity::new(&app);
-        let rt_guard = app.runtime.enter();
-        let bottom_panel = BottomPanel::new(&app.wallet);
-        drop(rt_guard);
-        let coins = Coins::new(&app);
+        let activity = Activity::new(app.as_ref());
+        let bottom_panel = BottomPanel::new(app.clone());
+        let coins = Coins::new(app.as_ref());
         let console_logs = ConsoleLogs::new(logs_capture, rpc_addr);
-        let parent_chain = ParentChain::new(&app);
+        let parent_chain = ParentChain::new(app.as_ref());
         Self {
             activity,
             app,
@@ -209,7 +236,15 @@ impl EguiApp {
 
 impl eframe::App for EguiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if self.app.wallet.has_seed().unwrap_or(false) {
+        if let Some(app) = self.app.as_ref()
+            && !app.wallet.has_seed().unwrap_or(false)
+        {
+            egui::CentralPanel::default().show(ctx, |_ui| {
+                egui::Window::new("Set Seed").show(ctx, |ui| {
+                    self.set_seed.show(app, ui);
+                });
+            });
+        } else {
             egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     Tab::iter().for_each(|tab_variant| {
@@ -222,34 +257,27 @@ impl eframe::App for EguiApp {
                     })
                 });
             });
-            egui::TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
-                self.bottom_panel.show(&self.app, &mut self.miner, ui)
-            });
+            egui::TopBottomPanel::bottom("bottom_panel")
+                .show(ctx, |ui| self.bottom_panel.show(&mut self.miner, ui));
             egui::CentralPanel::default().show(ctx, |ui| match self.tab {
                 Tab::ParentChain => {
-                    self.parent_chain.show(&mut self.app, ui);
+                    self.parent_chain.show(self.app.as_ref(), ui);
                 }
                 Tab::Coins => {
-                    let () = self.coins.show(&mut self.app, ui).unwrap();
+                    let () = self.coins.show(self.app.as_ref(), ui).unwrap();
                 }
                 Tab::BitAssets => {
-                    self.bitassets.show(&mut self.app, ui);
+                    self.bitassets.show(self.app.as_ref(), ui);
                 }
                 Tab::EncryptMessage => {
-                    self.encrypt_message.show(&mut self.app, ui);
+                    self.encrypt_message.show(self.app.as_ref(), ui);
                 }
                 Tab::Activity => {
-                    self.activity.show(&mut self.app, ui);
+                    self.activity.show(self.app.as_ref(), ui);
                 }
                 Tab::ConsoleLogs => {
-                    self.console_logs.show(&self.app, ui);
+                    self.console_logs.show(self.app.as_ref(), ui);
                 }
-            });
-        } else {
-            egui::CentralPanel::default().show(ctx, |_ui| {
-                egui::Window::new("Set Seed").show(ctx, |ui| {
-                    self.set_seed.show(&self.app, ui);
-                });
             });
         }
     }

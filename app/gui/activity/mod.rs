@@ -26,8 +26,11 @@ pub struct Activity {
 }
 
 impl Activity {
-    pub fn new(app: &App) -> Self {
-        let height = app.node.get_tip_height().unwrap_or(0);
+    pub fn new(app: Option<&App>) -> Self {
+        let height = app
+            .as_ref()
+            .and_then(|app| app.node.get_tip_height().ok())
+            .unwrap_or(0);
         Self {
             block_explorer: BlockExplorer::new(height),
             mempool_explorer: Default::default(),
@@ -35,7 +38,7 @@ impl Activity {
         }
     }
 
-    pub fn show(&mut self, app: &mut App, ui: &mut egui::Ui) {
+    pub fn show(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
         egui::TopBottomPanel::top("activity_tabs").show(ui.ctx(), |ui| {
             ui.horizontal(|ui| {
                 Tab::iter().for_each(|tab_variant| {

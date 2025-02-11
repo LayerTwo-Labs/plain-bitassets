@@ -1,6 +1,5 @@
 use std::borrow::Borrow;
 
-use bip300301::bitcoin;
 use borsh::BorshDeserialize;
 use eframe::egui::{self, Color32, InnerResponse, Response, Ui};
 use libes::{auth::HmacSha256, enc::Aes256Gcm, key::X25519};
@@ -25,11 +24,6 @@ pub fn show_btc_amount(amount: bitcoin::Amount) -> String {
         "{BTC_UNICODE}{}",
         amount.to_string_in(bitcoin::Denomination::Bitcoin)
     )
-}
-
-/// Show a Bitcoin amount from sats
-pub fn show_btc_amount_from_sats(sats: u64) -> String {
-    show_btc_amount(bitcoin::Amount::from_sat(sats))
 }
 
 // extension for InnerResponse<Response> and InnerResponse<Option<Response>>

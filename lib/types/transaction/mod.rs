@@ -5,9 +5,8 @@ use std::{
     net::{Ipv4Addr, Ipv6Addr},
 };
 
-use bip300301::bitcoin;
+use bitcoin::amount::CheckedSum as _;
 use borsh::BorshSerialize;
-use clap::Parser;
 use educe::Educe;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -16,16 +15,27 @@ use utoipa::{
     PartialSchema, ToSchema,
 };
 
-use super::{
-    address::Address,
-    hashes::{
-        self, AssetId, BitAssetId, DutchAuctionId, Hash, MerkleRoot, Txid,
+use crate::{
+    authorization::{Authorization, VerifyingKey},
+    types::{
+        address::Address,
+        hashes::{
+            self, AssetId, BitAssetId, DutchAuctionId, Hash, M6id, MerkleRoot,
+            Txid,
+        },
+        serde_hexstr_human_readable, AmountOverflowError, EncryptionPubKey,
+        GetAddress, GetBitcoinValue,
     },
-    output::FilledContent,
-    serde_hexstr_human_readable, AssetOutput, EncryptionPubKey, FilledOutput,
-    GetAddress, GetBitcoinValue, Output, OutputContent,
 };
-use crate::authorization::{Authorization, VerifyingKey};
+
+mod output;
+pub use output::{
+    AssetContent as AssetOutputContent, AssetOutput,
+    BitcoinContent as BitcoinOutputContent, BitcoinOutput,
+    Content as OutputContent, FilledContent as FilledOutputContent,
+    FilledOutput, Output, Pointed as PointedOutput, SpentOutput,
+    WithdrawalContent as WithdrawalOutputContent,
+};
 
 fn borsh_serialize_bitcoin_outpoint<W>(
     block_hash: &bitcoin::OutPoint,
@@ -65,15 +75,24 @@ pub enum OutPoint {
         vout: u32,
     },
     // Created by mainchain deposits.
+    #[schema(value_type = crate::types::schema::BitcoinOutPoint)]
     Deposit(
         #[borsh(serialize_with = "borsh_serialize_bitcoin_outpoint")]
         bitcoin::OutPoint,
     ),
 }
 
-impl PartialSchema for OutPoint {
-    fn schema() -> RefOr<utoipa::openapi::Schema> {
-        <Self as ToSchema>::schema().1
+impl std::fmt::Display for OutPoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Regular { txid, vout } => write!(f, "regular {txid} {vout}"),
+            Self::Coinbase { merkle_root, vout } => {
+                write!(f, "coinbase {merkle_root} {vout}")
+            }
+            Self::Deposit(bitcoin::OutPoint { txid, vout }) => {
+                write!(f, "deposit {txid} {vout}")
+            }
+        }
     }
 }
 
@@ -88,7 +107,7 @@ pub enum InPoint {
     },
     // Created by mainchain withdrawals
     Withdrawal {
-        txid: bitcoin::Txid,
+        m6id: M6id,
     },
 }
 
@@ -145,16 +164,21 @@ where
 #[educe(Hash)]
 pub struct BitAssetData {
     /// Commitment to arbitrary data
+    #[schema(value_type = Option<String>)]
     pub commitment: Option<Hash>,
     /// Optional ipv4 addr
+    #[schema(value_type = Option<String>)]
     pub ipv4_addr: Option<Ipv4Addr>,
     /// Optional ipv6 addr
+    #[schema(value_type = Option<String>)]
     pub ipv6_addr: Option<Ipv6Addr>,
     /// Optional pubkey used for encryption
+    #[schema(value_type = Option<String>)]
     pub encryption_pubkey: Option<EncryptionPubKey>,
     /// Optional pubkey used for signing messages
     #[borsh(serialize_with = "borsh_serialize_option_verifying_key")]
     #[educe(Hash(method = "hash_option_verifying_key"))]
+    #[schema(value_type = Option<String>)]
     pub signing_pubkey: Option<VerifyingKey>,
 }
 
@@ -170,10 +194,10 @@ impl<T> Update<T> {
     /// Create a schema from a schema for `T`.
     fn schema(schema_t: RefOr<Schema>) -> RefOr<Schema> {
         let schema_delete = utoipa::openapi::ObjectBuilder::new()
-            .schema_type(utoipa::openapi::SchemaType::String)
+            .schema_type(utoipa::openapi::Type::String)
             .enum_values(Some(["Delete"]));
         let schema_retain = utoipa::openapi::ObjectBuilder::new()
-            .schema_type(utoipa::openapi::SchemaType::String)
+            .schema_type(utoipa::openapi::Type::String)
             .enum_values(Some(["Retain"]));
         let schema_set = utoipa::openapi::ObjectBuilder::new()
             .property("Set", schema_t)
@@ -188,44 +212,75 @@ impl<T> Update<T> {
     }
 }
 
-pub type UpdateHash = Update<Hash>;
-impl<'a> ToSchema<'a> for Update<Hash> {
-    fn schema() -> (&'a str, RefOr<Schema>) {
-        let schema_ref = utoipa::openapi::Ref::from_schema_name("Hash");
-        ("UpdateHash", Self::schema(schema_ref.into()))
+impl PartialSchema for Update<Hash> {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        Self::schema(<String as PartialSchema>::schema())
     }
 }
 
-pub type UpdateIpv4Addr = Update<Ipv4Addr>;
-impl<'a> ToSchema<'a> for Update<Ipv4Addr> {
-    fn schema() -> (&'a str, RefOr<Schema>) {
-        let schema_ref = utoipa::openapi::Ref::from_schema_name("Ipv4Addr");
-        ("UpdateIpv4Addr", Self::schema(schema_ref.into()))
+impl ToSchema for Update<Hash> {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("UpdateHash")
     }
 }
 
-pub type UpdateIpv6Addr = Update<Ipv6Addr>;
-impl<'a> ToSchema<'a> for Update<Ipv6Addr> {
-    fn schema() -> (&'a str, RefOr<Schema>) {
-        let schema_ref = utoipa::openapi::Ref::from_schema_name("Ipv6Addr");
-        ("UpdateIpv6Addr", Self::schema(schema_ref.into()))
+impl PartialSchema for Update<Ipv4Addr> {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        Self::schema(<String as PartialSchema>::schema())
     }
 }
 
-pub type UpdateEncryptionPubKey = Update<EncryptionPubKey>;
-impl<'a> ToSchema<'a> for Update<EncryptionPubKey> {
-    fn schema() -> (&'a str, RefOr<Schema>) {
-        let schema_ref =
-            utoipa::openapi::Ref::from_schema_name("EncryptionPubKey");
-        ("UpdateEncryptionPubKey", Self::schema(schema_ref.into()))
+impl ToSchema for Update<Ipv4Addr> {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("UpdateIpv4Addr")
     }
 }
 
-pub type UpdateVerifyingKey = Update<VerifyingKey>;
-impl<'a> ToSchema<'a> for Update<VerifyingKey> {
-    fn schema() -> (&'a str, RefOr<Schema>) {
-        let schema_ref = utoipa::openapi::Ref::from_schema_name("VerifyingKey");
-        ("UpdateVerifyingKey", Self::schema(schema_ref.into()))
+impl PartialSchema for Update<Ipv6Addr> {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        Self::schema(<String as PartialSchema>::schema())
+    }
+}
+
+impl ToSchema for Update<Ipv6Addr> {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("UpdateIpv6Addr")
+    }
+}
+
+impl PartialSchema for Update<EncryptionPubKey> {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        Self::schema(<String as PartialSchema>::schema())
+    }
+}
+
+impl ToSchema for Update<EncryptionPubKey> {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("UpdateEncryptionPubKey")
+    }
+}
+
+impl PartialSchema for Update<VerifyingKey> {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        Self::schema(<String as PartialSchema>::schema())
+    }
+}
+
+impl ToSchema for Update<VerifyingKey> {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("UpdateVerifyingKey")
+    }
+}
+
+impl PartialSchema for Update<u64> {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        Self::schema(<u64 as PartialSchema>::schema())
+    }
+}
+
+impl ToSchema for Update<u64> {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("UpdateU64")
     }
 }
 
@@ -253,48 +308,49 @@ where
 #[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct BitAssetDataUpdates {
     /// Commitment to arbitrary data
-    #[schema(value_type = UpdateHash)]
+    #[schema(schema_with = <Update<Hash> as PartialSchema>::schema)]
     pub commitment: Update<Hash>,
     /// Optional ipv4 addr
-    #[schema(value_type = UpdateIpv4Addr)]
+    #[schema(schema_with = <Update<Ipv4Addr> as PartialSchema>::schema)]
     pub ipv4_addr: Update<Ipv4Addr>,
     /// Optional ipv6 addr
-    #[schema(value_type = UpdateIpv6Addr)]
+    #[schema(schema_with = <Update<Ipv6Addr> as PartialSchema>::schema)]
     pub ipv6_addr: Update<Ipv6Addr>,
     /// Optional pubkey used for encryption
-    #[schema(value_type = UpdateEncryptionPubKey)]
+    #[schema(schema_with = <Update<EncryptionPubKey> as PartialSchema>::schema)]
     pub encryption_pubkey: Update<EncryptionPubKey>,
     /// Optional pubkey used for signing messages
     #[borsh(serialize_with = "borsh_serialize_update_verifying_key")]
-    #[schema(value_type = UpdateVerifyingKey)]
+    #[schema(schema_with = <Update<VerifyingKey> as PartialSchema>::schema)]
     pub signing_pubkey: Update<VerifyingKey>,
 }
 
 /// Parameters of a Dutch Auction
 #[derive(
-    BorshSerialize, Clone, Copy, Debug, Deserialize, Parser, Serialize, ToSchema,
+    BorshSerialize, Clone, Copy, Debug, Deserialize, Serialize, ToSchema,
 )]
+#[cfg_attr(feature = "clap", derive(clap::Parser))]
 pub struct DutchAuctionParams {
     /// Block height at which the auction starts
-    #[arg(long)]
+    #[cfg_attr(feature = "clap", arg(long))]
     pub start_block: u32,
     /// Auction duration, in blocks
-    #[arg(long)]
+    #[cfg_attr(feature = "clap", arg(long))]
     pub duration: u32,
     /// The asset to be auctioned
-    #[arg(long)]
+    #[cfg_attr(feature = "clap", arg(long))]
     pub base_asset: AssetId,
     /// The amount of the base asset to be auctioned
-    #[arg(long)]
+    #[cfg_attr(feature = "clap", arg(long))]
     pub base_amount: u64,
     /// The asset in which the auction is to be quoted
-    #[arg(long)]
+    #[cfg_attr(feature = "clap", arg(long))]
     pub quote_asset: AssetId,
     /// Initial price
-    #[arg(long)]
+    #[cfg_attr(feature = "clap", arg(long))]
     pub initial_price: u64,
     /// Final price
-    #[arg(long)]
+    #[cfg_attr(feature = "clap", arg(long))]
     pub final_price: u64,
 }
 
@@ -332,14 +388,17 @@ pub enum TransactionData {
     BitAssetReservation {
         /// Commitment to the BitAsset that will be registered
         #[serde(with = "serde_hexstr_human_readable")]
+        #[schema(value_type = String)]
         commitment: Hash,
     },
     BitAssetRegistration {
         /// Reveal of the name hash
         #[serde(with = "serde_hexstr_human_readable")]
+        #[schema(value_type = String)]
         name_hash: Hash,
         /// Reveal of the nonce used for the BitAsset reservation commitment
         #[serde(with = "serde_hexstr_human_readable")]
+        #[schema(value_type = String)]
         revealed_nonce: Hash,
         /// Initial BitAsset data
         bitasset_data: Box<BitAssetData>,
@@ -373,49 +432,50 @@ pub enum TransactionData {
 
 pub type TxData = TransactionData;
 
-#[derive(
-    BorshSerialize, Clone, Debug, Default, Deserialize, Serialize, ToSchema,
-)]
-pub struct Transaction {
-    pub inputs: Vec<OutPoint>,
-    pub outputs: Vec<Output>,
-    #[serde(with = "serde_hexstr_human_readable")]
-    pub memo: Vec<u8>,
-    pub data: Option<TxData>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct FilledTransaction {
-    pub transaction: Transaction,
-    pub spent_utxos: Vec<FilledOutput>,
-}
-
-#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize)]
-pub struct Authorized<T> {
-    pub transaction: T,
-    /// Authorizations are called witnesses in Bitcoin.
-    pub authorizations: Vec<Authorization>,
-}
-
-pub type AuthorizedTransaction = Authorized<Transaction>;
-
-impl AuthorizedTransaction {
-    /// Return an iterator over all addresses relevant to the transaction
-    pub fn relevant_addresses(&self) -> HashSet<Address> {
-        let input_addrs =
-            self.authorizations.iter().map(|auth| auth.get_address());
-        let output_addrs =
-            self.transaction.outputs.iter().map(|output| output.address);
-        input_addrs.chain(output_addrs).collect()
+impl TxData {
+    /// `true` if the tx data corresponds to an AMM burn
+    pub fn is_amm_burn(&self) -> bool {
+        matches!(self, Self::AmmBurn { .. })
     }
-}
 
-impl From<Authorized<FilledTransaction>> for AuthorizedTransaction {
-    fn from(tx: Authorized<FilledTransaction>) -> Self {
-        Self {
-            transaction: tx.transaction.transaction,
-            authorizations: tx.authorizations,
-        }
+    /// `true` if the tx data corresponds to an AMM mint
+    pub fn is_amm_mint(&self) -> bool {
+        matches!(self, Self::AmmMint { .. })
+    }
+
+    /// `true` if the tx data corresponds to an AMM swap
+    pub fn is_amm_swap(&self) -> bool {
+        matches!(self, Self::AmmSwap { .. })
+    }
+
+    /// `true` if the tx data corresponds to a Dutch auction bid
+    pub fn is_dutch_auction_bid(&self) -> bool {
+        matches!(self, Self::DutchAuctionBid { .. })
+    }
+
+    /// `true` if the tx data corresponds to a Dutch auction creation
+    pub fn is_dutch_auction_create(&self) -> bool {
+        matches!(self, Self::DutchAuctionCreate(_))
+    }
+
+    /// `true` if the tx data corresponds to a Dutch auction collect
+    pub fn is_dutch_auction_collect(&self) -> bool {
+        matches!(self, Self::DutchAuctionCollect { .. })
+    }
+
+    /// `true` if the tx data corresponds to a registration
+    pub fn is_registration(&self) -> bool {
+        matches!(self, Self::BitAssetRegistration { .. })
+    }
+
+    /// `true` if the tx data corresponds to a reservation
+    pub fn is_reservation(&self) -> bool {
+        matches!(self, Self::BitAssetReservation { .. })
+    }
+
+    /// `true` if the tx data corresponds to an update
+    pub fn is_update(&self) -> bool {
+        matches!(self, Self::BitAssetUpdate(_))
     }
 }
 
@@ -480,65 +540,17 @@ pub struct DutchAuctionCollect {
     pub amount_received: u64,
 }
 
-impl std::fmt::Display for OutPoint {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Regular { txid, vout } => write!(f, "regular {txid} {vout}"),
-            Self::Coinbase { merkle_root, vout } => {
-                write!(f, "coinbase {merkle_root} {vout}")
-            }
-            Self::Deposit(bitcoin::OutPoint { txid, vout }) => {
-                write!(f, "deposit {txid} {vout}")
-            }
-        }
-    }
-}
-
-impl TxData {
-    /// `true` if the tx data corresponds to an AMM burn
-    pub fn is_amm_burn(&self) -> bool {
-        matches!(self, Self::AmmBurn { .. })
-    }
-
-    /// `true` if the tx data corresponds to an AMM mint
-    pub fn is_amm_mint(&self) -> bool {
-        matches!(self, Self::AmmMint { .. })
-    }
-
-    /// `true` if the tx data corresponds to an AMM swap
-    pub fn is_amm_swap(&self) -> bool {
-        matches!(self, Self::AmmSwap { .. })
-    }
-
-    /// `true` if the tx data corresponds to a Dutch auction bid
-    pub fn is_dutch_auction_bid(&self) -> bool {
-        matches!(self, Self::DutchAuctionBid { .. })
-    }
-
-    /// `true` if the tx data corresponds to a Dutch auction creation
-    pub fn is_dutch_auction_create(&self) -> bool {
-        matches!(self, Self::DutchAuctionCreate(_))
-    }
-
-    /// `true` if the tx data corresponds to a Dutch auction collect
-    pub fn is_dutch_auction_collect(&self) -> bool {
-        matches!(self, Self::DutchAuctionCollect { .. })
-    }
-
-    /// `true` if the tx data corresponds to a reservation
-    pub fn is_registration(&self) -> bool {
-        matches!(self, Self::BitAssetRegistration { .. })
-    }
-
-    /// `true` if the tx data corresponds to a reservation
-    pub fn is_reservation(&self) -> bool {
-        matches!(self, Self::BitAssetReservation { .. })
-    }
-
-    /// `true` if the tx data corresponds to an update
-    pub fn is_update(&self) -> bool {
-        matches!(self, Self::BitAssetUpdate(_))
-    }
+#[derive(
+    BorshSerialize, Clone, Debug, Default, Deserialize, Serialize, ToSchema,
+)]
+pub struct Transaction {
+    #[schema(schema_with = TxInputs::schema)]
+    pub inputs: TxInputs,
+    #[schema(schema_with = TxOutputs::schema)]
+    pub outputs: TxOutputs,
+    #[serde(with = "serde_hexstr_human_readable")]
+    pub memo: Vec<u8>,
+    pub data: Option<TransactionData>,
 }
 
 impl Transaction {
@@ -698,6 +710,12 @@ impl Transaction {
             _ => None,
         }
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FilledTransaction {
+    pub transaction: Transaction,
+    pub spent_utxos: Vec<FilledOutput>,
 }
 
 impl FilledTransaction {
@@ -956,30 +974,38 @@ impl FilledTransaction {
     }
 
     /// Returns the total Bitcoin value spent
-    pub fn spent_bitcoin_value(&self) -> u64 {
+    pub fn spent_bitcoin_value(
+        &self,
+    ) -> Result<bitcoin::Amount, AmountOverflowError> {
         self.spent_utxos
             .iter()
             .map(GetBitcoinValue::get_bitcoin_value)
-            .sum()
+            .checked_sum()
+            .ok_or(AmountOverflowError)
     }
 
     /// Returns the total Bitcoin value in the outputs
-    pub fn bitcoin_value_out(&self) -> u64 {
+    pub fn bitcoin_value_out(
+        &self,
+    ) -> Result<bitcoin::Amount, AmountOverflowError> {
         self.outputs()
             .iter()
             .map(GetBitcoinValue::get_bitcoin_value)
-            .sum()
+            .checked_sum()
+            .ok_or(AmountOverflowError)
     }
 
-    /** Returns the difference between the value spent and value out, if it is
-     * non-negative. */
-    pub fn bitcoin_fee(&self) -> Option<u64> {
-        let spent_value = self.spent_bitcoin_value();
-        let value_out = self.bitcoin_value_out();
+    /// Returns the difference between the value spent and value out, if it is
+    /// non-negative.
+    pub fn bitcoin_fee(
+        &self,
+    ) -> Result<Option<bitcoin::Amount>, AmountOverflowError> {
+        let spent_value = self.spent_bitcoin_value()?;
+        let value_out = self.bitcoin_value_out()?;
         if spent_value < value_out {
-            None
+            Ok(None)
         } else {
-            Some(spent_value - value_out)
+            Ok(Some(spent_value - value_out))
         }
     }
     /// Return an iterator over spent reservations
@@ -1337,15 +1363,15 @@ impl FilledTransaction {
 
     /** Returns the max value of Bitcoin that can occur in the outputs.
      *  The total output value can possibly over/underflow in a transaction,
-     *  so the total output values are [`Option<u64>`],
+     *  so the total output values are [`Option<bitcoin::Amount>`],
      *  where `None` indicates over/underflow. */
-    fn output_bitcoin_max_value(&self) -> Option<u64> {
+    fn output_bitcoin_max_value(&self) -> Option<bitcoin::Amount> {
         self.output_asset_total_values()
             .find_map(|(asset_id, value)| match asset_id {
-                AssetId::Bitcoin => Some(value),
+                AssetId::Bitcoin => Some(value.map(bitcoin::Amount::from_sat)),
                 _ => None,
             })
-            .unwrap_or(Some(0))
+            .unwrap_or(Some(bitcoin::Amount::ZERO))
     }
 
     /** Returns an iterator over total amount for each LP token that must
@@ -1411,11 +1437,11 @@ impl FilledTransaction {
     /// Compute the filled content for BitAsset reservation outputs.
     fn filled_bitasset_control_output_content(
         &self,
-    ) -> impl Iterator<Item = FilledContent> + '_ {
+    ) -> impl Iterator<Item = FilledOutputContent> + '_ {
         self.output_asset_total_values()
             .filter_map(|(asset, _)| match asset {
                 AssetId::BitAssetControl(bitasset_id) => {
-                    Some(FilledContent::BitAssetControl(bitasset_id))
+                    Some(FilledOutputContent::BitAssetControl(bitasset_id))
                 }
                 _ => None,
             })
@@ -1425,14 +1451,14 @@ impl FilledTransaction {
     // WARNING: do not expose DoubleEndedIterator.
     fn filled_dutch_auction_receipts(
         &self,
-    ) -> impl Iterator<Item = FilledContent> + '_ {
+    ) -> impl Iterator<Item = FilledOutputContent> + '_ {
         /* If this tx is a Dutch auction creation, this is the content of the
          * output corresponding to the newly created Dutch auction receipt,
          * which is the last Dutch auction receipt output. */
         let new_dutch_auction_receipt_content =
             if self.is_dutch_auction_create() {
                 let auction_id = DutchAuctionId(self.txid());
-                Some(FilledContent::DutchAuctionReceipt(auction_id))
+                Some(FilledOutputContent::DutchAuctionReceipt(auction_id))
             } else {
                 None
             };
@@ -1453,13 +1479,16 @@ impl FilledTransaction {
     /// WARNING: do not expose DoubleEndedIterator.
     fn filled_reservation_output_content(
         &self,
-    ) -> impl Iterator<Item = FilledContent> + '_ {
+    ) -> impl Iterator<Item = FilledOutputContent> + '_ {
         // If this tx is a BitAsset reservation, this is the content of the
         // output corresponding to the newly created BitAsset reservation,
         // which must be the final reservation output.
-        let new_reservation_content: Option<FilledContent> =
+        let new_reservation_content: Option<FilledOutputContent> =
             self.reservation_commitment().map(|commitment| {
-                FilledContent::BitAssetReservation(self.txid(), commitment)
+                FilledOutputContent::BitAssetReservation(
+                    self.txid(),
+                    commitment,
+                )
             });
         // used to track if the reservation that should be burned as part
         // of a registration tx
@@ -1473,7 +1502,7 @@ impl FilledTransaction {
                 if let Some(implied_commitment) = reservation_to_burn {
                     if matches!(
                         content,
-                        FilledContent::BitAssetReservation(_, commitment)
+                        FilledOutputContent::BitAssetReservation(_, commitment)
                             if *commitment == implied_commitment)
                     {
                         reservation_to_burn = None;
@@ -1512,7 +1541,7 @@ impl FilledTransaction {
                         let (asset0, asset1, remaining_amount) =
                             output_lp_token_total_amounts.peek_mut()?;
                         let remaining_amount = remaining_amount.as_mut()?;
-                        let filled_content = FilledContent::AmmLpToken {
+                        let filled_content = FilledOutputContent::AmmLpToken {
                             asset0: *asset0,
                             asset1: *asset1,
                             amount,
@@ -1538,7 +1567,7 @@ impl FilledTransaction {
                             output_bitasset_total_values.peek_mut()?;
                         let remaining_value = remaining_value.as_mut()?;
                         let filled_content =
-                            FilledContent::BitAsset(*bitasset, value);
+                            FilledOutputContent::BitAsset(*bitasset, value);
                         match value.cmp(remaining_value) {
                             Ordering::Greater => {
                                 // Invalid tx, return `None`
@@ -1564,20 +1593,14 @@ impl FilledTransaction {
                     OutputContent::DutchAuctionReceipt => {
                         filled_dutch_auction_receipts.next()?
                     }
-                    OutputContent::Value(value) => {
+                    OutputContent::Bitcoin(value) => {
                         output_bitcoin_max_value =
                             output_bitcoin_max_value.checked_sub(value.0)?;
-                        FilledContent::Bitcoin(value)
+                        FilledOutputContent::Bitcoin(value)
                     }
-                    OutputContent::Withdrawal {
-                        value,
-                        main_fee,
-                        main_address,
-                    } => FilledContent::BitcoinWithdrawal {
-                        value,
-                        main_fee,
-                        main_address,
-                    },
+                    OutputContent::Withdrawal(withdrawal) => {
+                        FilledOutputContent::BitcoinWithdrawal(withdrawal)
+                    }
                 };
                 Some(FilledOutput {
                     address: output.address,
@@ -1589,9 +1612,31 @@ impl FilledTransaction {
     }
 }
 
-pub mod open_api_schemas {
-    pub use super::{
-        UpdateEncryptionPubKey, UpdateHash, UpdateIpv4Addr, UpdateIpv6Addr,
-        UpdateVerifyingKey,
-    };
+#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize)]
+pub struct Authorized<T> {
+    pub transaction: T,
+    /// Authorizations are called witnesses in Bitcoin.
+    pub authorizations: Vec<Authorization>,
+}
+
+pub type AuthorizedTransaction = Authorized<Transaction>;
+
+impl AuthorizedTransaction {
+    /// Return an iterator over all addresses relevant to the transaction
+    pub fn relevant_addresses(&self) -> HashSet<Address> {
+        let input_addrs =
+            self.authorizations.iter().map(|auth| auth.get_address());
+        let output_addrs =
+            self.transaction.outputs.iter().map(|output| output.address);
+        input_addrs.chain(output_addrs).collect()
+    }
+}
+
+impl From<Authorized<FilledTransaction>> for AuthorizedTransaction {
+    fn from(tx: Authorized<FilledTransaction>) -> Self {
+        Self {
+            transaction: tx.transaction.transaction,
+            authorizations: tx.authorizations,
+        }
+    }
 }

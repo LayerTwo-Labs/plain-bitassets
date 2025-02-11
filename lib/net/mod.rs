@@ -16,9 +16,8 @@ use tokio_stream::StreamNotifyClose;
 
 use crate::{
     archive::Archive,
-    node::THIS_SIDECHAIN,
     state::State,
-    types::{AuthorizedTransaction, Network},
+    types::{AuthorizedTransaction, Network, THIS_SIDECHAIN},
 };
 
 mod peer;

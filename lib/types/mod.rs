@@ -1,39 +1,47 @@
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashMap},
+    sync::LazyLock,
 };
 
 use bech32::{FromBase32, ToBase32};
+use bitcoin::{amount::CheckedSum as _, hashes::Hash as _};
 use borsh::BorshSerialize;
 use serde::{Deserialize, Serialize};
-
-use bip300301::bitcoin::{self, hashes::Hash as _};
 use thiserror::Error;
 use utoipa::ToSchema;
 
 pub use crate::authorization::Authorization;
 
 mod address;
-pub mod constants;
 pub mod hashes;
-pub mod output;
+pub mod proto;
+pub mod schema;
 mod transaction;
 
-pub use address::*;
+pub use address::Address;
 pub use hashes::{
-    AssetId, BitAssetId, BlockHash, DutchAuctionId, Hash, MerkleRoot, Txid,
-};
-pub use output::{
-    AssetOutput, AssetOutputContent, BitcoinOutput, BitcoinOutputContent,
-    FilledContent as FilledOutputContent, FilledOutput, Output, OutputContent,
-    Pointed as PointedOutput, SpentOutput,
+    AssetId, BitAssetId, BlockHash, DutchAuctionId, Hash, M6id, MerkleRoot,
+    Txid,
 };
 pub use transaction::{
-    AmmBurn, AmmMint, AmmSwap, Authorized, AuthorizedTransaction, BitAssetData,
-    BitAssetDataUpdates, DutchAuctionBid, DutchAuctionCollect,
-    DutchAuctionParams, FilledTransaction, InPoint, OutPoint, Transaction,
-    TxData, TxInputs, Update,
+    AmmBurn, AmmMint, AmmSwap, AssetOutput, AssetOutputContent, Authorized,
+    AuthorizedTransaction, BitAssetData, BitAssetDataUpdates, BitcoinOutput,
+    BitcoinOutputContent, DutchAuctionBid, DutchAuctionCollect,
+    DutchAuctionParams, FilledOutput, FilledOutputContent, FilledTransaction,
+    InPoint, OutPoint, Output, OutputContent, PointedOutput, SpentOutput,
+    Transaction, TxData, TxInputs, Update, WithdrawalOutputContent,
 };
+
+pub const THIS_SIDECHAIN: u8 = 4;
+
+#[derive(Debug, Error)]
+#[error("Bitcoin amount overflow")]
+pub struct AmountOverflowError;
+
+#[derive(Debug, Error)]
+#[error("Bitcoin amount underflow")]
+pub struct AmountUnderflowError;
 
 /// (de)serialize as Display/FromStr for human-readable forms like json,
 /// and default serialization for non human-readable forms like bincode
@@ -106,15 +114,7 @@ pub trait GetAddress {
 
 pub trait GetBitcoinValue {
     /// Bitcoin value in sats
-    fn get_bitcoin_value(&self) -> u64;
-}
-
-pub trait Verify {
-    type Error;
-    fn verify_transaction(
-        transaction: &AuthorizedTransaction,
-    ) -> Result<(), Self::Error>;
-    fn verify_body(body: &Body) -> Result<(), Self::Error>;
+    fn get_bitcoin_value(&self) -> bitcoin::Amount;
 }
 
 #[derive(Debug, Error)]
@@ -228,6 +228,7 @@ pub struct Header {
     pub merkle_root: MerkleRoot,
     pub prev_side_hash: BlockHash,
     #[borsh(serialize_with = "borsh_serialize_bitcoin_block_hash")]
+    #[schema(value_type = crate::types::schema::BitcoinBlockHash)]
     pub prev_main_hash: bitcoin::BlockHash,
 }
 
@@ -237,23 +238,124 @@ impl Header {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum WithdrawalBundleStatus {
     Failed,
     Confirmed,
+    Submitted,
 }
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WithdrawalBundleEvent {
+    pub m6id: M6id,
+    pub status: WithdrawalBundleStatus,
+}
+
+pub static OP_DRIVECHAIN_SCRIPT: LazyLock<bitcoin::ScriptBuf> =
+    LazyLock::new(|| {
+        let mut script = bitcoin::ScriptBuf::new();
+        script.push_opcode(bitcoin::opcodes::all::OP_RETURN);
+        script.push_instruction(bitcoin::script::Instruction::PushBytes(
+            &bitcoin::script::PushBytesBuf::from([THIS_SIDECHAIN]),
+        ));
+        script.push_opcode(bitcoin::opcodes::OP_TRUE);
+        script
+    });
+
+#[derive(Debug, Error)]
+enum WithdrawalBundleErrorInner {
+    #[error("bundle too heavy: weight `{weight}` > max weight `{max_weight}`")]
+    BundleTooHeavy { weight: u64, max_weight: u64 },
+}
+
+#[derive(Debug, Error)]
+#[error("Withdrawal bundle error")]
+pub struct WithdrawalBundleError(#[from] WithdrawalBundleErrorInner);
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct WithdrawalBundle {
-    pub spend_utxos: BTreeMap<OutPoint, FilledOutput>,
-    pub transaction: bitcoin::Transaction,
+    spend_utxos: BTreeMap<OutPoint, FilledOutput>,
+    tx: bitcoin::Transaction,
+}
+
+impl WithdrawalBundle {
+    pub fn new(
+        block_height: u32,
+        fee: bitcoin::Amount,
+        spend_utxos: BTreeMap<OutPoint, FilledOutput>,
+        bundle_outputs: Vec<bitcoin::TxOut>,
+    ) -> Result<Self, WithdrawalBundleError> {
+        let inputs_commitment_txout = {
+            // Create inputs commitment.
+            let inputs: Vec<OutPoint> = [
+                // Commit to inputs.
+                spend_utxos.keys().copied().collect(),
+                // Commit to block height.
+                vec![OutPoint::Regular {
+                    txid: [0; 32].into(),
+                    vout: block_height,
+                }],
+            ]
+            .concat();
+            let commitment = hashes::hash(&inputs);
+            let script_pubkey = bitcoin::script::Builder::new()
+                .push_opcode(bitcoin::opcodes::all::OP_RETURN)
+                .push_slice(commitment)
+                .into_script();
+            bitcoin::TxOut {
+                value: bitcoin::Amount::ZERO,
+                script_pubkey,
+            }
+        };
+        let mainchain_fee_txout = {
+            let script_pubkey = bitcoin::script::Builder::new()
+                .push_opcode(bitcoin::opcodes::all::OP_RETURN)
+                .push_slice(fee.to_sat().to_be_bytes())
+                .into_script();
+            bitcoin::TxOut {
+                value: bitcoin::Amount::ZERO,
+                script_pubkey,
+            }
+        };
+        let outputs = Vec::from_iter(
+            [mainchain_fee_txout, inputs_commitment_txout]
+                .into_iter()
+                .chain(bundle_outputs),
+        );
+        let tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: bitcoin::blockdata::locktime::absolute::LockTime::ZERO,
+            input: Vec::new(),
+            output: outputs,
+        };
+        if tx.weight().to_wu() > bitcoin::policy::MAX_STANDARD_TX_WEIGHT as u64
+        {
+            Err(WithdrawalBundleErrorInner::BundleTooHeavy {
+                weight: tx.weight().to_wu(),
+                max_weight: bitcoin::policy::MAX_STANDARD_TX_WEIGHT as u64,
+            })?;
+        }
+        Ok(Self { spend_utxos, tx })
+    }
+
+    pub fn compute_m6id(&self) -> M6id {
+        M6id(self.tx.compute_txid())
+    }
+
+    pub fn spend_utxos(&self) -> &BTreeMap<OutPoint, FilledOutput> {
+        &self.spend_utxos
+    }
+
+    pub fn tx(&self) -> &bitcoin::Transaction {
+        &self.tx
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct TwoWayPegData {
     pub deposits: HashMap<OutPoint, Output>,
     pub deposit_block_hash: Option<bitcoin::BlockHash>,
-    pub bundle_statuses: HashMap<bitcoin::Txid, WithdrawalBundleStatus>,
+    pub bundle_statuses: HashMap<M6id, WithdrawalBundleEvent>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
@@ -337,12 +439,23 @@ impl Body {
         outputs
     }
 
-    pub fn get_coinbase_value(&self) -> u64 {
+    pub fn get_coinbase_value(
+        &self,
+    ) -> Result<bitcoin::Amount, AmountOverflowError> {
         self.coinbase
             .iter()
             .map(|output| output.get_bitcoin_value())
-            .sum()
+            .checked_sum()
+            .ok_or(AmountOverflowError)
     }
+}
+
+pub trait Verify {
+    type Error;
+    fn verify_transaction(
+        transaction: &AuthorizedTransaction,
+    ) -> Result<(), Self::Error>;
+    fn verify_body(body: &Body) -> Result<(), Self::Error>;
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
@@ -370,8 +483,8 @@ pub struct DisconnectData {
 pub struct AggregatedWithdrawal {
     pub spend_utxos: HashMap<OutPoint, FilledOutput>,
     pub main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
-    pub value: u64,
-    pub main_fee: u64,
+    pub value: bitcoin::Amount,
+    pub main_fee: bitcoin::Amount,
 }
 
 impl Ord for AggregatedWithdrawal {
@@ -442,9 +555,4 @@ pub enum Network {
     #[default]
     Signet,
     Regtest,
-}
-
-pub mod open_api_schemas {
-    pub use super::output::open_api_schemas::*;
-    pub use super::transaction::open_api_schemas::*;
 }

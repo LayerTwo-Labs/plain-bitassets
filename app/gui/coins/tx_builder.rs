@@ -2,12 +2,9 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use eframe::egui;
 
-use plain_bitassets::{
-    bip300301::bitcoin,
-    types::{
-        AssetId, AssetOutputContent, BitAssetId, BitcoinOutputContent,
-        GetBitcoinValue, Transaction,
-    },
+use plain_bitassets::types::{
+    AssetId, AssetOutputContent, BitAssetId, BitcoinOutputContent,
+    GetBitcoinValue, Transaction, WithdrawalOutputContent,
 };
 
 use super::{
@@ -27,8 +24,11 @@ pub struct TxBuilder {
 }
 
 impl TxBuilder {
-    pub fn show_value_in(&mut self, app: &mut App, ui: &mut egui::Ui) {
+    pub fn show_value_in(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
         ui.heading("Value In");
+        let Some(app) = app else {
+            return;
+        };
         let selected: HashSet<_> =
             self.base_tx.inputs.iter().cloned().collect();
         let utxos_read = app.utxos.read();
@@ -36,7 +36,7 @@ impl TxBuilder {
             .iter()
             .filter(|(outpoint, _)| selected.contains(outpoint))
             .collect();
-        let mut bitcoin_value_in: u64 = 0;
+        let mut bitcoin_value_in = bitcoin::Amount::ZERO;
         let mut bitasset_values_in = BTreeMap::<BitAssetId, u64>::new();
         let mut bitasset_controls_in = BTreeSet::<BitAssetId>::new();
         spent_utxos
@@ -44,7 +44,7 @@ impl TxBuilder {
             .for_each(|(_, output)| match output.asset_value() {
                 None => (),
                 Some((AssetId::Bitcoin, value)) => {
-                    bitcoin_value_in += value;
+                    bitcoin_value_in += bitcoin::Amount::from_sat(value);
                 }
                 Some((AssetId::BitAsset(bitasset_id), value)) => {
                     *bitasset_values_in.entry(bitasset_id).or_default() +=
@@ -69,7 +69,7 @@ impl TxBuilder {
                 ui.monospace_selectable_singleline(false, "Bitcoin");
                 ui.monospace_selectable_singleline(
                     false,
-                    format!("{}", bitcoin::Amount::from_sat(bitcoin_value_in)),
+                    format!("{bitcoin_value_in}"),
                 );
                 ui.end_row();
 
@@ -110,7 +110,7 @@ impl TxBuilder {
                 let mut remove = None;
                 for (vout, outpoint) in self.base_tx.inputs.iter().enumerate() {
                     let output = &utxos_read[outpoint];
-                    if output.get_bitcoin_value() != 0 {
+                    if output.get_bitcoin_value() != bitcoin::Amount::ZERO {
                         show_utxo(ui, outpoint, output, true);
                         if ui.button("remove").clicked() {
                             remove = Some(vout);
@@ -127,17 +127,14 @@ impl TxBuilder {
     pub fn show_value_out(&mut self, ui: &mut egui::Ui) {
         ui.heading("Value Out");
         ui.separator();
-        let bitcoin_value_out: u64 = self
+        let bitcoin_value_out: bitcoin::Amount = self
             .base_tx
             .outputs
             .iter()
             .map(GetBitcoinValue::get_bitcoin_value)
             .sum();
         self.tx_creator.bitcoin_value_out = bitcoin_value_out;
-        ui.monospace(format!(
-            "Total: {}",
-            bitcoin::Amount::from_sat(bitcoin_value_out)
-        ));
+        ui.monospace(format!("Total: {bitcoin_value_out}"));
         ui.separator();
         egui::Grid::new("outputs")
             .striped(true)
@@ -152,14 +149,13 @@ impl TxBuilder {
                 for (vout, output) in self.base_tx.indexed_asset_outputs() {
                     let address = &format!("{}", output.address)[0..8];
                     let (asset_kind, value) = match output.content {
-                        AssetOutputContent::Value(BitcoinOutputContent(
+                        AssetOutputContent::Bitcoin(BitcoinOutputContent(
                             value,
                         ))
-                        | AssetOutputContent::Withdrawal { value, .. } => {
-                            let bitcoin_value = format!(
-                                "₿{}",
-                                bitcoin::Amount::from_sat(value)
-                            );
+                        | AssetOutputContent::Withdrawal(
+                            WithdrawalOutputContent { value, .. },
+                        ) => {
+                            let bitcoin_value = format!("₿{value}");
                             ("Bitcoin", bitcoin_value)
                         }
                         AssetOutputContent::BitAsset(value) => {
@@ -191,7 +187,7 @@ impl TxBuilder {
 
     pub fn show(
         &mut self,
-        app: &mut App,
+        app: Option<&App>,
         ui: &mut egui::Ui,
     ) -> anyhow::Result<()> {
         egui::SidePanel::left("spend_utxo")

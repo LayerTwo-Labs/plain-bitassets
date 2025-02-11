@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 
-use bip300301::bitcoin;
 use eframe::egui;
 use plain_bitassets::types::BitAssetData;
 
@@ -14,7 +13,7 @@ fn reserve_bitasset(
     plaintext_name: &str,
     fee: bitcoin::Amount,
 ) -> anyhow::Result<()> {
-    let mut tx = app.wallet.create_regular_transaction(fee.to_sat())?;
+    let mut tx = app.wallet.create_regular_transaction(fee)?;
     let () = app.wallet.reserve_bitasset(&mut tx, plaintext_name)?;
     app.sign_and_send(tx).map_err(anyhow::Error::from)
 }
@@ -26,7 +25,7 @@ fn register_bitasset(
     bitasset_data: Cow<BitAssetData>,
     fee: bitcoin::Amount,
 ) -> anyhow::Result<()> {
-    let mut tx = app.wallet.create_regular_transaction(fee.to_sat())?;
+    let mut tx = app.wallet.create_regular_transaction(fee)?;
     let () = app.wallet.register_bitasset(
         &mut tx,
         plaintext_name,
@@ -43,7 +42,7 @@ struct Reserve {
 }
 
 impl Reserve {
-    pub fn show(&mut self, app: &App, ui: &mut egui::Ui) {
+    pub fn show(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
         ui.add_sized((250., 10.), |ui: &mut egui::Ui| {
             ui.horizontal(|ui| {
                 let plaintext_name_edit =
@@ -70,13 +69,13 @@ impl Reserve {
         );
         if ui
             .add_enabled(
-                !self.plaintext_name.is_empty() && fee.is_ok(),
+                !self.plaintext_name.is_empty() && fee.is_ok() && app.is_some(),
                 egui::Button::new("Reserve"),
             )
             .clicked()
         {
             if let Err(err) = reserve_bitasset(
-                app,
+                app.unwrap(),
                 &self.plaintext_name,
                 fee.expect("should not happen"),
             ) {
@@ -97,7 +96,7 @@ struct Register {
 }
 
 impl Register {
-    pub fn show(&mut self, app: &App, ui: &mut egui::Ui) {
+    pub fn show(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
         ui.add_sized((250., 10.), |ui: &mut egui::Ui| {
             ui.horizontal(|ui| {
                 let plaintext_name_edit =
@@ -147,13 +146,14 @@ impl Register {
                 !self.plaintext_name.is_empty()
                     && initial_supply.is_ok()
                     && fee.is_ok()
-                    && bitasset_data.is_ok(),
+                    && bitasset_data.is_ok()
+                    && app.is_some(),
                 egui::Button::new("Register"),
             )
             .clicked()
         {
             if let Err(err) = register_bitasset(
-                app,
+                app.unwrap(),
                 &self.plaintext_name,
                 initial_supply.expect("should not happen"),
                 Cow::Borrowed(&bitasset_data.expect("should not happen")),
@@ -174,7 +174,7 @@ pub(super) struct ReserveRegister {
 }
 
 impl ReserveRegister {
-    pub fn show(&mut self, app: &App, ui: &mut egui::Ui) {
+    pub fn show(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
         egui::SidePanel::left("reserve")
             .exact_width(ui.available_width() / 2.)
             .resizable(false)

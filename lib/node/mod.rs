@@ -1,17 +1,19 @@
-#[cfg(all(not(target_os = "windows"), feature = "zmq"))]
-use std::sync::Arc;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fmt::Debug,
     net::SocketAddr,
     path::Path,
+    sync::Arc,
 };
 
-use bip300301::{bitcoin, DepositInfo};
+use bitcoin::amount::CheckedSum as _;
 use fallible_iterator::FallibleIterator;
 use fraction::Fraction;
-use futures::Stream;
+use futures::{future::BoxFuture, Stream};
+use hashlink::{linked_hash_map, LinkedHashMap};
+use tokio::sync::Mutex;
 use tokio_util::task::LocalPoolHandle;
+use tonic::transport::Channel;
 
 use crate::{
     archive::{self, Archive},
@@ -22,11 +24,12 @@ use crate::{
         DutchAuctionState, State,
     },
     types::{
-        Address, AssetId, Authorized, AuthorizedTransaction, BitAssetData,
-        BitAssetId, Block, BlockHash, BmmResult, Body, DutchAuctionId,
-        FilledOutput, FilledTransaction, GetBitcoinValue, Header, InPoint,
-        Network, OutPoint, Output, SpentOutput, Tip, Transaction, TxIn, Txid,
-        WithdrawalBundle,
+        proto::{self, mainchain},
+        Address, AmountOverflowError, AmountUnderflowError, AssetId,
+        Authorized, AuthorizedTransaction, BitAssetData, BitAssetId, Block,
+        BlockHash, BmmResult, Body, DutchAuctionId, FilledOutput,
+        FilledTransaction, GetBitcoinValue, Header, InPoint, Network, OutPoint,
+        Output, SpentOutput, Tip, Transaction, TxIn, Txid, WithdrawalBundle,
     },
     util::Watchable,
 };
@@ -39,18 +42,18 @@ use net_task::NetTaskHandle;
 #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
 use net_task::ZmqPubHandler;
 
-pub const THIS_SIDECHAIN: u8 = 4;
-
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("address parse error")]
     AddrParse(#[from] std::net::AddrParseError),
+    #[error(transparent)]
+    AmountOverflow(#[from] AmountOverflowError),
+    #[error(transparent)]
+    AmountUnderflow(#[from] AmountUnderflowError),
     #[error("archive error")]
     Archive(#[from] archive::Error),
-    #[error("bincode error")]
-    Bincode(#[from] bincode::Error),
-    #[error("drivechain error")]
-    Drivechain(#[from] bip300301::Error),
+    #[error("CUSF mainchain proto error")]
+    CusfMainchain(#[from] proto::Error),
     #[error("heed error")]
     Heed(#[from] heed::Error),
     #[error("quinn error")]
@@ -63,6 +66,8 @@ pub enum Error {
     Net(#[from] net::Error),
     #[error("net task error")]
     NetTask(#[from] net_task::Error),
+    #[error("No CUSF mainchain wallet client")]
+    NoCusfMainchainWalletClient,
     #[error("peer info stream closed")]
     PeerInfoRxClosed,
     #[error("Receive mainchain task response cancelled")]
@@ -84,12 +89,15 @@ pub enum Error {
 /// All ancestor headers must exist in the archive.
 // TODO: deposits only for now
 #[allow(dead_code)]
-async fn request_two_way_peg_data(
+async fn request_two_way_peg_data<Transport>(
     env: &heed::Env,
     archive: &Archive,
-    drivechain: &bip300301::Drivechain,
+    mainchain: &mut mainchain::ValidatorClient<Transport>,
     block_hash: bitcoin::BlockHash,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    Transport: proto::Transport,
+{
     // last block for which deposit info is known
     let last_known_deposit_info = {
         let rotxn = env.read_txn()?;
@@ -105,31 +113,27 @@ async fn request_two_way_peg_data(
     if last_known_deposit_info == Some(block_hash) {
         return Ok(());
     }
-    let two_way_peg_data = drivechain
-        .get_two_way_peg_data(block_hash, last_known_deposit_info)
+    let two_way_peg_data = mainchain
+        .get_two_way_peg_data(last_known_deposit_info, block_hash)
         .await?;
+    let mut block_deposits =
+        LinkedHashMap::<_, _>::from_iter(two_way_peg_data.into_deposits());
     let mut rwtxn = env.write_txn()?;
-    // Deposits by block, first-to-last within each block
-    let deposits_by_block: HashMap<bitcoin::BlockHash, Vec<DepositInfo>> = {
-        let mut deposits = HashMap::<_, Vec<_>>::new();
-        two_way_peg_data.deposits.into_iter().for_each(|deposit| {
-            deposits
-                .entry(deposit.block_hash)
-                .or_default()
-                .push(deposit)
-        });
-        let () = archive
-            .main_ancestors(&rwtxn, block_hash)
-            .take_while(|block_hash| {
-                Ok(last_known_deposit_info != Some(*block_hash))
-            })
-            .for_each(|block_hash| {
-                let _ = deposits.entry(block_hash).or_default();
-                Ok(())
-            })?;
-        deposits
-    };
-    deposits_by_block
+    let () = archive
+        .main_ancestors(&rwtxn, block_hash)
+        .take_while(|block_hash| {
+            Ok(last_known_deposit_info != Some(*block_hash))
+        })
+        .for_each(|block_hash| {
+            match block_deposits.entry(block_hash) {
+                linked_hash_map::Entry::Occupied(_) => (),
+                linked_hash_map::Entry::Vacant(entry) => {
+                    entry.insert(Vec::new());
+                }
+            };
+            Ok(())
+        })?;
+    block_deposits
         .into_iter()
         .try_for_each(|(block_hash, deposits)| {
             archive.put_deposits(&mut rwtxn, block_hash, deposits)
@@ -142,9 +146,11 @@ pub type FilledTransactionWithPosition =
     (Authorized<FilledTransaction>, Option<TxIn>);
 
 #[derive(Clone)]
-pub struct Node {
+pub struct Node<MainchainTransport = Channel> {
     archive: Archive,
-    drivechain: bip300301::Drivechain,
+    cusf_mainchain: Arc<Mutex<mainchain::ValidatorClient<MainchainTransport>>>,
+    cusf_mainchain_wallet:
+        Option<Arc<Mutex<mainchain::WalletClient<MainchainTransport>>>>,
     env: heed::Env,
     _local_pool: LocalPoolHandle,
     mainchain_task: MainchainTaskHandle,
@@ -156,19 +162,30 @@ pub struct Node {
     zmq_pub_handler: Arc<ZmqPubHandler>,
 }
 
-impl Node {
+impl<MainchainTransport> Node<MainchainTransport>
+where
+    MainchainTransport: proto::Transport,
+{
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         bind_addr: SocketAddr,
         datadir: &Path,
-        main_addr: SocketAddr,
         network: Network,
-        password: &str,
-        user: &str,
+        cusf_mainchain: mainchain::ValidatorClient<MainchainTransport>,
+        cusf_mainchain_wallet: Option<
+            mainchain::WalletClient<MainchainTransport>,
+        >,
         local_pool: LocalPoolHandle,
         #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
         zmq_addr: SocketAddr,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, Error>
+    where
+        mainchain::ValidatorClient<MainchainTransport>: Clone,
+        MainchainTransport: Send + 'static,
+        <MainchainTransport as tonic::client::GrpcService<
+            tonic::body::BoxBody,
+        >>::Future: Send,
+    {
         let env_path = datadir.join("data.mdb");
         // let _ = std::fs::remove_dir_all(&env_path);
         std::fs::create_dir_all(&env_path)?;
@@ -188,26 +205,21 @@ impl Node {
         let zmq_pub_handler = Arc::new(ZmqPubHandler::new(zmq_addr)?);
         let archive = Archive::new(&env)?;
         let mempool = MemPool::new(&env)?;
-        let drivechain = bip300301::Drivechain::new(
-            THIS_SIDECHAIN,
-            main_addr,
-            user,
-            password,
-        )?;
         let (mainchain_task, mainchain_task_response_rx) =
             MainchainTaskHandle::new(
                 env.clone(),
                 archive.clone(),
-                drivechain.clone(),
+                cusf_mainchain.clone(),
             );
         let (net, peer_info_rx) =
             Net::new(&env, archive.clone(), network, state.clone(), bind_addr)?;
-
+        let cusf_mainchain_wallet =
+            cusf_mainchain_wallet.map(|wallet| Arc::new(Mutex::new(wallet)));
         let net_task = NetTaskHandle::new(
             local_pool.clone(),
             env.clone(),
             archive.clone(),
-            drivechain.clone(),
+            cusf_mainchain.clone(),
             mainchain_task.clone(),
             mainchain_task_response_rx,
             mempool.clone(),
@@ -219,7 +231,8 @@ impl Node {
         );
         Ok(Self {
             archive,
-            drivechain,
+            cusf_mainchain: Arc::new(Mutex::new(cusf_mainchain)),
+            cusf_mainchain_wallet,
             env,
             _local_pool: local_pool,
             mainchain_task,
@@ -232,21 +245,19 @@ impl Node {
         })
     }
 
-    pub fn drivechain(&self) -> &bip300301::Drivechain {
-        &self.drivechain
-    }
-
-    pub async fn get_best_parentchain_hash(
-        &self,
-    ) -> Result<bitcoin::BlockHash, Error> {
-        use bip300301::MainClient;
-        let res = self.drivechain.client.getbestblockhash().await.map_err(
-            |source| bip300301::Error::Jsonrpsee {
-                source,
-                main_addr: self.drivechain.main_addr,
-            },
-        )?;
-        Ok(res)
+    /// Borrow the CUSF mainchain client, and execute the provided future.
+    /// The CUSF mainchain client will be locked while the future is running.
+    pub async fn with_cusf_mainchain<F, Output>(&self, f: F) -> Output
+    where
+        F: for<'cusf_mainchain> FnOnce(
+            &'cusf_mainchain mut mainchain::ValidatorClient<MainchainTransport>,
+        )
+            -> BoxFuture<'cusf_mainchain, Output>,
+    {
+        let mut cusf_mainchain_lock = self.cusf_mainchain.lock().await;
+        let res = f(&mut cusf_mainchain_lock).await;
+        drop(cusf_mainchain_lock);
+        res
     }
 
     pub fn get_tip_height(&self) -> Result<u32, Error> {
@@ -592,10 +603,11 @@ impl Node {
     pub fn get_transactions(
         &self,
         number: usize,
-    ) -> Result<(Vec<Authorized<FilledTransaction>>, u64), Error> {
+    ) -> Result<(Vec<Authorized<FilledTransaction>>, bitcoin::Amount), Error>
+    {
         let mut rwtxn = self.env.write_txn()?;
         let transactions = self.mempool.take(&rwtxn, number)?;
-        let mut fee: u64 = 0;
+        let mut fee = bitcoin::Amount::ZERO;
         let mut returned_transactions = vec![];
         let mut spent_utxos = HashSet::new();
         for transaction in transactions {
@@ -619,20 +631,28 @@ impl Node {
             let filled_transaction = self
                 .state
                 .fill_authorized_transaction(&rwtxn, transaction)?;
-            let value_in: u64 = filled_transaction
+            let value_in: bitcoin::Amount = filled_transaction
                 .transaction
                 .spent_utxos
                 .iter()
                 .map(GetBitcoinValue::get_bitcoin_value)
-                .sum();
-            let value_out: u64 = filled_transaction
+                .checked_sum()
+                .ok_or(AmountOverflowError)?;
+            let value_out: bitcoin::Amount = filled_transaction
                 .transaction
                 .transaction
                 .outputs
                 .iter()
                 .map(GetBitcoinValue::get_bitcoin_value)
-                .sum();
-            fee += value_in - value_out;
+                .checked_sum()
+                .ok_or(AmountOverflowError)?;
+            fee = fee
+                .checked_add(
+                    value_in
+                        .checked_sub(value_out)
+                        .ok_or(AmountOverflowError)?,
+                )
+                .ok_or(AmountUnderflowError)?;
             spent_utxos.extend(filled_transaction.transaction.inputs());
             returned_transactions.push(filled_transaction);
         }
@@ -741,6 +761,10 @@ impl Node {
         header: &Header,
         body: &Body,
     ) -> Result<bool, Error> {
+        let Some(cusf_mainchain_wallet) = self.cusf_mainchain_wallet.as_ref()
+        else {
+            return Err(Error::NoCusfMainchainWalletClient);
+        };
         let block_hash = header.hash();
         // Store the header, if ancestors exist
         if header.prev_side_hash != BlockHash::default()
@@ -776,7 +800,7 @@ impl Node {
         else {
             panic!("should be impossible")
         };
-        if let Err(bip300301::BlockNotFoundError(missing_block)) =
+        if let Err(mainchain::BlockNotFoundError(missing_block)) =
             res.map_err(|err| Error::VerifyBmm(err.into()))?
         {
             tracing::error!(%block_hash,
@@ -856,10 +880,14 @@ impl Node {
             self.zmq_pub_handler.tx.unbounded_send(zmq_msgs).unwrap();
         }
         if let Some((bundle, _)) = bundle {
-            let () = self
-                .drivechain
-                .broadcast_withdrawal_bundle(bundle.transaction)
+            let m6id = bundle.compute_m6id();
+            let mut cusf_mainchain_wallet_lock =
+                cusf_mainchain_wallet.lock().await;
+            let () = cusf_mainchain_wallet_lock
+                .broadcast_withdrawal_bundle(bundle.tx())
                 .await?;
+            drop(cusf_mainchain_wallet_lock);
+            tracing::trace!(%m6id, "Broadcast withdrawal bundle");
         }
         Ok(true)
     }

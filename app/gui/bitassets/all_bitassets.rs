@@ -90,8 +90,11 @@ fn show_bitasset_with_data(
 }
 
 impl AllBitAssets {
-    pub fn show(&mut self, app: &mut App, ui: &mut egui::Ui) {
+    pub fn show(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show_inside(ui, |ui| {
+            let Some(app) = app else {
+                return;
+            };
             match app.node.bitassets() {
                 Err(node_err) => {
                     ui.monospace_selectable_multiline(node_err.to_string());

@@ -33,7 +33,7 @@ pub struct Coins {
 }
 
 impl Coins {
-    pub fn new(app: &App) -> Self {
+    pub fn new(app: Option<&App>) -> Self {
         Self {
             my_bitassets: MyBitAssets,
             tab: Tab::default(),
@@ -44,7 +44,7 @@ impl Coins {
 
     pub fn show(
         &mut self,
-        app: &mut App,
+        app: Option<&App>,
         ui: &mut egui::Ui,
     ) -> anyhow::Result<()> {
         egui::TopBottomPanel::top("coins_tabs").show(ui.ctx(), |ui| {

@@ -7,16 +7,14 @@ use std::{
     path::Path,
 };
 
-use bip300301::{
-    bitcoin::{Address as BitcoinAddress, Amount as BitcoinAmount},
-    MainClient,
-};
+use bip300301::MainClient;
 use futures::TryFutureExt;
 use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
 use tempfile::tempdir;
 // Shadows #[test]
 use test_log::test;
 
+use plain_bitassets::types::THIS_SIDECHAIN;
 use plain_bitassets_app_rpc_api::RpcClient as BitAssetsClient;
 
 const RPC_PASS: &str = "integrationtest";
@@ -119,7 +117,7 @@ fn mainchaind(data_dir: &Path, rpc_port: u16) -> tokio::process::Command {
 // Mine `n` blocks, and verify that the block count has increased as expected.
 async fn mine_mainchain_blocks(
     mainchaind_client: &MainchaindClient,
-    mainchain_addr: &BitcoinAddress,
+    mainchain_addr: &bitcoin::Address,
     n_blocks: u32,
 ) -> anyhow::Result<()> {
     let block_count_before =
@@ -141,7 +139,7 @@ async fn mine_mainchain_blocks(
 async fn mine_bitassets_block(
     bitassetsd_client: &BitAssetsdClient,
     mainchaind_client: &MainchaindClient,
-    mainchain_addr: &BitcoinAddress,
+    mainchain_addr: &bitcoin::Address,
     fee: Option<u64>,
 ) -> anyhow::Result<()> {
     let block_count_before =
@@ -163,7 +161,7 @@ async fn mine_bitassets_block(
 
 const SIDECHAIN_NAME: &str = "BitAssets";
 // 0.1 BTC
-const DEFAULT_TX_FEE: BitcoinAmount = BitcoinAmount::from_sat(1_000_000);
+const DEFAULT_TX_FEE: bitcoin::Amount = bitcoin::Amount::from_sat(1_000_000);
 
 #[test(tokio::test)]
 async fn regtest_test() -> anyhow::Result<()> {
@@ -219,7 +217,7 @@ async fn regtest_test() -> anyhow::Result<()> {
         // Create sidechain proposal
         let sidechain_proposal = mainchaind_client
             .create_sidechain_proposal(
-                plain_bitassets::node::THIS_SIDECHAIN,
+                THIS_SIDECHAIN,
                 SIDECHAIN_NAME,
                 "BitAssets integration test",
             )
@@ -319,16 +317,16 @@ async fn regtest_test() -> anyhow::Result<()> {
 
     let _sidechain_deposit = mainchaind_client
         .createsidechaindeposit(
-            plain_bitassets::node::THIS_SIDECHAIN,
+            THIS_SIDECHAIN,
             &bitassets_deposit_addr,
-            BitcoinAmount::from_int_btc(10).into(),
+            bitcoin::Amount::from_int_btc(10).into(),
             DEFAULT_TX_FEE.into(),
         )
         .await?;
     // Check that there are no deposits in the db
     {
         let sidechain_deposits = mainchaind_client
-            .count_sidechain_deposits(plain_bitassets::node::THIS_SIDECHAIN)
+            .count_sidechain_deposits(THIS_SIDECHAIN)
             .await?;
         anyhow::ensure!(
             sidechain_deposits == 0,
@@ -341,7 +339,7 @@ async fn regtest_test() -> anyhow::Result<()> {
     // Verify that the deposit was added
     {
         let sidechain_deposits = mainchaind_client
-            .count_sidechain_deposits(plain_bitassets::node::THIS_SIDECHAIN)
+            .count_sidechain_deposits(THIS_SIDECHAIN)
             .await?;
         anyhow::ensure!(
             sidechain_deposits == 1,
@@ -351,7 +349,11 @@ async fn regtest_test() -> anyhow::Result<()> {
     // Verify that there are no deposits on BitAssets
     {
         let balance = bitassetsd_client.bitcoin_balance().await?;
-        anyhow::ensure!(balance == 0, "Expected 0 balance, but got {balance}");
+        anyhow::ensure!(
+            balance.total == bitcoin::Amount::ZERO,
+            "Expected 0 balance, but got {}",
+            balance.total
+        );
     }
     // Mine a BMM block to process the deposit
     let () = mine_bitassets_block(
@@ -364,7 +366,10 @@ async fn regtest_test() -> anyhow::Result<()> {
     // Verify that the deposit was successful
     {
         let balance = bitassetsd_client.bitcoin_balance().await?;
-        anyhow::ensure!(balance > 0, "Expected positive balance");
+        anyhow::ensure!(
+            balance.total > bitcoin::Amount::ZERO,
+            "Expected positive balance"
+        );
     }
 
     /* Clean up */

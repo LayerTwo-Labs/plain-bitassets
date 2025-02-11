@@ -4,31 +4,51 @@ use std::{
     path::Path,
 };
 
-use bip300301::bitcoin;
+use bitcoin::Amount;
 use byteorder::{BigEndian, ByteOrder};
 use ed25519_dalek_bip32::{ChildIndex, DerivationPath, ExtendedSigningKey};
+use fallible_iterator::{FallibleIterator as _, IteratorExt as _};
 use futures::{Stream, StreamExt};
 use heed::{
     types::{Bytes, SerdeBincode, Str, U8},
     RoTxn,
 };
+use serde::{Deserialize, Serialize};
 use tokio_stream::{wrappers::WatchStream, StreamMap};
 
 use crate::{
     authorization::{self, get_address, Authorization},
     types::{
-        Address, AssetId, AuthorizedTransaction, BitAssetData, BitAssetId,
-        BitcoinOutputContent, DutchAuctionId, DutchAuctionParams, FilledOutput,
-        GetBitcoinValue, Hash, InPoint, OutPoint, Output, OutputContent,
-        SpentOutput, Transaction, TxData,
+        Address, AmountOverflowError, AmountUnderflowError, AssetId,
+        AuthorizedTransaction, BitAssetData, BitAssetId, BitcoinOutputContent,
+        DutchAuctionId, DutchAuctionParams, FilledOutput, GetBitcoinValue,
+        Hash, InPoint, OutPoint, Output, OutputContent, SpentOutput,
+        Transaction, TxData, WithdrawalOutputContent,
     },
     util::{EnvExt, Watchable, WatchableDb},
 };
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, utoipa::ToSchema)]
+pub struct Balance {
+    #[serde(rename = "total_sats", with = "bitcoin::amount::serde::as_sat")]
+    #[schema(value_type = u64)]
+    pub total: Amount,
+    #[serde(
+        rename = "available_sats",
+        with = "bitcoin::amount::serde::as_sat"
+    )]
+    #[schema(value_type = u64)]
+    pub available: Amount,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("address {address} does not exist")]
     AddressDoesNotExist { address: crate::types::Address },
+    #[error(transparent)]
+    AmountOverflow(#[from] AmountOverflowError),
+    #[error(transparent)]
+    AmountUnderflow(#[from] AmountUnderflowError),
     #[error("authorization error")]
     Authorization(#[from] crate::authorization::Error),
     #[error("bip32 error")]
@@ -214,14 +234,14 @@ impl Wallet {
     /// Create a transaction with a fee only.
     pub fn create_regular_transaction(
         &self,
-        fee: u64,
+        fee: bitcoin::Amount,
     ) -> Result<Transaction, Error> {
         let (total, coins) = self.select_bitcoins(fee)?;
         let change = total - fee;
         let inputs = coins.into_keys().collect();
         let outputs = vec![Output::new(
             self.get_new_address()?,
-            OutputContent::Value(BitcoinOutputContent(change)),
+            OutputContent::Bitcoin(BitcoinOutputContent(change)),
         )];
         Ok(Transaction::new(inputs, outputs))
     }
@@ -229,25 +249,31 @@ impl Wallet {
     pub fn create_withdrawal(
         &self,
         main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
-        value: u64,
-        main_fee: u64,
-        fee: u64,
+        value: bitcoin::Amount,
+        main_fee: bitcoin::Amount,
+        fee: bitcoin::Amount,
     ) -> Result<Transaction, Error> {
-        let (total, coins) = self.select_bitcoins(value + fee + main_fee)?;
+        let (total, coins) = self.select_bitcoins(
+            value
+                .checked_add(fee)
+                .ok_or(AmountOverflowError)?
+                .checked_add(main_fee)
+                .ok_or(AmountOverflowError)?,
+        )?;
         let change = total - value - fee;
         let inputs = coins.into_keys().collect();
         let outputs = vec![
             Output::new(
                 self.get_new_address()?,
-                OutputContent::Withdrawal {
+                OutputContent::Withdrawal(WithdrawalOutputContent {
                     value,
                     main_fee,
                     main_address,
-                },
+                }),
             ),
             Output::new(
                 self.get_new_address()?,
-                OutputContent::Value(BitcoinOutputContent(change)),
+                OutputContent::Bitcoin(BitcoinOutputContent(change)),
             ),
         ];
         Ok(Transaction::new(inputs, outputs))
@@ -256,24 +282,24 @@ impl Wallet {
     pub fn create_transfer(
         &self,
         address: Address,
-        bitcoin_value: u64,
-        fee: u64,
+        value: bitcoin::Amount,
+        fee: bitcoin::Amount,
         memo: Option<Vec<u8>>,
     ) -> Result<Transaction, Error> {
-        let (total, coins) = self.select_bitcoins(bitcoin_value + fee)?;
-        let change = total - bitcoin_value - fee;
+        let (total, coins) = self.select_bitcoins(
+            value.checked_add(fee).ok_or(AmountOverflowError)?,
+        )?;
+        let change = total - value - fee;
         let inputs = coins.into_keys().collect();
         let outputs = vec![
             Output {
                 address,
-                content: OutputContent::Value(BitcoinOutputContent(
-                    bitcoin_value,
-                )),
+                content: OutputContent::Bitcoin(BitcoinOutputContent(value)),
                 memo: memo.unwrap_or_default(),
             },
             Output::new(
                 self.get_new_address()?,
-                OutputContent::Value(BitcoinOutputContent(change)),
+                OutputContent::Bitcoin(BitcoinOutputContent(change)),
             ),
         ];
         Ok(Transaction::new(inputs, outputs))
@@ -436,8 +462,8 @@ impl Wallet {
 
     pub fn select_bitcoins(
         &self,
-        value: u64,
-    ) -> Result<(u64, HashMap<OutPoint, Output>), Error> {
+        value: bitcoin::Amount,
+    ) -> Result<(bitcoin::Amount, HashMap<OutPoint, Output>), Error> {
         let txn = self.env.read_txn()?;
         let mut bitcoin_utxos = Vec::<(_, Output)>::new();
         for item in self.utxos.iter(&txn)? {
@@ -459,21 +485,27 @@ impl Wallet {
             .sort_unstable_by_key(|(_, output)| output.get_bitcoin_value());
 
         let mut selected = HashMap::new();
-        let mut total_sats: u64 = 0;
+        let mut total = bitcoin::Amount::ZERO;
         for (outpoint, output) in
             bitcoin_utxos.into_iter().chain(unconfirmed_bitcoin_utxos)
         {
-            if output.content.is_withdrawal() {
+            if output.content.is_withdrawal()
+                || output.is_bitasset()
+                || output.is_reservation()
+                || output.get_bitcoin_value() == bitcoin::Amount::ZERO
+            {
                 continue;
             }
-            if total_sats >= value {
+            if total >= value {
                 break;
             }
-            total_sats += output.get_bitcoin_value();
+            total = total
+                .checked_add(output.get_bitcoin_value())
+                .ok_or(AmountOverflowError)?;
             selected.insert(outpoint, output.clone());
         }
-        if total_sats >= value {
-            Ok((total_sats, selected))
+        if total >= value {
+            Ok((total, selected))
         } else {
             Err(Error::NotEnoughFunds)
         }
@@ -545,7 +577,9 @@ impl Wallet {
         amount: u64,
     ) -> Result<(u64, HashMap<OutPoint, Output>), Error> {
         match asset {
-            AssetId::Bitcoin => self.select_bitcoins(amount),
+            AssetId::Bitcoin => self
+                .select_bitcoins(bitcoin::Amount::from_sat(amount))
+                .map(|(amount, utxos)| (amount.to_sat(), utxos)),
             AssetId::BitAsset(bitasset) => {
                 self.select_bitasset_utxos(bitasset, amount)
             }
@@ -643,7 +677,9 @@ impl Wallet {
             let address = self.get_new_address()?;
             let content = match asset0 {
                 AssetId::Bitcoin => {
-                    OutputContent::Value(BitcoinOutputContent(change_amount0))
+                    OutputContent::Bitcoin(BitcoinOutputContent(
+                        bitcoin::Amount::from_sat(change_amount0),
+                    ))
                 }
                 AssetId::BitAsset(_) => OutputContent::BitAsset(change_amount0),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
@@ -660,7 +696,9 @@ impl Wallet {
             let address = self.get_new_address()?;
             let content = match asset1 {
                 AssetId::Bitcoin => {
-                    OutputContent::Value(BitcoinOutputContent(change_amount1))
+                    OutputContent::Bitcoin(BitcoinOutputContent(
+                        bitcoin::Amount::from_sat(change_amount1),
+                    ))
                 }
                 AssetId::BitAsset(_) => OutputContent::BitAsset(change_amount1),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
@@ -732,9 +770,9 @@ impl Wallet {
             address: asset0_addr,
             memo: Vec::new(),
             content: match asset0 {
-                AssetId::Bitcoin => {
-                    OutputContent::Value(BitcoinOutputContent(amount0))
-                }
+                AssetId::Bitcoin => OutputContent::Bitcoin(
+                    BitcoinOutputContent(bitcoin::Amount::from_sat(amount0)),
+                ),
                 AssetId::BitAsset(_) => OutputContent::BitAsset(amount0),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
             },
@@ -743,9 +781,9 @@ impl Wallet {
             address: asset1_addr,
             memo: Vec::new(),
             content: match asset1 {
-                AssetId::Bitcoin => {
-                    OutputContent::Value(BitcoinOutputContent(amount1))
-                }
+                AssetId::Bitcoin => OutputContent::Bitcoin(
+                    BitcoinOutputContent(bitcoin::Amount::from_sat(amount1)),
+                ),
                 AssetId::BitAsset(_) => OutputContent::BitAsset(amount1),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
             },
@@ -787,7 +825,9 @@ impl Wallet {
             let address = self.get_new_address()?;
             let content = match asset_spend {
                 AssetId::Bitcoin => {
-                    OutputContent::Value(BitcoinOutputContent(amount_change))
+                    OutputContent::Bitcoin(BitcoinOutputContent(
+                        bitcoin::Amount::from_sat(amount_change),
+                    ))
                 }
                 AssetId::BitAsset(_) => OutputContent::BitAsset(amount_change),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
@@ -805,7 +845,9 @@ impl Wallet {
             memo: Vec::new(),
             content: match asset_receive {
                 AssetId::Bitcoin => {
-                    OutputContent::Value(BitcoinOutputContent(amount_receive))
+                    OutputContent::Bitcoin(BitcoinOutputContent(
+                        bitcoin::Amount::from_sat(amount_receive),
+                    ))
                 }
                 AssetId::BitAsset(_) => OutputContent::BitAsset(amount_receive),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
@@ -841,7 +883,9 @@ impl Wallet {
             let address = self.get_new_address()?;
             let content = match dutch_auction_params.base_asset {
                 AssetId::Bitcoin => {
-                    OutputContent::Value(BitcoinOutputContent(change_amount))
+                    OutputContent::Bitcoin(BitcoinOutputContent(
+                        bitcoin::Amount::from_sat(change_amount),
+                    ))
                 }
                 AssetId::BitAsset(_) => OutputContent::BitAsset(change_amount),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
@@ -884,7 +928,9 @@ impl Wallet {
             let address = self.get_new_address()?;
             let content = match quote_asset {
                 AssetId::Bitcoin => {
-                    OutputContent::Value(BitcoinOutputContent(change_amount))
+                    OutputContent::Bitcoin(BitcoinOutputContent(
+                        bitcoin::Amount::from_sat(change_amount),
+                    ))
                 }
                 AssetId::BitAsset(_) => OutputContent::BitAsset(change_amount),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
@@ -900,7 +946,9 @@ impl Wallet {
         let base_output = {
             let content = match base_asset {
                 AssetId::Bitcoin => {
-                    OutputContent::Value(BitcoinOutputContent(change_amount))
+                    OutputContent::Bitcoin(BitcoinOutputContent(
+                        bitcoin::Amount::from_sat(change_amount),
+                    ))
                 }
                 AssetId::BitAsset(_) => OutputContent::BitAsset(change_amount),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
@@ -944,7 +992,9 @@ impl Wallet {
             let address = self.get_new_address()?;
             let content = match base_asset {
                 AssetId::Bitcoin => {
-                    OutputContent::Value(BitcoinOutputContent(amount_base))
+                    OutputContent::Bitcoin(BitcoinOutputContent(
+                        bitcoin::Amount::from_sat(amount_base),
+                    ))
                 }
                 AssetId::BitAsset(_) => OutputContent::BitAsset(amount_base),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
@@ -961,7 +1011,9 @@ impl Wallet {
             let address = self.get_new_address()?;
             let content = match quote_asset {
                 AssetId::Bitcoin => {
-                    OutputContent::Value(BitcoinOutputContent(amount_quote))
+                    OutputContent::Bitcoin(BitcoinOutputContent(
+                        bitcoin::Amount::from_sat(amount_quote),
+                    ))
                 }
                 AssetId::BitAsset(_) => OutputContent::BitAsset(amount_quote),
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
@@ -1049,13 +1101,28 @@ impl Wallet {
         Ok(())
     }
 
-    pub fn get_bitcoin_balance(&self) -> Result<u64, Error> {
-        let mut balance: u64 = 0;
-        let txn = self.env.read_txn()?;
-        for item in self.utxos.iter(&txn)? {
-            let (_, utxo) = item?;
-            balance += utxo.get_bitcoin_value();
-        }
+    pub fn get_bitcoin_balance(&self) -> Result<Balance, Error> {
+        let mut balance = Balance::default();
+        let rotxn = self.env.read_txn()?;
+        let () = self
+            .utxos
+            .iter(&rotxn)?
+            .transpose_into_fallible()
+            .map_err(Error::from)
+            .for_each(|(_, utxo)| {
+                let value = utxo.get_bitcoin_value();
+                balance.total = balance
+                    .total
+                    .checked_add(value)
+                    .ok_or(AmountOverflowError)?;
+                if !utxo.content.is_withdrawal() {
+                    balance.available = balance
+                        .available
+                        .checked_add(value)
+                        .ok_or(AmountOverflowError)?;
+                }
+                Ok(())
+            })?;
         Ok(balance)
     }
 

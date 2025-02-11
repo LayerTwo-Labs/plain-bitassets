@@ -33,7 +33,7 @@ impl EncryptMessage {
         });
     }
 
-    pub fn show(&mut self, _app: &mut App, ui: &mut egui::Ui) {
+    pub fn show(&mut self, _app: Option<&App>, ui: &mut egui::Ui) {
         ui.heading("Encrypt Message");
         let receiver_pubkey_response = ui
             .horizontal(|ui| {

@@ -1,11 +1,10 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use bip300301::bitcoin;
 use clap::{Parser, Subcommand};
 use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
-use plain_bitassets::{
-    node::THIS_SIDECHAIN,
-    types::{Address, AssetId, BlockHash, DutchAuctionId, DutchAuctionParams},
+use plain_bitassets::types::{
+    Address, AssetId, BlockHash, DutchAuctionId, DutchAuctionParams,
+    THIS_SIDECHAIN,
 };
 use plain_bitassets_app_rpc_api::RpcClient;
 
@@ -44,6 +43,14 @@ pub enum Command {
     BitcoinBalance,
     /// Connect to a peer
     ConnectPeer { addr: SocketAddr },
+    /// Deposit to address
+    CreateDeposit {
+        address: Address,
+        #[arg(long)]
+        value_sats: u64,
+        #[arg(long)]
+        fee_sats: u64,
+    },
     /// Returns the amount of the base asset to receive
     DutchAuctionBid {
         #[arg(long)]
@@ -178,11 +185,21 @@ impl Cli {
             }
             Command::BitcoinBalance => {
                 let balance = rpc_client.bitcoin_balance().await?;
-                format!("{balance}")
+                serde_json::to_string_pretty(&balance)?
             }
             Command::ConnectPeer { addr } => {
                 let () = rpc_client.connect_peer(addr).await?;
                 String::default()
+            }
+            Command::CreateDeposit {
+                address,
+                value_sats,
+                fee_sats,
+            } => {
+                let txid = rpc_client
+                    .create_deposit(address, value_sats, fee_sats)
+                    .await?;
+                format!("{txid}")
             }
             Command::DutchAuctionBid {
                 auction_id,
@@ -272,7 +289,8 @@ impl Cli {
                 String::default()
             }
             Command::SidechainWealth => {
-                let sidechain_wealth = rpc_client.sidechain_wealth().await?;
+                let sidechain_wealth =
+                    rpc_client.sidechain_wealth_sats().await?;
                 format!("{sidechain_wealth}")
             }
             Command::Stop => {

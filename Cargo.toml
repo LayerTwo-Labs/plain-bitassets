@@ -10,11 +10,7 @@ members = [
 [workspace.package]
 authors = [ "Ash Manning <ash@layertwolabs.com>" ]
 edition = "2021"
-version = "0.9.2"
-
-[workspace.dependencies.bip300301]
-git = "https://github.com/Ash-L2L/bip300301.git"
-rev = "61b83acf2782b03e405b3a0fe8a3dc31356e4750"
+version = "0.10.0"
 
 [profile.release]
 # lto = "fat"

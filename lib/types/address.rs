@@ -1,26 +1,31 @@
-use borsh::BorshSerialize;
+use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeAs, DisplayFromStr};
 use thiserror::Error;
-
-#[derive(BorshSerialize, Clone, Copy, Eq, Hash, PartialEq)]
-#[repr(transparent)]
-pub struct Address(pub [u8; 20]);
+use utoipa::ToSchema;
 
 #[derive(Debug, Error)]
 pub enum AddressParseError {
     #[error("bs58 error")]
-    Bs58(#[from] bs58::decode::Error),
+    Bs58(#[from] bitcoin::base58::InvalidCharacterError),
     #[error("wrong address length {0} != 20")]
     WrongLength(usize),
 }
 
+#[derive(
+    BorshDeserialize, BorshSerialize, Clone, Copy, Eq, Hash, PartialEq, ToSchema,
+)]
+#[repr(transparent)]
+#[schema(value_type = String)]
+pub struct Address(pub [u8; 20]);
+
 impl Address {
     pub fn to_base58(self) -> String {
-        bs58::encode(self.0)
-            .with_alphabet(bs58::Alphabet::BITCOIN)
-            .with_check()
-            .into_string()
+        bitcoin::base58::encode(&self.0)
+    }
+
+    pub fn to_base58ck(self) -> String {
+        bitcoin::base58::encode_check(&self.0)
     }
 }
 
@@ -45,10 +50,7 @@ impl From<[u8; 20]> for Address {
 impl std::str::FromStr for Address {
     type Err = AddressParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let address = bs58::decode(s)
-            .with_alphabet(bs58::Alphabet::BITCOIN)
-            .with_check(None)
-            .into_vec()?;
+        let address = bitcoin::base58::decode(s)?;
         Ok(Address(address.try_into().map_err(
             |address: Vec<u8>| AddressParseError::WrongLength(address.len()),
         )?))
@@ -63,7 +65,7 @@ impl<'de> Deserialize<'de> for Address {
         if deserializer.is_human_readable() {
             DisplayFromStr::deserialize_as(deserializer)
         } else {
-            <[u8; 20]>::deserialize(deserializer).map(Self)
+            <[u8; 20] as Deserialize>::deserialize(deserializer).map(Self)
         }
     }
 }
@@ -78,23 +80,5 @@ impl Serialize for Address {
         } else {
             Serialize::serialize(&self.0, serializer)
         }
-    }
-}
-
-impl utoipa::PartialSchema for Address {
-    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
-        let obj = utoipa::openapi::Object::with_type(
-            utoipa::openapi::SchemaType::String,
-        );
-        utoipa::openapi::RefOr::T(utoipa::openapi::Schema::Object(obj))
-    }
-}
-
-impl utoipa::ToSchema<'static> for Address {
-    fn schema() -> (
-        &'static str,
-        utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
-    ) {
-        ("Address", <Address as utoipa::PartialSchema>::schema())
     }
 }

@@ -10,7 +10,6 @@ use hex::FromHex;
 
 use plain_bitassets::{
     authorization::VerifyingKey,
-    bip300301::bitcoin,
     state::AmmPair,
     types::{
         AssetId, BitAssetData, DutchAuctionId, EncryptionPubKey, Hash,
@@ -120,8 +119,8 @@ pub enum TxType {
 
 #[derive(Debug, Default)]
 pub struct TxCreator {
-    pub bitcoin_value_in: u64,
-    pub bitcoin_value_out: u64,
+    pub bitcoin_value_in: bitcoin::Amount,
+    pub bitcoin_value_out: bitcoin::Amount,
     pub tx_type: TxType,
     // if the base tx has changed, need to recompute final tx
     base_txid: Txid,
@@ -433,7 +432,7 @@ impl TxCreator {
     // set tx data for the current transaction
     fn set_tx_data(
         &self,
-        app: &mut App,
+        app: &App,
         mut tx: Transaction,
     ) -> anyhow::Result<Transaction> {
         match &self.tx_type {
@@ -729,10 +728,11 @@ impl TxCreator {
 
     pub fn show(
         &mut self,
-        app: &mut App,
+        app: Option<&App>,
         ui: &mut egui::Ui,
         base_tx: &mut Transaction,
     ) -> anyhow::Result<()> {
+        let Some(app) = app else { return Ok(()) };
         let tx_type_dropdown = ui.horizontal(|ui| {
             let combobox = egui::ComboBox::from_id_source("tx_type")
                 .selected_text(format!("{}", self.tx_type))
@@ -803,8 +803,7 @@ impl TxCreator {
         ui.monospace(format!("txid: {txid}"));
         if self.bitcoin_value_in >= self.bitcoin_value_out {
             let fee = self.bitcoin_value_in - self.bitcoin_value_out;
-            let fee = bitcoin::Amount::from_sat(fee);
-            ui.monospace(format!("fee:  {fee}"));
+            ui.monospace(format!("fee(sats):  {}", fee.to_sat()));
             if ui.button("sign and send").clicked() {
                 let () = app.sign_and_send(final_tx.clone())?;
                 *base_tx = Transaction::default();

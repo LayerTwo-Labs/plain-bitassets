@@ -1,5 +1,6 @@
 #![feature(impl_trait_in_assoc_type)]
 #![feature(let_chains)]
+#![feature(trait_alias)]
 #![feature(try_find)]
 #![feature(yeet_expr)]
 
@@ -14,14 +15,8 @@ pub mod types;
 pub mod util;
 pub mod wallet;
 
-pub use bip300301;
-pub use heed;
-
-/// Format `str_dest` with the proper `s{sidechain_number}_` prefix and a
+/// Format `b58_dest` with the proper `s{sidechain_number}_` prefix and a
 /// checksum postfix for calling createsidechaindeposit on mainchain.
-pub fn format_deposit_address(this_sidechain: u8, str_dest: &str) -> String {
-    let deposit_address: String = format!("s{}_{}_", this_sidechain, str_dest);
-    let hash = sha256::digest(deposit_address.as_bytes()).to_string();
-    let hash: String = hash[..6].into();
-    format!("{}{}", deposit_address, hash)
+pub fn format_deposit_address(dest: types::Address) -> String {
+    format!("s{}_{}", types::THIS_SIDECHAIN, dest.to_base58ck())
 }

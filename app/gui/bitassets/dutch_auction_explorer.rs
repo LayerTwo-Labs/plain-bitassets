@@ -89,8 +89,11 @@ fn show_dutch_auction_with_state(
 }
 
 impl DutchAuctionExplorer {
-    pub fn show(&mut self, app: &mut App, ui: &mut egui::Ui) {
+    pub fn show(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show_inside(ui, |ui| {
+            let Some(app) = app else {
+                return;
+            };
             ui.heading("Dutch Auction Explorer");
             let auctions = match app.node.dutch_auctions() {
                 Ok(auctions) => BTreeMap::from_iter(auctions),

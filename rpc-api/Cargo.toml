@@ -5,16 +5,20 @@ edition.workspace = true
 version.workspace = true
 
 [dependencies]
-bip300301.workspace = true
+bitcoin = { version = "0.32.2", features = ["serde"] }
 fraction = { version = "0.14.0", features = ["with-serde-support"] }
-jsonrpsee = { version = "0.20.0", features = ["macros"] }
+jsonrpsee = { version = "0.23.2", features = ["client", "macros", "server"] }
 plain_bitassets = { path = "../lib" }
 serde = { version = "1.0.179", features = ["derive"] }
-utoipa = "4.2.3"
+serde_json = "1.0.113"
+utoipa = "5.2.0"
 
 [dependencies.l2l-openapi]
 git = "https://github.com/Ash-L2L/l2l-openapi"
-rev = "6e440bb2715ec0d495050e9dbbda3f1590a07385"
+rev = "a3e84daa19fd7c1121346984c3ef85304a144792"
+
+[dev-dependencies]
+anyhow = "1.0.72"
 
 [lib]
 name = "plain_bitassets_app_rpc_api"
