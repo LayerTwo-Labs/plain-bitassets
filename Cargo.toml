@@ -12,7 +12,7 @@ authors = [ "Ash Manning <ash@layertwolabs.com>" ]
 edition = "2021"
 license-file = "LICENSE.txt"
 publish = false
-version = "0.10.1"
+version = "0.10.2"
 
 [profile.release]
 # lto = "fat"

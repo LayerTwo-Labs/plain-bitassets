@@ -20,8 +20,7 @@ use crate::{
     mempool::{self, MemPool},
     net::{self, Net},
     state::{
-        self, AmmPair, AmmPoolState, BitAssetSeqId, DutchAuctionBidError,
-        DutchAuctionState, State,
+        self, AmmPair, AmmPoolState, BitAssetSeqId, DutchAuctionState, State,
     },
     types::{
         proto::{self, mainchain},
@@ -309,10 +308,11 @@ where
         pair: AmmPair,
     ) -> Result<AmmPoolState, Error> {
         let res = self.try_get_amm_pool_state(pair)?.ok_or_else(|| {
-            state::Error::MissingAmmPoolState {
+            let err = state::error::Amm::MissingPoolState {
                 asset0: pair.asset0(),
                 asset1: pair.asset1(),
-            }
+            };
+            state::Error::from(err)
         })?;
         Ok(res)
     }
@@ -325,6 +325,7 @@ where
         let bitasset_ids_to_data: HashMap<_, _> = self
             .state
             .bitassets
+            .bitassets
             .iter(&txn)?
             .map(|res| {
                 res.map(|(bitasset_id, bitasset_data)| {
@@ -334,17 +335,20 @@ where
             .collect::<Result<_, _>>()?;
         let res = self
             .state
-            .bitasset_seq_to_bitasset
+            .bitassets
+            .seq_to_bitasset
             .iter(&txn)?
             .map(|res| {
                 res.map_err(Error::Heed).and_then(
                     |(bitasset_seq_id, bitasset_id)| {
-                        let bitasset_data =
-                            bitasset_ids_to_data.get(&bitasset_id).ok_or(
-                                Error::State(state::Error::MissingBitAsset {
+                        let bitasset_data = bitasset_ids_to_data
+                            .get(&bitasset_id)
+                            .ok_or_else(|| {
+                                let err = state::error::BitAsset::Missing {
                                     bitasset: bitasset_id,
-                                }),
-                            )?;
+                                };
+                                Error::State(err.into())
+                            })?;
                         Ok((
                             bitasset_seq_id,
                             bitasset_id,
@@ -386,7 +390,8 @@ where
         self.try_get_dutch_auction_state(auction_id).and_then(
             |dutch_auction_state| {
                 dutch_auction_state.ok_or_else(|| {
-                    Error::State(DutchAuctionBidError::MissingAuction.into())
+                    let err = state::error::dutch_auction::Bid::MissingAuction;
+                    Error::State(state::Error::DutchAuction(err.into()))
                 })
             },
         )
@@ -437,7 +442,9 @@ where
         let txn = self.env.read_txn()?;
         Ok(self
             .state
-            .get_bitasset_data_at_block_height(&txn, bitasset, height)?)
+            .bitassets
+            .get_bitasset_data_at_block_height(&txn, bitasset, height)
+            .map_err(state::Error::BitAsset)?)
     }
 
     /// resolve current bitasset data, if it exists
@@ -446,7 +453,11 @@ where
         bitasset: &BitAssetId,
     ) -> Result<Option<BitAssetData>, Error> {
         let txn = self.env.read_txn()?;
-        Ok(self.state.try_get_current_bitasset_data(&txn, bitasset)?)
+        Ok(self
+            .state
+            .bitassets
+            .try_get_current_bitasset_data(&txn, bitasset)
+            .map_err(state::Error::BitAsset)?)
     }
 
     /// Resolve current bitasset data. Returns an error if it does not exist.
@@ -455,7 +466,11 @@ where
         bitasset: &BitAssetId,
     ) -> Result<BitAssetData, Error> {
         let txn = self.env.read_txn()?;
-        Ok(self.state.get_current_bitasset_data(&txn, bitasset)?)
+        Ok(self
+            .state
+            .bitassets
+            .get_current_bitasset_data(&txn, bitasset)
+            .map_err(state::Error::BitAsset)?)
     }
 
     pub fn submit_transaction(

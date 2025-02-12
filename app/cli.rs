@@ -151,7 +151,7 @@ pub struct Config {
     pub net_addr: SocketAddr,
     pub network: Network,
     pub rpc_addr: SocketAddr,
-    #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
+    #[cfg(feature = "zmq")]
     pub zmq_addr: SocketAddr,
 }
 

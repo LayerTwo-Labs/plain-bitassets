@@ -20,7 +20,6 @@ use thiserror::Error;
 use tokio::task::JoinHandle;
 use tokio_stream::StreamNotifyClose;
 use tokio_util::task::LocalPoolHandle;
-use zeromq::Socket;
 
 use super::mainchain_task::{self, MainchainTaskHandle};
 use crate::{
@@ -81,6 +80,7 @@ impl ZmqPubHandler {
         socket_addr: SocketAddr,
     ) -> Result<Self, zeromq::ZmqError> {
         use futures::TryFutureExt as _;
+        use zeromq::Socket as _;
         let (tx, rx) = mpsc::unbounded::<zeromq::ZmqMessage>();
         let zmq_pub_addr = format!("tcp://{socket_addr}");
         let mut zmq_pub = zeromq::PubSocket::new();

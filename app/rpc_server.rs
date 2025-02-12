@@ -58,9 +58,11 @@ impl RpcServer for RpcServerImpl {
     ) -> RpcResult<Txid> {
         let amm_pair = AmmPair::new(asset0, asset1);
         let amm_pool_state = self.get_amm_pool_state(asset0, asset1).await?;
-        let next_amm_pool_state = amm_pool_state
-            .burn(lp_token_amount)
-            .map_err(|err| convert_node_err(err.into()))?;
+        let next_amm_pool_state =
+            amm_pool_state.burn(lp_token_amount).map_err(|err| {
+                let err = state::Error::Amm(err);
+                convert_node_err(err.into())
+            })?;
         let amount0 = amm_pool_state.reserve0 - next_amm_pool_state.reserve0;
         let amount1 = amm_pool_state.reserve1 - next_amm_pool_state.reserve1;
         let mut tx = Transaction::default();
@@ -89,9 +91,11 @@ impl RpcServer for RpcServerImpl {
         amount1: u64,
     ) -> RpcResult<Txid> {
         let amm_pool_state = self.get_amm_pool_state(asset0, asset1).await?;
-        let next_amm_pool_state = amm_pool_state
-            .mint(amount0, amount1)
-            .map_err(|err| convert_node_err(err.into()))?;
+        let next_amm_pool_state =
+            amm_pool_state.mint(amount0, amount1).map_err(|err| {
+                let err = state::Error::Amm(err);
+                convert_node_err(err.into())
+            })?;
         let lp_token_mint = next_amm_pool_state.outstanding_lp_tokens
             - amm_pool_state.outstanding_lp_tokens;
         let mut tx = Transaction::default();
@@ -114,8 +118,8 @@ impl RpcServer for RpcServerImpl {
         let pair = match asset_spend.cmp(&asset_receive) {
             Ordering::Less => (asset_spend, asset_receive),
             Ordering::Equal => {
-                let err = node::Error::State(state::Error::InvalidAmmSwap);
-                return Err(convert_node_err(err));
+                let err = state::Error::Amm(state::error::Amm::InvalidSwap);
+                return Err(convert_node_err(err.into()));
             }
             Ordering::Greater => (asset_receive, asset_spend),
         };
@@ -133,7 +137,10 @@ impl RpcServer for RpcServerImpl {
                 },
             )
         })
-        .map_err(|err| convert_node_err(err.into()))?;
+        .map_err(|err| {
+            let err = state::Error::Amm(err);
+            convert_node_err(err.into())
+        })?;
         let mut tx = Transaction::default();
         let () = self
             .app
@@ -204,7 +211,10 @@ impl RpcServer for RpcServerImpl {
             .map_err(convert_node_err)?;
         let next_auction_state = auction_state
             .bid(Txid::default(), bid_size, height)
-            .map_err(|err| convert_node_err(err.into()))?;
+            .map_err(|err| {
+                let err = state::Error::DutchAuction(err.into());
+                convert_node_err(err.into())
+            })?;
         let receive_quantity =
             auction_state.base_amount_remaining.latest().data
                 - next_auction_state.base_amount_remaining.latest().data;
@@ -241,9 +251,9 @@ impl RpcServer for RpcServerImpl {
             .get_dutch_auction_state(auction_id)
             .map_err(convert_node_err)?;
         if height <= auction_state.start_block + auction_state.duration {
-            let err = state::DutchAuctionCollectError::AuctionNotFinished;
-            let err = node::Error::State(err.into());
-            return Err(convert_node_err(err));
+            let err = state::error::dutch_auction::Collect::AuctionNotFinished;
+            let err = state::Error::DutchAuction(err.into());
+            return Err(convert_node_err(err.into()));
         }
         let mut tx = Transaction::default();
         let () = self

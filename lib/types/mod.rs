@@ -13,23 +13,25 @@ use utoipa::ToSchema;
 pub use crate::authorization::Authorization;
 
 mod address;
+pub mod bitasset_data;
 pub mod hashes;
 pub mod proto;
 pub mod schema;
 mod transaction;
 
 pub use address::Address;
+pub use bitasset_data::{BitAssetData, BitAssetDataUpdates, Update};
 pub use hashes::{
     AssetId, BitAssetId, BlockHash, DutchAuctionId, Hash, M6id, MerkleRoot,
     Txid,
 };
 pub use transaction::{
     AmmBurn, AmmMint, AmmSwap, AssetOutput, AssetOutputContent, Authorized,
-    AuthorizedTransaction, BitAssetData, BitAssetDataUpdates, BitcoinOutput,
-    BitcoinOutputContent, DutchAuctionBid, DutchAuctionCollect,
-    DutchAuctionParams, FilledOutput, FilledOutputContent, FilledTransaction,
-    InPoint, OutPoint, Output, OutputContent, PointedOutput, SpentOutput,
-    Transaction, TxData, TxInputs, Update, WithdrawalOutputContent,
+    AuthorizedTransaction, BitcoinOutput, BitcoinOutputContent,
+    DutchAuctionBid, DutchAuctionCollect, DutchAuctionParams, FilledOutput,
+    FilledOutputContent, FilledTransaction, InPoint, OutPoint, Output,
+    OutputContent, PointedOutput, SpentOutput, Transaction, TxData, TxInputs,
+    WithdrawalOutputContent,
 };
 
 pub const THIS_SIDECHAIN: u8 = 4;
