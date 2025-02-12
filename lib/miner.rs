@@ -57,12 +57,13 @@ where
                 header.prev_main_hash,
             )
             .await?;
-        tracing::info!("created BMM tx: {txid}");
+        tracing::info!(%txid, "created BMM tx");
         assert_eq!(header.merkle_root, body.compute_merkle_root());
         self.block = Some((header, body));
         Ok(txid)
     }
 
+    // Wait for a block to be connected that contains our BMM request.
     pub async fn confirm_bmm(
         &mut self,
     ) -> Result<Option<(bitcoin::BlockHash, Header, Body)>, Error> {
@@ -80,20 +81,50 @@ where
                     header_info,
                     block_info,
                 } => {
-                    if block_info.bmm_commitment == Some(block_hash) {
-                        tracing::trace!(%block_hash, "verified bmm");
+                    if let Some(bmm_commitment) = block_info.bmm_commitment
+                        && bmm_commitment == block_hash
+                    {
+                        tracing::debug!(
+                            side_hash = %block_hash,
+                            main_height = header_info.height,
+                            main_hash = %header_info.block_hash,
+                            bmm_commitment = %bmm_commitment,
+                            "Verified BMM"
+                        );
                         self.block = None;
                         return Ok(Some((
                             header_info.block_hash,
                             header,
                             body,
                         )));
+                    } else {
+                        tracing::warn!(
+                            side_hash = %block_hash,
+                            main_height = header_info.height,
+                            main_hash = %header_info.block_hash,
+                            bmm_commitment = %block_info
+                                .bmm_commitment
+                                .map(|h| h.to_string())
+                                .unwrap_or("none".to_string()),
+                            "Received new block without our BMM commitment"
+                        );
                     }
                 }
-                Event::DisconnectBlock { .. } => (),
+                // This will actually never happen - there's currently no logic in
+                // the enforcer that ends up sending this message. This is left in
+                // for exhaustiveness purposes.
+                disconnect @ Event::DisconnectBlock { .. } => {
+                    tracing::warn!(
+                        %block_hash,
+                        event = ?disconnect,
+                        "received disconnect block event"
+                    );
+                }
             }
         };
-        tracing::trace!(%block_hash, "bmm verification failed");
+        // BMM requests expire after one block, so if we we weren't able to
+        // get it in, the request failed.
+        tracing::debug!(%block_hash, "bmm verification failed");
         self.block = None;
         Ok(None)
     }

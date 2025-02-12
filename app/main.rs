@@ -1,9 +1,10 @@
 #![feature(let_chains)]
 #![feature(try_find)]
 
-use std::{path::Path, sync::mpsc};
+use std::path::Path;
 
 use clap::Parser as _;
+use tokio::{signal::ctrl_c, sync::oneshot};
 use tracing_subscriber::{
     filter as tracing_filter, layer::SubscriberExt, Layer,
 };
@@ -55,12 +56,12 @@ type RollingLoggerGuard = tracing_appender::non_blocking::WorkerGuard;
 /// to keep the file logger alive.
 fn rolling_logger<S>(
     log_dir: &Path,
+    log_level: tracing::Level,
 ) -> anyhow::Result<(impl Layer<S>, RollingLoggerGuard)>
 where
     S: tracing::Subscriber
         + for<'s> tracing_subscriber::registry::LookupSpan<'s>,
 {
-    const DEFAULT_LEVEL: tracing::Level = tracing::Level::WARN;
     const LOG_FILE_SUFFIX: &str = "log";
     let rolling_log_appender = tracing_appender::rolling::Builder::new()
         .rotation(tracing_appender::rolling::Rotation::DAILY)
@@ -68,8 +69,7 @@ where
         .build(log_dir)?;
     let (non_blocking_rolling_log_writer, rolling_log_guard) =
         tracing_appender::non_blocking(rolling_log_appender);
-    let level_filter =
-        tracing_filter::Targets::new().with_default(DEFAULT_LEVEL);
+    let level_filter = tracing_filter::Targets::new().with_default(log_level);
     let rolling_log_layer = tracing_subscriber::fmt::layer()
         .compact()
         .with_ansi(false)
@@ -82,6 +82,7 @@ where
 // If the file logger is set, returns a guard that must be held for the
 // lifetime of the program in order to keep the file logger alive.
 fn set_tracing_subscriber(
+    file_log_level: tracing::Level,
     log_dir: Option<&Path>,
     log_level: tracing::Level,
 ) -> anyhow::Result<(LineBuffer, Option<RollingLoggerGuard>)> {
@@ -103,20 +104,25 @@ fn set_tracing_subscriber(
             };
         tracing_filter::EnvFilter::builder().parse(directives_str)?
     };
-    let line_buffer = LineBuffer::default();
+    // Adding source location here means that the file name + line number
+    // is included, in such a way that it can be clicked on from within
+    // the IDE, and you're sent right to the specific line of code. Very handy!
+    let stdout_format =
+        tracing_subscriber::fmt::format().with_source_location(true);
     let mut stdout_layer = tracing_subscriber::fmt::layer()
-        .compact()
-        .with_line_number(true);
+        .with_target(true)
+        .event_format(stdout_format);
     let is_terminal =
         std::io::IsTerminal::is_terminal(&stdout_layer.writer()());
     stdout_layer.set_ansi(is_terminal);
     let (rolling_log_layer, rolling_log_guard) = match log_dir {
         None => (None, None),
         Some(log_dir) => {
-            let (layer, guard) = rolling_logger(log_dir)?;
+            let (layer, guard) = rolling_logger(log_dir, file_log_level)?;
             (Some(layer), Some(guard))
         }
     };
+    let line_buffer = LineBuffer::default();
     let capture_layer = tracing_subscriber::fmt::layer()
         .compact()
         .with_line_number(true)
@@ -132,57 +138,75 @@ fn set_tracing_subscriber(
     Ok((line_buffer, rolling_log_guard))
 }
 
+fn run_egui_app(
+    config: &crate::cli::Config,
+    line_buffer: LineBuffer,
+    app: Option<crate::app::App>,
+) -> Result<(), eframe::Error> {
+    let native_options = eframe::NativeOptions::default();
+    eframe::run_native(
+        "Plain Bitassets",
+        native_options,
+        Box::new(move |cc| {
+            Ok(Box::new(gui::EguiApp::new(
+                app,
+                cc,
+                line_buffer,
+                config.rpc_addr,
+            )))
+        }),
+    )
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = cli::Cli::parse();
     let config = cli.get_config()?;
-    let (line_buffer, _rolling_log_guard) =
-        set_tracing_subscriber(config.log_dir.as_deref(), config.log_level)?;
-    let app: Result<app::App, app::Error> =
-        app::App::new(&config).inspect(|app| {
-            // spawn rpc server
-            app.runtime.spawn({
-                let app = app.clone();
-                async move {
-                    rpc_server::run_server(app, config.rpc_addr).await.unwrap()
+    let (line_buffer, _rolling_log_guard) = set_tracing_subscriber(
+        config.file_log_level,
+        config.log_dir.as_deref(),
+        config.log_level,
+    )?;
+    let (app_tx, app_rx) = oneshot::channel::<anyhow::Error>();
+    let app = app::App::new(&config).inspect(|app| {
+        // spawn rpc server
+        app.runtime.spawn({
+            let app = app.clone();
+            async move {
+                tracing::info!("starting RPC server at `{}`", config.rpc_addr);
+                if let Err(err) =
+                    rpc_server::run_server(app, config.rpc_addr).await
+                {
+                    app_tx.send(err).expect("failed to send error to app");
                 }
-            });
+            }
         });
-
-    if config.headless {
-        tracing::info!("Running in headless mode");
-        drop(line_buffer);
-        let _app = app?;
-        // wait for ctrlc signal
-        let (tx, rx) = mpsc::channel();
-        ctrlc::set_handler(move || {
-            tx.send(()).unwrap();
-        })
-        .expect("Error setting Ctrl-C handler");
-        rx.recv().unwrap();
-        tracing::info!("Received Ctrl-C signal, exiting...");
-    } else {
-        let native_options = eframe::NativeOptions::default();
-        let app: Option<_> = app.map_or_else(
-            |err| {
+    });
+    if !config.headless {
+        let app = match app {
+            Ok(app) => Some(app),
+            Err(err) => {
                 let err = anyhow::Error::from(err);
                 tracing::error!("{err:#}");
                 None
-            },
-            Some,
-        );
-        eframe::run_native(
-            "Plain Bitassets",
-            native_options,
-            Box::new(move |cc| {
-                Ok(Box::new(gui::EguiApp::new(
-                    app,
-                    cc,
-                    line_buffer,
-                    config.rpc_addr,
-                )))
-            }),
-        )
-        .map_err(|err| anyhow::anyhow!("failed to launch egui app: {err}"))?
-    }
-    Ok(())
+            }
+        };
+        // For GUI mode we want the GUI to start, even if the app fails to start.
+        return run_egui_app(&config, line_buffer, app)
+            .map_err(|e| anyhow::anyhow!("failed to run egui app: {e:#}"));
+    };
+    tracing::info!("Running in headless mode");
+    drop(line_buffer);
+    // If we're headless, we want to exit hard if the app fails to start.
+    let app = app?;
+    app.runtime.block_on(async move {
+        tokio::select! {
+            Ok(_) = ctrl_c() => {
+                tracing::info!("Shutting down due to process interruption");
+                Ok(())
+            }
+            Ok(err) = app_rx => {
+                Err(anyhow::anyhow!("received error from RPC server: {err:#} ({err:?})"))
+            }
+        }
+    })
 }

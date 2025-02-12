@@ -35,6 +35,12 @@ impl ReservedPorts {
     }
 }
 
+#[derive(Debug)]
+pub struct Init {
+    pub bitassets_app: PathBuf,
+    pub data_dir_suffix: Option<String>,
+}
+
 #[derive(Debug, Error)]
 pub enum BmmError {
     #[error(transparent)]
@@ -133,26 +139,28 @@ impl Sidechain for PostSetup {
     const SIDECHAIN_NUMBER: SidechainNumber =
         SidechainNumber(plain_bitassets::types::THIS_SIDECHAIN);
 
-    /// Path to bitassets_app
-    type Init = PathBuf;
+    type Init = Init;
 
     type SetupError = SetupError;
 
     async fn setup(
-        bitassets_app_path: Self::Init,
+        init: Self::Init,
         post_setup: &EnforcerPostSetup,
         res_tx: mpsc::UnboundedSender<anyhow::Result<()>>,
     ) -> Result<Self, Self::SetupError> {
         let reserved_ports = ReservedPorts::new()?;
-        let bitassets_dir = post_setup.out_dir.path().join(format!(
-            "bitassets-{}-{}",
-            reserved_ports.net.port(),
-            reserved_ports.rpc.port()
-        ));
+        let bitassets_dir = if let Some(suffix) = init.data_dir_suffix {
+            post_setup
+                .out_dir
+                .path()
+                .join(format!("bitassets-{suffix}"))
+        } else {
+            post_setup.out_dir.path().join("bitassets")
+        };
         std::fs::create_dir(&bitassets_dir)
             .map_err(Self::SetupError::CreateBitAssetsDir)?;
         let bitassets_app = BitAssetsApp {
-            path: bitassets_app_path,
+            path: init.bitassets_app,
             data_dir: bitassets_dir,
             log_level: Some(tracing::Level::TRACE),
             mainchain_grpc_port: post_setup

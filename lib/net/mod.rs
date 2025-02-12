@@ -1,6 +1,6 @@
 use std::{
     collections::{hash_map, HashMap, HashSet},
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     sync::Arc,
 };
 
@@ -13,6 +13,7 @@ use heed::{
 use parking_lot::RwLock;
 use quinn::{ClientConfig, Endpoint, ServerConfig};
 use tokio_stream::StreamNotifyClose;
+use tracing::instrument;
 
 use crate::{
     archive::Archive,
@@ -28,8 +29,8 @@ use peer::{
 };
 pub use peer::{
     ConnectionError as PeerConnectionError, Info as PeerConnectionInfo,
-    InternalMessage as PeerConnectionMessage, PeerStateId,
-    Request as PeerRequest, Response as PeerResponse,
+    InternalMessage as PeerConnectionMessage, Peer, PeerConnectionStatus,
+    PeerStateId, Request as PeerRequest, Response as PeerResponse,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -42,8 +43,12 @@ pub enum Error {
     Bincode(#[from] bincode::Error),
     #[error("connect error")]
     Connect(#[from] quinn::ConnectError),
-    #[error("connection error")]
-    Connection(#[from] quinn::ConnectionError),
+    #[error("connection error (remote address: {remote_address})")]
+    Connection {
+        #[source]
+        error: quinn::ConnectionError,
+        remote_address: SocketAddr,
+    },
     #[error("heed error")]
     Heed(#[from] heed::Error),
     #[error("quinn error")]
@@ -64,6 +69,10 @@ pub enum Error {
     SendDatagram(#[from] quinn::SendDatagramError),
     #[error("server endpoint closed")]
     ServerEndpointClosed,
+    /// Unspecified peer IP addresses cannot be connected to.
+    /// `0.0.0.0` is one example of an "unspecified" IP.
+    #[error("unspecified peer ip address (cannot connect to '{0}')")]
+    UnspecfiedPeerIP(IpAddr),
     #[error("write error")]
     Write(#[from] quinn::WriteError),
 }
@@ -155,11 +164,11 @@ fn configure_server() -> Result<(ServerConfig, Vec<u8>), Error> {
 ///
 /// - a stream of incoming QUIC connections
 /// - server certificate serialized into DER format
-#[allow(unused)]
 pub fn make_server_endpoint(
     bind_addr: SocketAddr,
 ) -> Result<(Endpoint, Vec<u8>), Error> {
     let (server_config, server_cert) = configure_server()?;
+    tracing::info!(%bind_addr, "creating server endpoint");
     let mut endpoint = Endpoint::server(server_config, bind_addr)?;
     let client_cfg = configure_client()?;
     endpoint.set_default_client_config(client_cfg);
@@ -184,9 +193,6 @@ const fn seed_node_addrs(network: Network) -> &'static [SocketAddr] {
         Network::Regtest => &[],
     }
 }
-
-// State.
-// Archive.
 
 // Keep track of peer state
 // Exchange metadata
@@ -241,19 +247,35 @@ impl Net {
         }
     }
 
-    // TODO: This should have more context. Last received message, connection state, etc.
-    pub fn get_active_peers(&self) -> Vec<SocketAddr> {
-        self.active_peers.read().keys().copied().collect()
+    // TODO: This should have more context.
+    // Last received message, connection state, etc.
+    pub fn get_active_peers(&self) -> Vec<Peer> {
+        self.active_peers
+            .read()
+            .iter()
+            .map(|(addr, conn_handle)| Peer {
+                address: *addr,
+                status: conn_handle.connection_status(),
+            })
+            .collect()
     }
 
+    #[instrument(skip_all, fields(addr), err(Debug))]
     pub fn connect_peer(
         &self,
         env: heed::Env,
         addr: SocketAddr,
     ) -> Result<(), Error> {
         if self.active_peers.read().contains_key(&addr) {
-            tracing::error!(%addr, "already connected");
+            tracing::error!("already connected");
             return Err(Error::AlreadyConnected(addr));
+        }
+        // This check happens within Quinn with a
+        // generic "invalid remote address". We run the
+        // same check, and provide a friendlier error
+        // message.
+        if addr.ip().is_unspecified() {
+            return Err(Error::UnspecfiedPeerIP(addr.ip()));
         }
         let connecting = self.server.connect(addr, "localhost")?;
         let mut rwtxn = env.write_txn()?;
@@ -266,18 +288,18 @@ impl Net {
         };
         let (connection_handle, info_rx) =
             peer::connect(connecting, connection_ctxt);
-        tracing::trace!(%addr, "spawning info rx");
+        tracing::trace!("spawning info rx");
         tokio::spawn({
             let info_rx = StreamNotifyClose::new(info_rx)
                 .map(move |info| Ok((addr, info)));
             let peer_info_tx = self.peer_info_tx.clone();
             async move {
                 if let Err(_send_err) = info_rx.forward(peer_info_tx).await {
-                    tracing::error!(%addr, "Failed to send peer connection info");
+                    tracing::error!("Failed to send peer connection info");
                 }
             }
         });
-        tracing::trace!(%addr, "adding to active peers");
+        tracing::trace!("adding to active peers");
         self.add_active_peer(addr, connection_handle)?;
         Ok(())
     }
@@ -326,13 +348,38 @@ impl Net {
         };
         let () = known_peers.into_iter().try_for_each(|(peer_addr, _)| {
             tracing::trace!(%peer_addr, "connecting to already known peer");
-            net.connect_peer(env.clone(), peer_addr)
+            match net.connect_peer(env.clone(), peer_addr) {
+                Err(Error::Connect(
+                    quinn::ConnectError::InvalidRemoteAddress(addr),
+                )) => {
+                    tracing::warn!(
+                        %addr, "new net: known peer with invalid remote address, removing"
+                    );
+                    let mut tx = env.write_txn()?;
+                    net.known_peers.delete(&mut tx, &peer_addr)?;
+                    tx.commit()?;
+                    tracing::info!(
+                        %addr,
+                        "new net: removed known peer with invalid remote address"
+                    );
+                    Ok(())
+                }
+                res => res,
+            }
+        })
+        // TODO: would be better to indicate this in the return error?
+        .inspect_err(|err| {
+            tracing::error!("unable to connect to known peers during net construction: {err:#}");
         })?;
         Ok((net, peer_info_rx))
     }
 
-    /// Accept the next incoming connection
-    pub async fn accept_incoming(&self, env: heed::Env) -> Result<(), Error> {
+    /// Accept the next incoming connection. Returns Some(addr) if a connection was accepted
+    /// and a new peer was added.
+    pub async fn accept_incoming(
+        &self,
+        env: heed::Env,
+    ) -> Result<Option<SocketAddr>, Error> {
         tracing::debug!(
             "listening for connections on `{}`",
             self.server
@@ -342,8 +389,14 @@ impl Net {
         );
         let connection = match self.server.accept().await {
             Some(conn) => {
-                tracing::trace!("accepted connection from {conn:?}");
-                Connection(conn.await.map_err(Error::Connection)?)
+                let remote_address = conn.remote_address();
+                tracing::trace!(%remote_address, "accepting connection");
+                let raw_conn =
+                    conn.await.map_err(|error| Error::Connection {
+                        error,
+                        remote_address,
+                    })?;
+                Connection(raw_conn)
             }
             None => {
                 tracing::debug!("server endpoint closed");
@@ -351,21 +404,23 @@ impl Net {
             }
         };
         let addr = connection.addr();
+        tracing::trace!(%addr, "accepted incoming connection");
         if self.active_peers.read().contains_key(&addr) {
             tracing::info!(
-                "already connected to {addr}, refusing duplicate connection",
+                %addr, "already peered, refusing duplicate",
             );
             connection
                 .0
                 .close(quinn::VarInt::from_u32(1), b"already connected");
         }
         if connection.0.close_reason().is_some() {
-            return Ok(());
+            return Ok(None);
         }
-        tracing::info!("connected to peer at {addr}");
+        tracing::info!(%addr, "connected to new peer");
         let mut rwtxn = env.write_txn()?;
         self.known_peers.put(&mut rwtxn, &addr, &())?;
         rwtxn.commit()?;
+        tracing::trace!(%addr, "wrote peer to database");
         let connection_ctxt = PeerConnectionCtxt {
             env,
             archive: self.archive.clone(),
@@ -383,8 +438,9 @@ impl Net {
                 }
             }
         });
+        // TODO: is this the right state?
         self.add_active_peer(addr, connection_handle)?;
-        Ok(())
+        Ok(Some(addr))
     }
 
     // Push an internal message to the specified peer
@@ -394,9 +450,9 @@ impl Net {
         addr: SocketAddr,
     ) -> Result<(), Error> {
         let active_peers_read = self.active_peers.read();
-        let Some(peer_connection_handle) = active_peers_read.get(&addr) else {
-            return Err(Error::MissingPeerConnection(addr));
-        };
+        let peer_connection_handle = active_peers_read
+            .get(&addr)
+            .ok_or_else(|| Error::MissingPeerConnection(addr))?;
         if let Err(send_err) = peer_connection_handle
             .internal_message_tx
             .unbounded_send(message)
@@ -405,29 +461,6 @@ impl Net {
             tracing::error!("Failed to push internal message to peer connection {addr}: {message:?}")
         }
         Ok(())
-    }
-
-    // Push a request to the specified peers
-    pub fn push_request(
-        &self,
-        request: PeerRequest,
-        peers: &HashSet<SocketAddr>,
-    ) {
-        let active_peers_read = self.active_peers.read();
-        for addr in peers {
-            let Some(peer_connection_handle) = active_peers_read.get(addr)
-            else {
-                continue;
-            };
-            if let Err(_send_err) = peer_connection_handle
-                .internal_message_tx
-                .unbounded_send(request.clone().into())
-            {
-                tracing::warn!(
-                    "Failed to push request to peer at {addr}: {request:?}"
-                )
-            }
-        }
     }
 
     /// Push a tx to all active peers, except those in the provided set
@@ -441,6 +474,13 @@ impl Net {
             .iter()
             .filter(|(addr, _)| !exclude.contains(addr))
             .for_each(|(addr, peer_connection_handle)| {
+                match peer_connection_handle.connection_status() {
+                    PeerConnectionStatus::Connecting => {
+                        tracing::trace!(%addr, "skipping peer at {addr} because it is not fully connected");
+                        return;
+                    }
+                    PeerConnectionStatus::Connected => {}
+                }
                 let request = PeerRequest::PushTransaction {
                     transaction: tx.clone(),
                 };
