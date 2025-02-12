@@ -4,9 +4,10 @@ use std::{
     sync::LazyLock,
 };
 
-use bitcoin::{amount::CheckedSum as _, hashes::Hash as _};
+use bitcoin::amount::CheckedSum as _;
 use borsh::BorshSerialize;
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use thiserror::Error;
 use utoipa::ToSchema;
 
@@ -156,7 +157,7 @@ where
 )]
 pub struct Header {
     pub merkle_root: MerkleRoot,
-    pub prev_side_hash: BlockHash,
+    pub prev_side_hash: Option<BlockHash>,
     #[borsh(serialize_with = "borsh_serialize_bitcoin_block_hash")]
     #[schema(value_type = crate::types::schema::BitcoinBlockHash)]
     pub prev_main_hash: bitcoin::BlockHash,
@@ -202,9 +203,16 @@ enum WithdrawalBundleErrorInner {
 #[error("Withdrawal bundle error")]
 pub struct WithdrawalBundleError(#[from] WithdrawalBundleErrorInner);
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde_as]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 pub struct WithdrawalBundle {
+    #[schema(value_type = Vec<(
+        transaction::OutPoint,
+        transaction::FilledOutput)>
+    )]
+    #[serde_as(as = "serde_with::IfIsHumanReadable<serde_with::Seq<(_, _)>>")]
     spend_utxos: BTreeMap<OutPoint, FilledOutput>,
+    #[schema(value_type = schema::BitcoinTransaction)]
     tx: bitcoin::Transaction,
 }
 
@@ -470,15 +478,6 @@ pub struct Tip {
     pub main_block_hash: bitcoin::BlockHash,
 }
 
-impl Default for Tip {
-    fn default() -> Self {
-        Self {
-            block_hash: BlockHash::default(),
-            main_block_hash: bitcoin::BlockHash::all_zeros(),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum, strum::Display))]
 pub enum Network {
@@ -486,3 +485,42 @@ pub enum Network {
     Signet,
     Regtest,
 }
+
+/// Semver-compatible version
+#[derive(
+    BorshSerialize,
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    PartialEq,
+    Serialize,
+)]
+pub struct Version {
+    pub major: u64,
+    pub minor: u64,
+    pub patch: u64,
+}
+impl From<semver::Version> for Version {
+    fn from(version: semver::Version) -> Self {
+        let semver::Version {
+            major,
+            minor,
+            patch,
+            pre: _,
+            build: _,
+        } = version;
+        Self {
+            major,
+            minor,
+            patch,
+        }
+    }
+}
+// Do not make this public outside of this crate, as it could break semver
+pub(crate) static VERSION: LazyLock<Version> = LazyLock::new(|| {
+    const VERSION_STR: &str = env!("CARGO_PKG_VERSION");
+    semver::Version::parse(VERSION_STR).unwrap().into()
+});

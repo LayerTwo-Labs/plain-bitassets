@@ -382,6 +382,13 @@ impl Wallet {
         main_fee: bitcoin::Amount,
         fee: bitcoin::Amount,
     ) -> Result<Transaction, Error> {
+        tracing::trace!(
+            fee = %fee.display_dynamic(),
+            ?main_address,
+            main_fee = %main_fee.display_dynamic(),
+            value = %value.display_dynamic(),
+            "Creating withdrawal"
+        );
         let (total, coins) = self.select_bitcoins(
             value
                 .checked_add(fee)

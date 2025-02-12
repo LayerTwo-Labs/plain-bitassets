@@ -55,10 +55,10 @@ pub enum Error {
     CusfMainchain(#[from] proto::Error),
     #[error("heed error")]
     Heed(#[from] heed::Error),
-    #[error("quinn error")]
+    #[error("I/O error")]
     Io(#[from] std::io::Error),
     #[error("error requesting mainchain ancestors")]
-    MainchainAncestors(anyhow::Error),
+    MainchainAncestors(#[source] mainchain_task::ResponseError),
     #[error("mempool error")]
     MemPool(#[from] mempool::Error),
     #[error("net error")]
@@ -258,14 +258,14 @@ where
         res
     }
 
-    pub fn get_tip_height(&self) -> Result<u32, Error> {
+    pub fn try_get_tip_height(&self) -> Result<Option<u32>, Error> {
         let rotxn = self.env.read_txn()?;
-        Ok(self.state.get_height(&rotxn)?)
+        Ok(self.state.try_get_height(&rotxn)?)
     }
 
-    pub fn get_tip(&self) -> Result<BlockHash, Error> {
+    pub fn try_get_tip(&self) -> Result<Option<BlockHash>, Error> {
         let rotxn = self.env.read_txn()?;
-        Ok(self.state.get_tip(&rotxn)?)
+        Ok(self.state.try_get_tip(&rotxn)?)
     }
 
     pub fn try_get_amm_price(
@@ -478,10 +478,10 @@ where
         transaction: AuthorizedTransaction,
     ) -> Result<(), Error> {
         {
-            let mut txn = self.env.write_txn()?;
-            self.state.validate_transaction(&txn, &transaction)?;
-            self.mempool.put(&mut txn, &transaction)?;
-            txn.commit()?;
+            let mut rotxn = self.env.write_txn()?;
+            self.state.validate_transaction(&rotxn, &transaction)?;
+            self.mempool.put(&mut rotxn, &transaction)?;
+            rotxn.commit()?;
         }
         self.net.push_tx(Default::default(), transaction);
         Ok(())
@@ -492,6 +492,18 @@ where
     ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
         let rotxn = self.env.read_txn()?;
         self.state.get_utxos(&rotxn).map_err(Error::from)
+    }
+
+    pub fn get_latest_failed_withdrawal_bundle_height(
+        &self,
+    ) -> Result<Option<u32>, Error> {
+        let rotxn = self.env.read_txn()?;
+        let res = self
+            .state
+            .get_latest_failed_withdrawal_bundle(&rotxn)
+            .map_err(Error::from)?
+            .map(|(height, _)| height);
+        Ok(res)
     }
 
     pub fn get_spent_utxos(
@@ -570,8 +582,12 @@ where
         height: u32,
     ) -> Result<Option<BlockHash>, Error> {
         let rotxn = self.env.read_txn()?;
-        let tip = self.state.get_tip(&rotxn)?;
-        let tip_height = self.state.get_height(&rotxn)?;
+        let Some(tip) = self.state.try_get_tip(&rotxn)? else {
+            return Ok(None);
+        };
+        let Some(tip_height) = self.state.try_get_height(&rotxn)? else {
+            return Ok(None);
+        };
         if tip_height >= height {
             self.archive
                 .ancestors(&rotxn, tip)
@@ -593,6 +609,23 @@ where
     pub fn get_body(&self, block_hash: BlockHash) -> Result<Body, Error> {
         let txn = self.env.read_txn()?;
         Ok(self.archive.get_body(&txn, block_hash)?)
+    }
+
+    pub fn get_bmm_inclusions(
+        &self,
+        block_hash: BlockHash,
+    ) -> Result<Vec<bitcoin::BlockHash>, Error> {
+        let rotxn = self.env.read_txn()?;
+        let bmm_inclusions = self
+            .archive
+            .get_bmm_results(&rotxn, block_hash)?
+            .into_iter()
+            .filter_map(|(block_hash, bmm_res)| match bmm_res {
+                BmmResult::Verified => Some(block_hash),
+                BmmResult::Failed => None,
+            })
+            .collect();
+        Ok(bmm_inclusions)
     }
 
     pub fn get_block(&self, block_hash: BlockHash) -> Result<Block, Error> {
@@ -628,7 +661,7 @@ where
             let inputs: HashSet<_> =
                 transaction.transaction.inputs.iter().copied().collect();
             if !spent_utxos.is_disjoint(&inputs) {
-                println!("UTXO double spent");
+                // UTXO double spent
                 self.mempool
                     .delete(&mut rwtxn, transaction.transaction.txid())?;
                 continue;
@@ -706,11 +739,15 @@ where
         txid: Txid,
     ) -> Result<Option<FilledTransactionWithPosition>, Error> {
         let rotxn = self.env.read_txn()?;
-        let tip = self.state.get_tip(&rotxn)?;
+        let tip = self.state.try_get_tip(&rotxn)?;
         let inclusions = self.archive.get_tx_inclusions(&rotxn, txid)?;
         if let Some((block_hash, idx)) =
             inclusions.into_iter().try_find(|(block_hash, _)| {
-                self.archive.is_descendant(&rotxn, *block_hash, tip)
+                if let Some(tip) = tip {
+                    self.archive.is_descendant(&rotxn, *block_hash, tip)
+                } else {
+                    Ok(true)
+                }
             })?
         {
             let body = self.archive.get_body(&rotxn, block_hash)?;
@@ -765,6 +802,10 @@ where
             .map_err(Error::from)
     }
 
+    pub fn get_active_peers(&self) -> Vec<SocketAddr> {
+        self.net.get_active_peers()
+    }
+
     /// Attempt to submit a block.
     /// Returns `Ok(true)` if the block was accepted successfully as the new tip.
     /// Returns `Ok(false)` if the block could not be submitted for some reason,
@@ -781,8 +822,8 @@ where
         };
         let block_hash = header.hash();
         // Store the header, if ancestors exist
-        if header.prev_side_hash != BlockHash::default()
-            && self.try_get_header(header.prev_side_hash)?.is_none()
+        if let Some(parent) = header.prev_side_hash
+            && self.try_get_header(parent)?.is_none()
         {
             tracing::error!(%block_hash,
                 "Rejecting block {block_hash} due to missing ancestor headers",
@@ -801,7 +842,7 @@ where
         else {
             panic!("should be impossible")
         };
-        let () = res.map_err(|err| Error::MainchainAncestors(err.into()))?;
+        let () = res.map_err(Error::MainchainAncestors)?;
         // Verify BMM
         let mainchain_task::Response::VerifyBmm(_, res) = self
             .mainchain_task
@@ -849,9 +890,12 @@ where
         // Check that ancestor bodies exist, and store body
         {
             let rotxn = self.env.read_txn()?;
-            let tip = self.state.get_tip(&rotxn)?;
-            let common_ancestor =
-                self.archive.last_common_ancestor(&rotxn, tip, block_hash)?;
+            let tip = self.state.try_get_tip(&rotxn)?;
+            let common_ancestor = if let Some(tip) = tip {
+                self.archive.last_common_ancestor(&rotxn, tip, block_hash)?
+            } else {
+                None
+            };
             let missing_bodies = self.archive.get_missing_bodies(
                 &rotxn,
                 block_hash,
@@ -878,13 +922,17 @@ where
             main_block_hash,
         };
         if !self.net_task.new_tip_ready_confirm(new_tip).await? {
+            tracing::warn!(%block_hash, "Not ready to reorg");
             return Ok(false);
         };
         let rotxn = self.env.read_txn()?;
         let bundle = self.state.get_pending_withdrawal_bundle(&rotxn)?;
         #[cfg(feature = "zmq")]
         {
-            let height = self.state.get_height(&rotxn)?;
+            let height = self
+                .state
+                .try_get_height(&rotxn)?
+                .expect("Height should exist for tip");
             let block_hash = header.hash();
             let mut zmq_msg = zeromq::ZmqMessage::from("hashblock");
             zmq_msg.push_back(bytes::Bytes::copy_from_slice(&block_hash.0));

@@ -36,8 +36,6 @@ pub use peer::{
 pub enum Error {
     #[error("accept error")]
     AcceptError,
-    #[error("address parse error")]
-    AddrParse(#[from] std::net::AddrParseError),
     #[error("already connected to peer at {0}")]
     AlreadyConnected(SocketAddr),
     #[error("bincode error")]
@@ -70,11 +68,102 @@ pub enum Error {
     Write(#[from] quinn::WriteError),
 }
 
-pub fn make_client_endpoint(bind_addr: SocketAddr) -> Result<Endpoint, Error> {
+/// Dummy certificate verifier that treats any certificate as valid.
+/// NOTE, such verification is vulnerable to MITM attacks, but convenient for testing.
+#[derive(Debug)]
+struct SkipServerVerification;
+impl SkipServerVerification {
+    fn new() -> Arc<Self> {
+        Arc::new(Self)
+    }
+}
+impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer,
+        _intermediates: &[rustls::pki_types::CertificateDer],
+        _server_name: &rustls::pki_types::ServerName,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error>
+    {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &rustls::crypto::ring::default_provider()
+                .signature_verification_algorithms,
+        )
+    }
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error>
+    {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &rustls::crypto::ring::default_provider()
+                .signature_verification_algorithms,
+        )
+    }
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        rustls::crypto::ring::default_provider()
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+fn configure_client(
+) -> Result<ClientConfig, quinn::crypto::rustls::NoInitialCipherSuite> {
+    let crypto = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(SkipServerVerification::new())
+        .with_no_client_auth();
+    let client_config =
+        quinn::crypto::rustls::QuicClientConfig::try_from(crypto)?;
+    Ok(ClientConfig::new(Arc::new(client_config)))
+}
+/// Returns default server configuration along with its certificate.
+fn configure_server() -> Result<(ServerConfig, Vec<u8>), Error> {
+    let cert_key =
+        rcgen::generate_simple_self_signed(vec!["localhost".into()])?;
+    let keypair_der = cert_key.key_pair.serialize_der();
+    let priv_key = rustls::pki_types::PrivateKeyDer::Pkcs8(keypair_der.into());
+    let cert_der = cert_key.cert.der().to_vec();
+    let cert_chain = vec![cert_key.cert.into()];
+    let mut server_config =
+        ServerConfig::with_single_cert(cert_chain, priv_key)?;
+    let transport_config = Arc::get_mut(&mut server_config.transport).unwrap();
+    transport_config.max_concurrent_uni_streams(1_u8.into());
+    Ok((server_config, cert_der))
+}
+/// Constructs a QUIC endpoint configured to listen for incoming connections on a certain address
+/// and port.
+///
+/// ## Returns
+///
+/// - a stream of incoming QUIC connections
+/// - server certificate serialized into DER format
+#[allow(unused)]
+pub fn make_server_endpoint(
+    bind_addr: SocketAddr,
+) -> Result<(Endpoint, Vec<u8>), Error> {
+    let (server_config, server_cert) = configure_server()?;
+    let mut endpoint = Endpoint::server(server_config, bind_addr)?;
     let client_cfg = configure_client()?;
-    let mut endpoint = Endpoint::client(bind_addr)?;
     endpoint.set_default_client_config(client_cfg);
-    Ok(endpoint)
+    Ok((endpoint, server_cert))
 }
 
 // None indicates that the stream has ended
@@ -111,7 +200,6 @@ const fn seed_node_addrs(network: Network) -> &'static [SocketAddr] {
 // 3. Update the state
 #[derive(Clone)]
 pub struct Net {
-    pub client: Endpoint,
     pub server: Endpoint,
     archive: Archive,
     state: State,
@@ -130,9 +218,13 @@ impl Net {
         addr: SocketAddr,
         peer_connection_handle: PeerConnectionHandle,
     ) -> Result<(), Error> {
+        tracing::trace!(%addr, "adding to active peers");
         let mut active_peers_write = self.active_peers.write();
         match active_peers_write.entry(addr) {
-            hash_map::Entry::Occupied(_) => Err(Error::AlreadyConnected(addr)),
+            hash_map::Entry::Occupied(_) => {
+                tracing::error!(%addr, "already connected");
+                Err(Error::AlreadyConnected(addr))
+            }
             hash_map::Entry::Vacant(active_peer_entry) => {
                 active_peer_entry.insert(peer_connection_handle);
                 Ok(())
@@ -141,11 +233,17 @@ impl Net {
     }
 
     pub fn remove_active_peer(&self, addr: SocketAddr) {
+        tracing::trace!(%addr, "removing active peer");
         let mut active_peers_write = self.active_peers.write();
         if let Some(peer_connection) = active_peers_write.remove(&addr) {
             drop(peer_connection);
-            tracing::info!("Disconnected from peer at {addr}")
+            tracing::info!(%addr, "disconnected");
         }
+    }
+
+    // TODO: This should have more context. Last received message, connection state, etc.
+    pub fn get_active_peers(&self) -> Vec<SocketAddr> {
+        self.active_peers.read().keys().copied().collect()
     }
 
     pub fn connect_peer(
@@ -154,8 +252,10 @@ impl Net {
         addr: SocketAddr,
     ) -> Result<(), Error> {
         if self.active_peers.read().contains_key(&addr) {
+            tracing::error!(%addr, "already connected");
             return Err(Error::AlreadyConnected(addr));
         }
+        let connecting = self.server.connect(addr, "localhost")?;
         let mut rwtxn = env.write_txn()?;
         self.known_peers.put(&mut rwtxn, &addr, &())?;
         rwtxn.commit()?;
@@ -165,7 +265,8 @@ impl Net {
             state: self.state.clone(),
         };
         let (connection_handle, info_rx) =
-            peer::connect(self.client.clone(), addr, connection_ctxt);
+            peer::connect(connecting, connection_ctxt);
+        tracing::trace!(%addr, "spawning info rx");
         tokio::spawn({
             let info_rx = StreamNotifyClose::new(info_rx)
                 .map(move |info| Ok((addr, info)));
@@ -176,6 +277,7 @@ impl Net {
                 }
             }
         });
+        tracing::trace!(%addr, "adding to active peers");
         self.add_active_peer(addr, connection_handle)?;
         Ok(())
     }
@@ -188,7 +290,6 @@ impl Net {
         bind_addr: SocketAddr,
     ) -> Result<(Self, PeerInfoRx), Error> {
         let (server, _) = make_server_endpoint(bind_addr)?;
-        let client = make_client_endpoint("0.0.0.0:0".parse()?)?;
         let active_peers = Arc::new(RwLock::new(HashMap::new()));
         let mut rwtxn = env.write_txn()?;
         let known_peers =
@@ -207,7 +308,6 @@ impl Net {
         let (peer_info_tx, peer_info_rx) = mpsc::unbounded();
         let net = Net {
             server,
-            client,
             archive,
             state,
             active_peers,
@@ -225,6 +325,7 @@ impl Net {
             known_peers
         };
         let () = known_peers.into_iter().try_for_each(|(peer_addr, _)| {
+            tracing::trace!(%peer_addr, "connecting to already known peer");
             net.connect_peer(env.clone(), peer_addr)
         })?;
         Ok((net, peer_info_rx))
@@ -232,9 +333,22 @@ impl Net {
 
     /// Accept the next incoming connection
     pub async fn accept_incoming(&self, env: heed::Env) -> Result<(), Error> {
+        tracing::debug!(
+            "listening for connections on `{}`",
+            self.server
+                .local_addr()
+                .map(|socket| socket.to_string())
+                .unwrap_or("unknown address".into())
+        );
         let connection = match self.server.accept().await {
-            Some(conn) => Connection(conn.await?),
-            None => return Err(Error::ServerEndpointClosed),
+            Some(conn) => {
+                tracing::trace!("accepted connection from {conn:?}");
+                Connection(conn.await.map_err(Error::Connection)?)
+            }
+            None => {
+                tracing::debug!("server endpoint closed");
+                return Err(Error::ServerEndpointClosed);
+            }
         };
         let addr = connection.addr();
         if self.active_peers.read().contains_key(&addr) {
@@ -339,111 +453,4 @@ impl Net {
                 }
             })
     }
-}
-
-/// Constructs a QUIC endpoint configured to listen for incoming connections on a certain address
-/// and port.
-///
-/// ## Returns
-///
-/// - a stream of incoming QUIC connections
-/// - server certificate serialized into DER format
-#[allow(unused)]
-pub fn make_server_endpoint(
-    bind_addr: SocketAddr,
-) -> Result<(Endpoint, Vec<u8>), Error> {
-    let (server_config, server_cert) = configure_server()?;
-    let endpoint = Endpoint::server(server_config, bind_addr)?;
-    Ok((endpoint, server_cert))
-}
-
-/// Returns default server configuration along with its certificate.
-fn configure_server() -> Result<(ServerConfig, Vec<u8>), Error> {
-    let cert_key =
-        rcgen::generate_simple_self_signed(vec!["localhost".into()])?;
-    let keypair_der = cert_key.key_pair.serialize_der();
-    let priv_key = rustls::pki_types::PrivateKeyDer::Pkcs8(keypair_der.into());
-    let cert_der = cert_key.cert.der().to_vec();
-    let cert_chain = vec![cert_key.cert.into()];
-
-    let mut server_config =
-        ServerConfig::with_single_cert(cert_chain, priv_key)?;
-    let transport_config = Arc::get_mut(&mut server_config.transport).unwrap();
-    transport_config.max_concurrent_uni_streams(1_u8.into());
-
-    Ok((server_config, cert_der))
-}
-
-/// Dummy certificate verifier that treats any certificate as valid.
-/// NOTE, such verification is vulnerable to MITM attacks, but convenient for testing.
-#[derive(Debug)]
-struct SkipServerVerification;
-
-impl SkipServerVerification {
-    fn new() -> Arc<Self> {
-        Arc::new(Self)
-    }
-}
-
-impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &rustls::pki_types::CertificateDer,
-        _intermediates: &[rustls::pki_types::CertificateDer],
-        _server_name: &rustls::pki_types::ServerName,
-        _ocsp_response: &[u8],
-        _now: rustls::pki_types::UnixTime,
-    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &rustls::pki_types::CertificateDer<'_>,
-        dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error>
-    {
-        rustls::crypto::verify_tls12_signature(
-            message,
-            cert,
-            dss,
-            &rustls::crypto::ring::default_provider()
-                .signature_verification_algorithms,
-        )
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &rustls::pki_types::CertificateDer<'_>,
-        dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error>
-    {
-        rustls::crypto::verify_tls13_signature(
-            message,
-            cert,
-            dss,
-            &rustls::crypto::ring::default_provider()
-                .signature_verification_algorithms,
-        )
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        rustls::crypto::ring::default_provider()
-            .signature_verification_algorithms
-            .supported_schemes()
-    }
-}
-
-fn configure_client(
-) -> Result<ClientConfig, quinn::crypto::rustls::NoInitialCipherSuite> {
-    let crypto = rustls::ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(SkipServerVerification::new())
-        .with_no_client_auth();
-
-    let client_config =
-        quinn::crypto::rustls::QuicClientConfig::try_from(crypto)?;
-    Ok(ClientConfig::new(Arc::new(client_config)))
 }
