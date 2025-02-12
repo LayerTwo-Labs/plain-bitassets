@@ -4933,6 +4933,7 @@ dependencies = [
  "bip300301_enforcer_integration_tests",
  "bip300301_enforcer_lib",
  "bitcoin",
+ "blake3",
  "clap",
  "dotenvy",
  "futures",
