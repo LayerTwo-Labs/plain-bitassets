@@ -70,6 +70,13 @@ pub trait Rpc {
         amount_spend: u64,
     ) -> RpcResult<u64>;
 
+    /// Retrieve data for a single BitAsset
+    #[method(name = "bitasset_data")]
+    async fn bitasset_data(
+        &self,
+        bitasset_id: BitAssetId,
+    ) -> RpcResult<BitAssetData>;
+
     /// List all BitAssets
     #[open_api_method(output_schema(PartialSchema = "schema::Array<
             schema::ArrayTuple3<BitAssetSeqId, BitAssetId, BitAssetData>

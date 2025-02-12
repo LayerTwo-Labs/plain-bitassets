@@ -3,8 +3,8 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use clap::{Parser, Subcommand};
 use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
 use plain_bitassets::types::{
-    Address, AssetId, BlockHash, DutchAuctionId, DutchAuctionParams,
-    THIS_SIDECHAIN,
+    Address, AssetId, BitAssetId, BlockHash, DutchAuctionId,
+    DutchAuctionParams, THIS_SIDECHAIN,
 };
 use plain_bitassets_app_rpc_api::RpcClient;
 
@@ -37,6 +37,9 @@ pub enum Command {
         #[arg(long)]
         amount_spend: u64,
     },
+    /// Retrieve data for a single BitAsset
+    #[command(name = "bitasset-data")]
+    BitAssetData { bitasset_id: BitAssetId },
     /// List all BitAssets
     Bitassets,
     /// Get Bitcoin balance in sats
@@ -182,6 +185,11 @@ impl Cli {
                     .amm_swap(asset_spend, asset_receive, amount_spend)
                     .await?;
                 format!("{amount}")
+            }
+            Command::BitAssetData { bitasset_id } => {
+                let bitasset_data =
+                    rpc_client.bitasset_data(bitasset_id).await?;
+                serde_json::to_string_pretty(&bitasset_data)?
             }
             Command::Bitassets => {
                 let bitassets = rpc_client.bitassets().await?;

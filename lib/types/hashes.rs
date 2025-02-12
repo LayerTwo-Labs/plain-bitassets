@@ -268,6 +268,13 @@ impl FromHex for BitAssetId {
     }
 }
 
+impl std::str::FromStr for BitAssetId {
+    type Err = <Self as FromHex>::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_hex(s)
+    }
+}
+
 impl utoipa::PartialSchema for BitAssetId {
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
         let obj =

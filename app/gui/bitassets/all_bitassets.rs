@@ -23,16 +23,20 @@ fn show_bitasset_data(
 ) -> egui::Response {
     let BitAssetData {
         commitment,
-        ipv4_addr,
-        ipv6_addr,
+        socket_addr_v4,
+        socket_addr_v6,
         encryption_pubkey,
         signing_pubkey,
     } = bitasset_data;
     let commitment = commitment.map_or("Not set".to_owned(), hex::encode);
-    let ipv4_addr = ipv4_addr
-        .map_or("Not set".to_owned(), |ipv4_addr| ipv4_addr.to_string());
-    let ipv6_addr = ipv6_addr
-        .map_or("Not set".to_owned(), |ipv6_addr| ipv6_addr.to_string());
+    let socket_addr_v4 = socket_addr_v4
+        .map_or("Not set".to_owned(), |socket_addr_v4| {
+            socket_addr_v4.to_string()
+        });
+    let socket_addr_v6 = socket_addr_v6
+        .map_or("Not set".to_owned(), |socket_addr_v6| {
+            socket_addr_v6.to_string()
+        });
     let encryption_pubkey =
         encryption_pubkey.map_or("Not set".to_owned(), |epk| epk.to_string());
     let signing_pubkey =
@@ -47,14 +51,14 @@ fn show_bitasset_data(
         | ui.horizontal(|ui| {
             ui.monospace_selectable_singleline(
                 false,
-                format!("IPv4 Address: {ipv4_addr}"),
+                format!("IPv4 Address: {socket_addr_v4}"),
             )
         })
         .join()
         | ui.horizontal(|ui| {
             ui.monospace_selectable_singleline(
                 false,
-                format!("IPv6 Address: {ipv6_addr}"),
+                format!("IPv6 Address: {socket_addr_v6}"),
             )
         })
         .join()

@@ -162,6 +162,16 @@ impl RpcServer for RpcServerImpl {
         Ok(amount_receive)
     }
 
+    async fn bitasset_data(
+        &self,
+        bitasset_id: BitAssetId,
+    ) -> RpcResult<BitAssetData> {
+        self.app
+            .node
+            .get_current_bitasset_data(&bitasset_id)
+            .map_err(convert_node_err)
+    }
+
     async fn bitassets(
         &self,
     ) -> RpcResult<Vec<(BitAssetSeqId, BitAssetId, BitAssetData)>> {
