@@ -839,8 +839,8 @@ dependencies = [
 
 [[package]]
 name = "bip300301_enforcer_integration_tests"
-version = "0.3.1"
-source = "git+https://github.com/Ash-L2L/bip300301_enforcer?rev=135d408213ee7309b59f49dfdc2608e6fa53db42#135d408213ee7309b59f49dfdc2608e6fa53db42"
+version = "0.3.2"
+source = "git+https://github.com/Ash-L2L/bip300301_enforcer?rev=42cfbe73a894186a73cadc36cc398b879fe5bee6#42cfbe73a894186a73cadc36cc398b879fe5bee6"
 dependencies = [
  "anyhow",
  "bdk_wallet",
@@ -871,8 +871,8 @@ dependencies = [
 
 [[package]]
 name = "bip300301_enforcer_lib"
-version = "0.3.1"
-source = "git+https://github.com/Ash-L2L/bip300301_enforcer?rev=135d408213ee7309b59f49dfdc2608e6fa53db42#135d408213ee7309b59f49dfdc2608e6fa53db42"
+version = "0.3.2"
+source = "git+https://github.com/Ash-L2L/bip300301_enforcer?rev=42cfbe73a894186a73cadc36cc398b879fe5bee6#42cfbe73a894186a73cadc36cc398b879fe5bee6"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -897,6 +897,7 @@ dependencies = [
  "hashlink 0.10.0",
  "heed",
  "hex",
+ "humantime",
  "jsonrpsee",
  "miette",
  "nom",
@@ -921,6 +922,7 @@ dependencies = [
  "tonic-build",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "zeromq",
 ]
 
@@ -992,8 +994,9 @@ checksum = "0b47c4ab7a93edb0c7198c5535ed9b52b63095f4e9b45279c6736cec4b856baf"
 
 [[package]]
 name = "bitcoin-send-tx-p2p"
-version = "0.2.0"
-source = "git+https://github.com/Ash-L2L/bitcoin-send-tx-p2p?rev=4e03ed7c6807771b4709864b0357e2bd8843c83f#4e03ed7c6807771b4709864b0357e2bd8843c83f"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77b7d7131363292af9da72a06bf7f1b723b3200644fc6ab6b3b82d98d5f59968"
 dependencies = [
  "async-trait",
  "bitcoin",
@@ -1574,8 +1577,8 @@ dependencies = [
 
 [[package]]
 name = "cusf-enforcer-mempool"
-version = "0.1.4"
-source = "git+https://github.com/LayerTwo-Labs/cusf-enforcer-mempool.git?rev=fce4283eba07df788ed3830cf3b51e35a7c590a9#fce4283eba07df788ed3830cf3b51e35a7c590a9"
+version = "0.1.5"
+source = "git+https://github.com/LayerTwo-Labs/cusf-enforcer-mempool.git?rev=cf467500d9cd68d6736b98d6fb3653bcebbf54bc#cf467500d9cd68d6736b98d6fb3653bcebbf54bc"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2937,6 +2940,12 @@ name = "human-size"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9994b79e8c1a39b3166c63ae7823bb2b00831e2a96a31399c50fe69df408eaeb"
+
+[[package]]
+name = "humantime"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
 
 [[package]]
 name = "hyper"
@@ -4766,7 +4775,7 @@ checksum = "953ec861398dccce10c670dfeaf3ec4911ca479e9c02154b3a215178c5f566f2"
 
 [[package]]
 name = "plain_bitassets"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "addr",
  "anyhow",
@@ -4819,7 +4828,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitassets_app"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "anyhow",
  "bincode",
@@ -4860,7 +4869,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitassets_app_cli"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "anyhow",
  "bitcoin",
@@ -4875,7 +4884,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitassets_app_rpc_api"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "anyhow",
  "bitcoin",
@@ -4891,7 +4900,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitassets_integration_tests"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "anyhow",
  "bip300301_enforcer_integration_tests",
