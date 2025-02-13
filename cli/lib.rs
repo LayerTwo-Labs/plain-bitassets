@@ -1,5 +1,6 @@
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::LazyLock,
     time::Duration,
 };
 
@@ -10,6 +11,7 @@ use plain_bitassets::types::{
     DutchAuctionParams, THIS_SIDECHAIN,
 };
 use plain_bitassets_app_rpc_api::RpcClient;
+use url::Url;
 
 #[derive(Clone, Debug, Subcommand)]
 #[command(arg_required_else_help(true))]
@@ -152,6 +154,10 @@ const DEFAULT_RPC_ADDR: SocketAddr = SocketAddr::new(
     6000 + THIS_SIDECHAIN as u16,
 );
 
+static DEFAULT_RPC_URL: LazyLock<Url> = LazyLock::new(|| {
+    Url::parse(&format!("http://{DEFAULT_RPC_ADDR}")).unwrap()
+});
+
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
 
 #[derive(Clone, Debug, Parser)]
@@ -159,9 +165,9 @@ const DEFAULT_TIMEOUT_SECS: u64 = 60;
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
-    /// address for use by the RPC server
-    #[arg(default_value_t = DEFAULT_RPC_ADDR, long)]
-    pub rpc_addr: SocketAddr,
+    /// Base URL used for requests to the RPC server.
+    #[arg(default_value_t = DEFAULT_RPC_URL.clone(), long)]
+    pub rpc_url: Url,
     /// Timeout for RPC requests in seconds.
     #[arg(default_value_t = DEFAULT_TIMEOUT_SECS, long = "timeout")]
     timeout_secs: u64,
@@ -170,12 +176,12 @@ pub struct Cli {
 impl Cli {
     pub fn new(
         command: Command,
-        rpc_addr: SocketAddr,
+        rpc_url: Url,
         timeout_secs: Option<u64>,
     ) -> Self {
         Self {
             command,
-            rpc_addr,
+            rpc_url,
             timeout_secs: timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS),
         }
     }
@@ -185,7 +191,7 @@ impl Cli {
     pub async fn run(self) -> anyhow::Result<String> {
         let rpc_client: HttpClient = HttpClientBuilder::default()
             .request_timeout(Duration::from_secs(self.timeout_secs))
-            .build(format!("http://{}", self.rpc_addr))?;
+            .build(self.rpc_url)?;
         let res = match self.command {
             Command::AmmBurn {
                 asset0,
