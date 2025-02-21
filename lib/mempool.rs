@@ -1,15 +1,31 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use heed::{types::SerdeBincode, Database, RoTxn, RwTxn};
-
-use crate::types::{
-    Address, AuthorizedTransaction, InPoint, OutPoint, Output, Txid,
+use fallible_iterator::FallibleIterator as _;
+use heed::types::SerdeBincode;
+use sneed::{
+    db, env, rwtxn, DatabaseUnique, DbError, EnvError, RoTxn, RwTxn,
+    RwTxnError, UnitKey,
 };
 
-#[derive(Debug, thiserror::Error)]
+use crate::types::{
+    Address, AuthorizedTransaction, InPoint, OutPoint, Output, Txid, Version,
+    VERSION,
+};
+
+#[derive(thiserror::Error, transitive::Transitive, Debug)]
+#[transitive(from(db::error::Delete))]
+#[transitive(from(db::error::Put))]
+#[transitive(from(db::error::TryGet))]
+#[transitive(from(env::error::CreateDb))]
+#[transitive(from(env::error::WriteTxn))]
+#[transitive(from(rwtxn::error::Commit))]
 pub enum Error {
-    #[error("heed error")]
-    Heed(#[from] heed::Error),
+    #[error(transparent)]
+    Db(#[from] DbError),
+    #[error("Database env error")]
+    DbEnv(#[from] EnvError),
+    #[error("Database write error")]
+    DbWrite(#[from] RwTxnError),
     #[error("Missing transaction {0}")]
     MissingTransaction(Txid),
     #[error("can't add transaction, utxo double spent")]
@@ -19,29 +35,37 @@ pub enum Error {
 #[derive(Clone)]
 pub struct MemPool {
     pub transactions:
-        Database<SerdeBincode<Txid>, SerdeBincode<AuthorizedTransaction>>,
-    pub spent_utxos: Database<SerdeBincode<OutPoint>, SerdeBincode<InPoint>>,
+        DatabaseUnique<SerdeBincode<Txid>, SerdeBincode<AuthorizedTransaction>>,
+    pub spent_utxos:
+        DatabaseUnique<SerdeBincode<OutPoint>, SerdeBincode<InPoint>>,
     /// Associates relevant txs to each address
     address_to_txs:
-        Database<SerdeBincode<Address>, SerdeBincode<HashSet<Txid>>>,
+        DatabaseUnique<SerdeBincode<Address>, SerdeBincode<HashSet<Txid>>>,
+    _version: DatabaseUnique<UnitKey, SerdeBincode<Version>>,
 }
 
 impl MemPool {
-    pub const NUM_DBS: u32 = 3;
+    pub const NUM_DBS: u32 = 4;
 
-    pub fn new(env: &heed::Env) -> Result<Self, Error> {
+    pub fn new(env: &sneed::Env) -> Result<Self, Error> {
         let mut rwtxn = env.write_txn()?;
         let transactions =
-            env.create_database(&mut rwtxn, Some("transactions"))?;
+            DatabaseUnique::create(env, &mut rwtxn, "transactions")?;
         let spent_utxos =
-            env.create_database(&mut rwtxn, Some("spent_utxos"))?;
+            DatabaseUnique::create(env, &mut rwtxn, "spent_utxos")?;
         let address_to_txs =
-            env.create_database(&mut rwtxn, Some("address_to_txs"))?;
+            DatabaseUnique::create(env, &mut rwtxn, "address_to_txs")?;
+        let version =
+            DatabaseUnique::create(env, &mut rwtxn, "mempool_version")?;
+        if version.try_get(&rwtxn, &())?.is_none() {
+            version.put(&mut rwtxn, &(), &*VERSION)?;
+        }
         rwtxn.commit()?;
         Ok(Self {
             transactions,
             spent_utxos,
             address_to_txs,
+            _version: version,
         })
     }
 
@@ -55,7 +79,7 @@ impl MemPool {
         Iter: IntoIterator<Item = (OutPoint, InPoint)>,
     {
         stxos.into_iter().try_for_each(|(outpoint, inpoint)| {
-            if self.spent_utxos.get(rwtxn, &outpoint)?.is_some() {
+            if self.spent_utxos.try_get(rwtxn, &outpoint)?.is_some() {
                 Err(Error::UtxoDoubleSpent)
             } else {
                 self.spent_utxos.put(rwtxn, &outpoint, &inpoint)?;
@@ -87,8 +111,10 @@ impl MemPool {
         txid: Txid,
         address: &Address,
     ) -> Result<(), Error> {
-        let mut associated_txs =
-            self.address_to_txs.get(rwtxn, address)?.unwrap_or_default();
+        let mut associated_txs = self
+            .address_to_txs
+            .try_get(rwtxn, address)?
+            .unwrap_or_default();
         associated_txs.insert(txid);
         self.address_to_txs.put(rwtxn, address, &associated_txs)?;
         Ok(())
@@ -116,7 +142,7 @@ impl MemPool {
         address: &Address,
     ) -> Result<(), Error> {
         let Some(mut associated_txs) =
-            self.address_to_txs.get(rwtxn, address)?
+            self.address_to_txs.try_get(rwtxn, address)?
         else {
             return Ok(());
         };
@@ -172,7 +198,7 @@ impl MemPool {
     pub fn delete(&self, rwtxn: &mut RwTxn, txid: Txid) -> Result<(), Error> {
         let mut pending_deletes = VecDeque::from([txid]);
         while let Some(txid) = pending_deletes.pop_front() {
-            if let Some(tx) = self.transactions.get(rwtxn, &txid)? {
+            if let Some(tx) = self.transactions.try_get(rwtxn, &txid)? {
                 let () = self.delete_stxos(rwtxn, &tx.transaction.inputs)?;
                 let () = self.unassoc_tx_with_relevant_addresses(rwtxn, &tx)?;
                 self.transactions.delete(rwtxn, &txid)?;
@@ -183,7 +209,7 @@ impl MemPool {
                     };
                     if let Some(InPoint::Regular {
                         txid: child_txid, ..
-                    }) = self.spent_utxos.get(rwtxn, &outpoint)?
+                    }) = self.spent_utxos.try_get(rwtxn, &outpoint)?
                     {
                         pending_deletes.push_back(child_txid);
                     }
@@ -195,27 +221,28 @@ impl MemPool {
 
     pub fn take(
         &self,
-        txn: &RoTxn,
+        rotxn: &RoTxn,
         number: usize,
     ) -> Result<Vec<AuthorizedTransaction>, Error> {
-        let mut transactions = vec![];
-        for item in self.transactions.iter(txn)?.take(number) {
-            let (_, transaction) = item?;
-            transactions.push(transaction);
-        }
-        Ok(transactions)
+        self.transactions
+            .iter(rotxn)
+            .map_err(DbError::from)?
+            .take(number)
+            .map(|(_, transaction)| Ok(transaction))
+            .collect()
+            .map_err(|err| DbError::from(err).into())
     }
 
     pub fn take_all(
         &self,
-        txn: &RoTxn,
+        rotxn: &RoTxn,
     ) -> Result<Vec<AuthorizedTransaction>, Error> {
-        let mut transactions = vec![];
-        for item in self.transactions.iter(txn)? {
-            let (_, transaction) = item?;
-            transactions.push(transaction);
-        }
-        Ok(transactions)
+        self.transactions
+            .iter(rotxn)
+            .map_err(DbError::from)?
+            .map(|(_, transaction)| Ok(transaction))
+            .collect()
+            .map_err(|err| DbError::from(err).into())
     }
 
     /// Get [`Txid`]s relevant to a particular address
@@ -224,7 +251,10 @@ impl MemPool {
         rotxn: &RoTxn,
         addr: &Address,
     ) -> Result<HashSet<Txid>, Error> {
-        let res = self.address_to_txs.get(rotxn, addr)?.unwrap_or_default();
+        let res = self
+            .address_to_txs
+            .try_get(rotxn, addr)?
+            .unwrap_or_default();
         Ok(res)
     }
 
@@ -238,7 +268,7 @@ impl MemPool {
             .into_iter()
             .map(|txid| {
                 self.transactions
-                    .get(rotxn, &txid)?
+                    .try_get(rotxn, &txid)?
                     .ok_or(Error::MissingTransaction(txid))
             })
             .collect()
