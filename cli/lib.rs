@@ -7,9 +7,12 @@ use std::{
 use clap::{Parser, Subcommand};
 use http::HeaderMap;
 use jsonrpsee::{core::client::ClientT, http_client::HttpClientBuilder};
-use plain_bitassets::types::{
-    Address, AssetId, BitAssetId, BlockHash, DutchAuctionId,
-    DutchAuctionParams, THIS_SIDECHAIN,
+use plain_bitassets::{
+    authorization::{Dst, Signature},
+    types::{
+        Address, AssetId, BitAssetData, BitAssetId, BlockHash, DutchAuctionId,
+        DutchAuctionParams, VerifyingKey, THIS_SIDECHAIN,
+    },
 };
 use plain_bitassets_app_rpc_api::RpcClient;
 use tracing_subscriber::layer::SubscriberExt as _;
@@ -20,8 +23,11 @@ use url::Url;
 pub enum Command {
     /// Burn an AMM position
     AmmBurn {
+        #[arg(long)]
         asset0: AssetId,
+        #[arg(long)]
         asset1: AssetId,
+        #[arg(long)]
         lp_token_amount: u64,
     },
     /// Mint an AMM position
@@ -82,9 +88,19 @@ pub enum Command {
     /// Generate a mnemonic seed phrase
     GenerateMnemonic,
     /// Get the state of the specified AMM pool
-    GetAmmPoolState { asset0: AssetId, asset1: AssetId },
+    GetAmmPoolState {
+        #[arg(long)]
+        asset0: AssetId,
+        #[arg(long)]
+        asset1: AssetId,
+    },
     /// Get the current price for the specified pair
-    GetAmmPrice { base: AssetId, quote: AssetId },
+    GetAmmPrice {
+        #[arg(long)]
+        base: AssetId,
+        #[arg(long)]
+        quote: AssetId,
+    },
     /// Get block data
     GetBlock { block_hash: BlockHash },
     /// Get the current block count
@@ -123,12 +139,34 @@ pub enum Command {
     OpenApiSchema,
     /// Get pending withdrawal bundle
     PendingWithdrawalBundle,
+    /// Register a BitAsset
+    RegisterBitasset {
+        plaintext_name: String,
+        #[arg(long)]
+        initial_supply: u64,
+        #[command(flatten)]
+        bitasset_data: Box<BitAssetData>,
+    },
     /// Reserve a BitAsset
     ReserveBitasset { plaintext_name: String },
     /// Set the wallet seed from a mnemonic seed phrase
     SetSeedFromMnemonic { mnemonic: String },
     /// Get total sidechain wealth
     SidechainWealth,
+    /// Sign an arbitrary message with the specified verifying key
+    SignArbitraryMsg {
+        #[arg(long)]
+        verifying_key: VerifyingKey,
+        #[arg(long)]
+        msg: String,
+    },
+    /// Sign an arbitrary message with the secret key for the specified address
+    SignArbitraryMsgAsAddr {
+        #[arg(long)]
+        address: Address,
+        #[arg(long)]
+        msg: String,
+    },
     /// Stop the node
     Stop,
     /// Transfer funds to the specified address
@@ -138,6 +176,28 @@ pub enum Command {
         value_sats: u64,
         #[arg(long)]
         fee_sats: u64,
+    },
+    /// Transfer bitassets to the specified address
+    TransferBitasset {
+        dest: Address,
+        #[arg(long)]
+        asset_id: BitAssetId,
+        #[arg(long)]
+        amount: u64,
+        #[arg(long)]
+        fee_sats: u64,
+    },
+    /// Verify a signature on a message against the specified verifying key.
+    /// Returns `true` if the signature is valid
+    VerifySignature {
+        #[arg(long)]
+        signature: Signature,
+        #[arg(long)]
+        verifying_key: VerifyingKey,
+        #[arg(long)]
+        dst: Dst,
+        #[arg(long)]
+        msg: String,
     },
     /// Initiate a withdrawal to the specified mainchain address
     Withdraw {
@@ -362,6 +422,20 @@ where
                 rpc_client.pending_withdrawal_bundle().await?;
             serde_json::to_string_pretty(&withdrawal_bundle)?
         }
+        Command::RegisterBitasset {
+            plaintext_name,
+            initial_supply,
+            bitasset_data,
+        } => {
+            let txid = rpc_client
+                .register_bitasset(
+                    plaintext_name,
+                    initial_supply,
+                    Some(*bitasset_data),
+                )
+                .await?;
+            format!("{txid}")
+        }
         Command::ReserveBitasset { plaintext_name } => {
             let txid = rpc_client.reserve_bitasset(plaintext_name).await?;
             format!("{txid}")
@@ -373,6 +447,15 @@ where
         Command::SidechainWealth => {
             let sidechain_wealth = rpc_client.sidechain_wealth_sats().await?;
             format!("{sidechain_wealth}")
+        }
+        Command::SignArbitraryMsg { verifying_key, msg } => {
+            let sig = rpc_client.sign_arbitrary_msg(verifying_key, msg).await?;
+            format!("{sig}")
+        }
+        Command::SignArbitraryMsgAsAddr { address, msg } => {
+            let authorization =
+                rpc_client.sign_arbitrary_msg_as_addr(address, msg).await?;
+            serde_json::to_string_pretty(&authorization)?
         }
         Command::Stop => {
             let () = rpc_client.stop().await?;
@@ -387,6 +470,28 @@ where
                 .transfer(dest, value_sats, fee_sats, None)
                 .await?;
             format!("{txid}")
+        }
+        Command::TransferBitasset {
+            dest,
+            asset_id,
+            amount,
+            fee_sats,
+        } => {
+            let txid = rpc_client
+                .transfer_bitasset(dest, asset_id, amount, fee_sats, None)
+                .await?;
+            format!("{txid}")
+        }
+        Command::VerifySignature {
+            signature,
+            verifying_key,
+            dst,
+            msg,
+        } => {
+            let res = rpc_client
+                .verify_signature(signature, verifying_key, dst, msg)
+                .await?;
+            format!("{res}")
         }
         Command::Withdraw {
             mainchain_address,

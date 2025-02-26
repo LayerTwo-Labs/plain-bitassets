@@ -7,6 +7,7 @@ use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use l2l_openapi::open_api;
 
 use plain_bitassets::{
+    authorization::{Dst, Signature},
     net::{Peer, PeerConnectionStatus},
     state::{AmmPoolState, BitAssetSeqId, DutchAuctionState},
     types::{
@@ -40,7 +41,7 @@ pub struct TxInfo {
     BitAssetData, BitAssetDataUpdates, BitAssetId, BitcoinOutputContent,
     BlockHash, Body, DutchAuctionId, DutchAuctionParams, EncryptionPubKey,
     FilledOutputContent, Header, MerkleRoot, OutPoint, Output, OutputContent,
-    PeerConnectionStatus, Transaction, TxData, Txid, TxIn,
+    PeerConnectionStatus, Signature, Transaction, TxData, Txid, TxIn,
     WithdrawalOutputContent, VerifyingKey,
 ])]
 #[rpc(client, server)]
@@ -287,6 +288,15 @@ pub trait Rpc {
     #[method(name = "openapi_schema")]
     async fn openapi_schema(&self) -> RpcResult<utoipa::openapi::OpenApi>;
 
+    /// Register a BitAsset
+    #[method(name = "register_bitasset")]
+    async fn register_bitasset(
+        &self,
+        plain_name: String,
+        initial_supply: u64,
+        bitasset_data: Option<BitAssetData>,
+    ) -> RpcResult<Txid>;
+
     /// Reserve a BitAsset
     #[method(name = "reserve_bitasset")]
     async fn reserve_bitasset(&self, plain_name: String) -> RpcResult<Txid>;
@@ -299,6 +309,22 @@ pub trait Rpc {
     /// Get total sidechain wealth in sats
     #[method(name = "sidechain_wealth")]
     async fn sidechain_wealth_sats(&self) -> RpcResult<u64>;
+
+    /// Sign an arbitrary message with the specified verifying key
+    #[method(name = "sign_arbitrary_msg")]
+    async fn sign_arbitrary_msg(
+        &self,
+        verifying_key: VerifyingKey,
+        msg: String,
+    ) -> RpcResult<Signature>;
+
+    /// Sign an arbitrary message with the secret key for the specified address
+    #[method(name = "sign_arbitrary_msg_as_addr")]
+    async fn sign_arbitrary_msg_as_addr(
+        &self,
+        address: Address,
+        msg: String,
+    ) -> RpcResult<Authorization>;
 
     /// Stop the node
     #[method(name = "stop")]
@@ -313,6 +339,28 @@ pub trait Rpc {
         fee: u64,
         memo: Option<String>,
     ) -> RpcResult<Txid>;
+
+    /// Transfer bitassets to the specified address
+    #[method(name = "transfer_bitasset")]
+    async fn transfer_bitasset(
+        &self,
+        dest: Address,
+        asset_id: BitAssetId,
+        amount: u64,
+        fee_sats: u64,
+        memo: Option<String>,
+    ) -> RpcResult<Txid>;
+
+    /// Verify a signature on a message against the specified verifying key.
+    /// Returns `true` if the signature is valid
+    #[method(name = "verify_signature")]
+    async fn verify_signature(
+        &self,
+        signature: Signature,
+        verifying_key: VerifyingKey,
+        dst: Dst,
+        msg: String,
+    ) -> RpcResult<bool>;
 
     /// Initiate a withdrawal to the specified mainchain address
     #[method(name = "withdraw")]

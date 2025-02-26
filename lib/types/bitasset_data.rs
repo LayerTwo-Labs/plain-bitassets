@@ -21,19 +21,29 @@ use crate::types::{EncryptionPubKey, Hash, VerifyingKey};
     Serialize,
     ToSchema,
 )]
+#[cfg_attr(feature = "clap", derive(clap::Args))]
+#[cfg_attr(feature = "clap", group(required = false, multiple = true))]
 pub struct BitAssetData {
     /// Commitment to arbitrary data
+    #[cfg_attr(feature = "clap", arg(
+        long,
+        value_parser = |s: &str| <Hash as hex::FromHex>::from_hex(s)
+    ))]
     #[schema(value_type = Option<String>)]
     pub commitment: Option<Hash>,
     /// Optional ipv4 addr
+    #[cfg_attr(feature = "clap", arg(long))]
     #[schema(value_type = Option<String>)]
     pub socket_addr_v4: Option<SocketAddrV4>,
     /// Optional ipv6 addr
+    #[cfg_attr(feature = "clap", arg(long))]
     #[schema(value_type = Option<String>)]
     pub socket_addr_v6: Option<SocketAddrV6>,
     /// Optional pubkey used for encryption
+    #[cfg_attr(feature = "clap", arg(long))]
     pub encryption_pubkey: Option<EncryptionPubKey>,
     /// Optional pubkey used for signing messages
+    #[cfg_attr(feature = "clap", arg(long))]
     pub signing_pubkey: Option<VerifyingKey>,
 }
 
