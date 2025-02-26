@@ -15,8 +15,7 @@ use futures::{
     },
     stream, StreamExt,
 };
-use heed::RwTxn;
-use thiserror::Error;
+use sneed::{db, DbError, EnvError, RwTxn, RwTxnError};
 use tokio::task::JoinHandle;
 use tokio_stream::StreamNotifyClose;
 use tokio_util::task::LocalPoolHandle;
@@ -36,16 +35,22 @@ use crate::{
     },
 };
 
-#[derive(Debug, Error)]
+#[derive(thiserror::Error, transitive::Transitive, Debug)]
+#[transitive(from(db::error::IterInit))]
+#[transitive(from(db::error::IterItem))]
 pub enum Error {
     #[error("archive error")]
     Archive(#[from] archive::Error),
     #[error("CUSF mainchain proto error")]
     CusfMainchain(#[from] proto::Error),
+    #[error(transparent)]
+    Db(#[from] DbError),
+    #[error("Database env error")]
+    DbEnv(#[from] EnvError),
+    #[error("Database write error")]
+    DbWrite(#[from] RwTxnError),
     #[error("Forward mainchain task request failed")]
     ForwardMainchainTaskRequest,
-    #[error("heed error")]
-    Heed(#[from] heed::Error),
     #[error("mempool error")]
     MemPool(#[from] mempool::Error),
     #[error("Net error")]
@@ -190,9 +195,9 @@ where
     let height = state.try_get_height(rwtxn)?.ok_or(state::Error::NoTip)?;
     let two_way_peg_data = {
         let last_applied_deposit_block = state
-            .deposit_blocks
-            .rev_iter(rwtxn)?
-            .transpose_into_fallible()
+            .deposit_blocks()
+            .rev_iter(rwtxn)
+            .map_err(DbError::from)?
             .find_map(|(_, (block_hash, applied_height))| {
                 if applied_height < height - 1 {
                     Ok(Some((block_hash, applied_height)))
@@ -201,16 +206,16 @@ where
                 }
             })?;
         let last_applied_withdrawal_bundle_event_block = state
-            .withdrawal_bundle_event_blocks
+            .withdrawal_bundle_event_blocks()
             .rev_iter(rwtxn)?
-            .transpose_into_fallible()
             .find_map(|(_, (block_hash, applied_height))| {
                 if applied_height < height - 1 {
                     Ok(Some((block_hash, applied_height)))
                 } else {
                     Ok(None)
                 }
-            })?;
+            })
+            .map_err(DbError::from)?;
         let start_block_hash = match (
             last_applied_deposit_block,
             last_applied_withdrawal_bundle_event_block,
@@ -267,7 +272,7 @@ where
 /// A result of `Ok(true)` indicates a successful re-org.
 /// A result of `Ok(false)` indicates that no re-org was attempted.
 async fn reorg_to_tip<Transport>(
-    env: &heed::Env,
+    env: &sneed::Env,
     archive: &Archive,
     cusf_mainchain: &mut mainchain::ValidatorClient<Transport>,
     mempool: &MemPool,
@@ -278,7 +283,7 @@ async fn reorg_to_tip<Transport>(
 where
     Transport: proto::Transport,
 {
-    let mut rwtxn = env.write_txn()?;
+    let mut rwtxn = env.write_txn().map_err(EnvError::from)?;
     let tip_hash = state.try_get_tip(&rwtxn)?;
     let tip_height = state.try_get_height(&rwtxn)?;
     if let Some(tip_hash) = tip_hash {
@@ -364,7 +369,7 @@ where
     }
     let tip = state.try_get_tip(&rwtxn)?;
     assert_eq!(tip, Some(new_tip.block_hash));
-    rwtxn.commit()?;
+    rwtxn.commit().map_err(RwTxnError::from)?;
     tracing::info!("synced to tip: {}", new_tip.block_hash);
     #[cfg(feature = "zmq")]
     {
@@ -387,7 +392,7 @@ where
 
 #[derive(Clone)]
 struct NetTaskContext<MainchainTransport> {
-    env: heed::Env,
+    env: sneed::Env,
     archive: Archive,
     cusf_mainchain: mainchain::ValidatorClient<MainchainTransport>,
     mainchain_task: MainchainTaskHandle,
@@ -473,15 +478,16 @@ where
                     return Ok(());
                 }
                 {
-                    let mut rwtxn = ctxt.env.write_txn()?;
+                    let mut rwtxn =
+                        ctxt.env.write_txn().map_err(EnvError::from)?;
                     let () =
                         ctxt.archive.put_body(&mut rwtxn, block_hash, body)?;
-                    rwtxn.commit()?;
+                    rwtxn.commit().map_err(RwTxnError::from)?;
                 }
                 // Notify the peer connection if all requested block bodies are
                 // now available
                 {
-                    let rotxn = ctxt.env.read_txn()?;
+                    let rotxn = ctxt.env.read_txn().map_err(EnvError::from)?;
                     let missing_bodies = ctxt
                         .archive
                         .get_missing_bodies(&rotxn, block_hash, ancestor)?;
@@ -496,7 +502,7 @@ where
                 // Check if any new tips can be applied,
                 // and send new tip ready if so
                 {
-                    let rotxn = ctxt.env.read_txn()?;
+                    let rotxn = ctxt.env.read_txn().map_err(EnvError::from)?;
                     let tip_hash = ctxt.state.try_get_tip(&rotxn)?;
                     // Find the BMM verification that is an ancestor of
                     // `main_descendant_tip`
@@ -625,7 +631,7 @@ where
                 }
                 // check that the end header height is as expected
                 {
-                    let rotxn = ctxt.env.read_txn()?;
+                    let rotxn = ctxt.env.read_txn().map_err(EnvError::from)?;
                     let start_height = if let Some(start_hash) = start_hash {
                         Some(ctxt.archive.get_height(&rotxn, start_hash)?)
                     } else {
@@ -654,7 +660,7 @@ where
                     prev_side_hash = Some(header.hash());
                 }
                 // Store new headers
-                let mut rwtxn = ctxt.env.write_txn()?;
+                let mut rwtxn = ctxt.env.write_txn().map_err(EnvError::from)?;
                 for header in &headers {
                     let block_hash = header.hash();
                     if ctxt
@@ -674,7 +680,7 @@ where
                         }
                     }
                 }
-                rwtxn.commit()?;
+                rwtxn.commit().map_err(RwTxnError::from)?;
                 // Notify peer connection that headers are available
                 let message = PeerConnectionMessage::Headers(peer_state_id);
                 let () = ctxt.net.push_internal_message(message, addr)?;
@@ -944,9 +950,13 @@ where
                                 .map_err(Error::SendNewTipReady)?;
                         }
                         PeerConnectionInfo::NewTransaction(new_tx) => {
-                            let mut rwtxn = self.ctxt.env.write_txn()?;
+                            let mut rwtxn = self
+                                .ctxt
+                                .env
+                                .write_txn()
+                                .map_err(EnvError::from)?;
                             self.ctxt.mempool.put(&mut rwtxn, &new_tx)?;
-                            rwtxn.commit()?;
+                            rwtxn.commit().map_err(RwTxnError::from)?;
                             // broadcast
                             let () = self
                                 .ctxt
@@ -996,7 +1006,7 @@ impl NetTaskHandle {
     #[allow(clippy::too_many_arguments)]
     pub fn new<MainchainTransport>(
         local_pool: LocalPoolHandle,
-        env: heed::Env,
+        env: sneed::Env,
         archive: Archive,
         cusf_mainchain: mainchain::ValidatorClient<MainchainTransport>,
         mainchain_task: MainchainTaskHandle,

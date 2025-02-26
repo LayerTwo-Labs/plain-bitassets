@@ -1,19 +1,13 @@
 [workspace]
 resolver = "2"
-members = [
-    "app",
-    "cli",
-    "integration_tests",
-    "lib",
-    "rpc-api",
-]
+members = ["app", "cli", "integration_tests", "lib", "rpc-api"]
 
 [workspace.package]
 authors = [ "Ash Manning <ash@layertwolabs.com>" ]
 edition = "2021"
 license-file = "LICENSE.txt"
 publish = false
-version = "0.11.3"
+version = "0.11.4"
 
 [workspace.dependencies]
 anyhow = "1.0.72"
@@ -25,6 +19,7 @@ clap = "4.5.4"
 fraction = "0.14.0"
 futures = "0.3.30"
 hex = "0.4.3"
+http = "1.2.0"
 itertools = "0.14.0"
 jsonrpsee = { version = "0.24.7", features = ["tracing"] }
 parking_lot = "0.12.1"
@@ -42,6 +37,7 @@ tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
 url = "2.5.4"
 utoipa = { version = "5.2.0", default-features = false }
+uuid = "1.13.1"
 
 [workspace.dependencies.bip300301_enforcer_lib]
 default-features = false

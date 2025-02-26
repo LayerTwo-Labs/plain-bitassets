@@ -1,17 +1,26 @@
+//! State errors
+
+use sneed::{db::error as db, env::error as env, rwtxn::error as rwtxn};
+use thiserror::Error;
+use transitive::Transitive;
+
 use crate::types::{
     AmountOverflowError, AmountUnderflowError, AssetId, BitAssetId, BlockHash,
     Hash, M6id, MerkleRoot, OutPoint, Txid, WithdrawalBundleError,
 };
 
 /// Errors related to an AMM pool
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Error, Transitive)]
+#[transitive(from(db::Delete))]
+#[transitive(from(db::Put))]
+#[transitive(from(db::TryGet))]
 pub enum Amm {
     #[error("AMM burn overflow")]
     BurnOverflow,
     #[error("AMM burn underflow")]
     BurnUnderflow,
     #[error("heed error")]
-    Heed(#[from] heed::Error),
+    Db(#[from] heed::Error),
     #[error("Insufficient liquidity")]
     InsufficientLiquidity,
     #[error("Invalid AMM burn")]
@@ -37,10 +46,14 @@ pub enum Amm {
 }
 
 /// Errors related to BitAssets
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Error, Transitive)]
+#[transitive(from(db::Delete))]
+#[transitive(from(db::Last))]
+#[transitive(from(db::Put))]
+#[transitive(from(db::TryGet))]
 pub enum BitAsset {
-    #[error("heed error")]
-    Heed(#[from] heed::Error),
+    #[error(transparent)]
+    Db(#[from] db::Error),
     #[error("missing BitAsset {bitasset:?}")]
     Missing { bitasset: BitAssetId },
     #[error(
@@ -61,10 +74,14 @@ pub enum BitAsset {
 
 /// Errors related to Dutch auctions
 pub mod dutch_auction {
+    use sneed::db::error as db;
+    use thiserror::Error;
+    use transitive::Transitive;
+
     use crate::types::DutchAuctionId;
 
     /// Errors when bidding on a Dutch auction
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug, Error)]
     pub enum Bid {
         #[error("Auction has already ended")]
         AuctionEnded,
@@ -87,7 +104,7 @@ pub mod dutch_auction {
     }
 
     /// Errors when creating a Dutch auction
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug, Error)]
     pub enum Create {
         #[error("Tx expired; Auction start block already exists")]
         Expired,
@@ -105,7 +122,7 @@ pub mod dutch_auction {
     }
 
     /// Errors when collecting the proceeds from a Dutch auction
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug, Error)]
     pub enum Collect {
         #[error("Auction has not ended yet")]
         AuctionNotFinished,
@@ -132,7 +149,10 @@ pub mod dutch_auction {
     }
 
     /// Errors related to Dutch auctions
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug, Error, Transitive)]
+    #[transitive(from(db::Delete))]
+    #[transitive(from(db::Put))]
+    #[transitive(from(db::TryGet))]
     pub enum Error {
         #[error(transparent)]
         Bid(#[from] Bid),
@@ -150,7 +170,7 @@ pub mod dutch_auction {
 }
 pub use dutch_auction::Error as DutchAuction;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Error)]
 pub enum InvalidHeader {
     #[error("expected block hash {expected}, but computed {computed}")]
     BlockHash {
@@ -164,7 +184,17 @@ pub enum InvalidHeader {
     },
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Error, Transitive)]
+#[transitive(from(db::Clear))]
+#[transitive(from(db::Delete))]
+#[transitive(from(db::IterInit))]
+#[transitive(from(db::IterItem))]
+#[transitive(from(db::Last))]
+#[transitive(from(db::Put))]
+#[transitive(from(db::TryGet))]
+#[transitive(from(env::CreateDb))]
+#[transitive(from(env::WriteTxn))]
+#[transitive(from(rwtxn::Commit))]
 pub enum Error {
     #[error(transparent)]
     Amm(#[from] Amm),
@@ -185,11 +215,11 @@ pub enum Error {
     #[error(transparent)]
     BorshSerialize(borsh::io::Error),
     #[error(transparent)]
+    Db(#[from] sneed::Error),
+    #[error(transparent)]
     DutchAuction(#[from] DutchAuction),
     #[error("failed to fill tx output contents: invalid transaction")]
     FillTxOutputContentsFailed,
-    #[error("heed error")]
-    Heed(#[from] heed::Error),
     #[error("invalid body: expected merkle root {expected}, but computed {computed}")]
     InvalidBody {
         expected: MerkleRoot,

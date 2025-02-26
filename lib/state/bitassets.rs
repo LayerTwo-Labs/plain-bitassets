@@ -2,8 +2,9 @@
 
 use std::net::{SocketAddrV4, SocketAddrV6};
 
-use heed::{types::SerdeBincode, Database, RoTxn, RwTxn};
+use heed::types::SerdeBincode;
 use serde::{Deserialize, Serialize};
+use sneed::{db, env, DatabaseUnique, RoDatabaseUnique, RoTxn, RwTxn};
 
 use crate::{
     state::{
@@ -266,17 +267,18 @@ pub struct SeqId(pub u32);
 #[derive(Clone)]
 pub struct Dbs {
     /// Associates BitAsset IDs (name hashes) with BitAsset sequence numbers
-    bitasset_to_seq: Database<SerdeBincode<BitAssetId>, SerdeBincode<SeqId>>,
+    bitasset_to_seq:
+        DatabaseUnique<SerdeBincode<BitAssetId>, SerdeBincode<SeqId>>,
     /// Associates BitAsset IDs (name hashes) with BitAsset data
     // TODO: make this read-only
-    pub(crate) bitassets:
-        Database<SerdeBincode<BitAssetId>, SerdeBincode<BitAssetData>>,
+    bitassets:
+        DatabaseUnique<SerdeBincode<BitAssetId>, SerdeBincode<BitAssetData>>,
     /// Associates tx hashes with BitAsset reservation commitments
-    reservations: Database<SerdeBincode<Txid>, SerdeBincode<Hash>>,
+    reservations: DatabaseUnique<SerdeBincode<Txid>, SerdeBincode<Hash>>,
     /// Associates BitAsset sequence numbers with BitAsset IDs (name hashes)
     // TODO: make this read-only
-    pub(crate) seq_to_bitasset:
-        Database<SerdeBincode<SeqId>, SerdeBincode<BitAssetId>>,
+    seq_to_bitasset:
+        DatabaseUnique<SerdeBincode<SeqId>, SerdeBincode<BitAssetId>>,
 }
 
 impl Dbs {
@@ -284,16 +286,16 @@ impl Dbs {
 
     /// Create / Open DBs. Does not commit the RwTxn.
     pub(in crate::state) fn new(
-        env: &heed::Env,
+        env: &sneed::Env,
         rwtxn: &mut RwTxn,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, env::error::CreateDb> {
         let bitasset_to_seq =
-            env.create_database(rwtxn, Some("bitasset_to_bitasset_seq"))?;
-        let bitassets = env.create_database(rwtxn, Some("bitassets"))?;
+            DatabaseUnique::create(env, rwtxn, "bitasset_to_bitasset_seq")?;
+        let bitassets = DatabaseUnique::create(env, rwtxn, "bitassets")?;
         let reservations =
-            env.create_database(rwtxn, Some("bitasset_reservations"))?;
+            DatabaseUnique::create(env, rwtxn, "bitasset_reservations")?;
         let seq_to_bitasset =
-            env.create_database(rwtxn, Some("bitasset_seq_to_bitasset"))?;
+            DatabaseUnique::create(env, rwtxn, "bitasset_seq_to_bitasset")?;
         Ok(Self {
             reservations,
             seq_to_bitasset,
@@ -302,12 +304,25 @@ impl Dbs {
         })
     }
 
+    pub fn bitassets(
+        &self,
+    ) -> &RoDatabaseUnique<SerdeBincode<BitAssetId>, SerdeBincode<BitAssetData>>
+    {
+        &self.bitassets
+    }
+
+    pub fn seq_to_bitasset(
+        &self,
+    ) -> &RoDatabaseUnique<SerdeBincode<SeqId>, SerdeBincode<BitAssetId>> {
+        &self.seq_to_bitasset
+    }
+
     /// The sequence number of the last registered BitAsset.
     /// Returns `None` if no BitAssets have been registered.
     pub(in crate::state) fn last_seq(
         &self,
         rotxn: &RoTxn,
-    ) -> Result<Option<SeqId>, Error> {
+    ) -> Result<Option<SeqId>, db::error::Last> {
         match self.seq_to_bitasset.last(rotxn)? {
             Some((seq, _)) => Ok(Some(seq)),
             None => Ok(None),
@@ -318,7 +333,7 @@ impl Dbs {
     pub(in crate::state) fn next_seq(
         &self,
         rotxn: &RoTxn,
-    ) -> Result<SeqId, Error> {
+    ) -> Result<SeqId, db::error::Last> {
         match self.last_seq(rotxn)? {
             Some(SeqId(seq)) => Ok(SeqId(seq + 1)),
             None => Ok(SeqId(0)),
@@ -330,8 +345,8 @@ impl Dbs {
         &self,
         rotxn: &RoTxn,
         bitasset: &BitAssetId,
-    ) -> Result<Option<BitAssetData>, heed::Error> {
-        self.bitassets.get(rotxn, bitasset)
+    ) -> Result<Option<BitAssetData>, db::error::TryGet> {
+        self.bitassets.try_get(rotxn, bitasset)
     }
 
     /// Return the Bitasset data. Returns an error if it does not exist.
@@ -352,10 +367,10 @@ impl Dbs {
         rotxn: &RoTxn,
         bitasset: &BitAssetId,
         height: u32,
-    ) -> Result<Option<crate::types::BitAssetData>, heed::Error> {
+    ) -> Result<Option<crate::types::BitAssetData>, db::error::TryGet> {
         let res = self
             .bitassets
-            .get(rotxn, bitasset)?
+            .try_get(rotxn, bitasset)?
             .and_then(|bitasset_data| bitasset_data.at_block_height(height));
         Ok(res)
     }
@@ -384,7 +399,7 @@ impl Dbs {
     ) -> Result<Option<crate::types::BitAssetData>, Error> {
         let res = self
             .bitassets
-            .get(rotxn, bitasset)?
+            .try_get(rotxn, bitasset)?
             .map(|bitasset_data| bitasset_data.current());
         Ok(res)
     }
@@ -408,8 +423,8 @@ impl Dbs {
         &self,
         rwtxn: &mut RwTxn,
         txid: &Txid,
-    ) -> Result<bool, Error> {
-        self.reservations.delete(rwtxn, txid).map_err(Error::Heed)
+    ) -> Result<bool, db::error::Delete> {
+        self.reservations.delete(rwtxn, txid)
     }
 
     /// Store a BitAsset reservation
@@ -418,10 +433,8 @@ impl Dbs {
         rwtxn: &mut RwTxn,
         txid: &Txid,
         commitment: &Hash,
-    ) -> Result<(), Error> {
-        self.reservations
-            .put(rwtxn, txid, commitment)
-            .map_err(Error::Heed)
+    ) -> Result<(), db::error::Put> {
+        self.reservations.put(rwtxn, txid, commitment)
     }
 
     /// Apply BitAsset updates
@@ -444,7 +457,7 @@ impl Dbs {
             .expect("should only contain BitAsset outputs");
         let mut bitasset_data = self
             .bitassets
-            .get(rwtxn, updated_bitasset)?
+            .try_get(rwtxn, updated_bitasset)?
             .ok_or(Error::Missing {
                 bitasset: *updated_bitasset,
             })?;
@@ -474,7 +487,7 @@ impl Dbs {
             .expect("should only contain BitAsset outputs");
         let mut bitasset_data = self
             .bitassets
-            .get(rwtxn, updated_bitasset)?
+            .try_get(rwtxn, updated_bitasset)?
             .ok_or(Error::Missing {
                 bitasset: *updated_bitasset,
             })?;
@@ -542,7 +555,7 @@ impl Dbs {
         filled_tx: &FilledTransaction,
         bitasset: BitAssetId,
     ) -> Result<(), Error> {
-        let Some(seq) = self.bitasset_to_seq.get(rwtxn, &bitasset)? else {
+        let Some(seq) = self.bitasset_to_seq.try_get(rwtxn, &bitasset)? else {
             return Err(Error::Missing { bitasset });
         };
         self.bitasset_to_seq.delete(rwtxn, &bitasset)?;
@@ -595,7 +608,7 @@ impl Dbs {
             .expect("should only contain BitAsset outputs");
         let mut bitasset_data = self
             .bitassets
-            .get(rwtxn, &minted_bitasset)?
+            .try_get(rwtxn, &minted_bitasset)?
             .ok_or(Error::Missing {
                 bitasset: minted_bitasset,
             })?;
@@ -635,7 +648,7 @@ impl Dbs {
             .expect("should only contain BitAsset outputs");
         let mut bitasset_data = self
             .bitassets
-            .get(rwtxn, &minted_bitasset)?
+            .try_get(rwtxn, &minted_bitasset)?
             .ok_or(Error::Missing {
                 bitasset: minted_bitasset,
             })?;

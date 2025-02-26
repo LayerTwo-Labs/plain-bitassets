@@ -11,6 +11,7 @@ use fallible_iterator::FallibleIterator;
 use fraction::Fraction;
 use futures::{future::BoxFuture, Stream};
 use hashlink::{linked_hash_map, LinkedHashMap};
+use sneed::{env, DbError, Env, EnvError, RwTxnError};
 use tokio::sync::Mutex;
 use tokio_util::task::LocalPoolHandle;
 use tonic::transport::Channel;
@@ -41,7 +42,10 @@ use net_task::NetTaskHandle;
 #[cfg(feature = "zmq")]
 use net_task::ZmqPubHandler;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(thiserror::Error, transitive::Transitive, Debug)]
+#[transitive(from(env::error::OpenEnv))]
+#[transitive(from(env::error::ReadTxn))]
+#[transitive(from(env::error::WriteTxn))]
 pub enum Error {
     #[error("address parse error")]
     AddrParse(#[from] std::net::AddrParseError),
@@ -53,8 +57,12 @@ pub enum Error {
     Archive(#[from] archive::Error),
     #[error("CUSF mainchain proto error")]
     CusfMainchain(#[from] proto::Error),
-    #[error("heed error")]
-    Heed(#[from] heed::Error),
+    #[error(transparent)]
+    Db(#[from] DbError),
+    #[error("Database env error")]
+    DbEnv(#[from] EnvError),
+    #[error("Database write error")]
+    DbWrite(#[from] RwTxnError),
     #[error("I/O error")]
     Io(#[from] std::io::Error),
     #[error("error requesting mainchain ancestors")]
@@ -74,7 +82,7 @@ pub enum Error {
     #[error("Send mainchain task request failed")]
     SendMainchainTaskRequest,
     #[error("state error")]
-    State(#[from] state::Error),
+    State(#[source] Box<state::Error>),
     #[error("Utreexo error: {0}")]
     Utreexo(String),
     #[error("Verify BMM error")]
@@ -84,12 +92,18 @@ pub enum Error {
     Zmq(#[from] zeromq::ZmqError),
 }
 
+impl From<state::Error> for Error {
+    fn from(err: state::Error) -> Self {
+        Self::State(Box::new(err))
+    }
+}
+
 /// Request any missing two way peg data up to the specified block hash.
 /// All ancestor headers must exist in the archive.
 // TODO: deposits only for now
 #[allow(dead_code)]
 async fn request_two_way_peg_data<Transport>(
-    env: &heed::Env,
+    env: &sneed::Env,
     archive: &Archive,
     mainchain: &mut mainchain::ValidatorClient<Transport>,
     block_hash: bitcoin::BlockHash,
@@ -137,7 +151,7 @@ where
         .try_for_each(|(block_hash, deposits)| {
             archive.put_deposits(&mut rwtxn, block_hash, deposits)
         })?;
-    rwtxn.commit()?;
+    rwtxn.commit().map_err(RwTxnError::from)?;
     Ok(())
 }
 
@@ -150,7 +164,7 @@ pub struct Node<MainchainTransport = Channel> {
     cusf_mainchain: Arc<Mutex<mainchain::ValidatorClient<MainchainTransport>>>,
     cusf_mainchain_wallet:
         Option<Arc<Mutex<mainchain::WalletClient<MainchainTransport>>>>,
-    env: heed::Env,
+    env: sneed::Env,
     _local_pool: LocalPoolHandle,
     mainchain_task: MainchainTaskHandle,
     mempool: MemPool,
@@ -187,16 +201,17 @@ where
         let env_path = datadir.join("data.mdb");
         // let _ = std::fs::remove_dir_all(&env_path);
         std::fs::create_dir_all(&env_path)?;
-        let env = unsafe {
-            heed::EnvOpenOptions::new()
+        let env = {
+            let mut env_open_opts = heed::EnvOpenOptions::new();
+            env_open_opts
                 .map_size(1024 * 1024 * 1024) // 1GB
                 .max_dbs(
                     State::NUM_DBS
                         + Archive::NUM_DBS
                         + MemPool::NUM_DBS
                         + Net::NUM_DBS,
-                )
-                .open(env_path)?
+                );
+            unsafe { Env::open(&env_open_opts, &env_path) }?
         };
         let state = State::new(&env)?;
         #[cfg(feature = "zmq")]
@@ -273,14 +288,18 @@ where
         base: AssetId,
         quote: AssetId,
     ) -> Result<Option<Fraction>, Error> {
-        let txn = self.env.read_txn()?;
+        let rotxn = self.env.read_txn()?;
         let amm_pair = AmmPair::new(base, quote);
         let Some(AmmPoolState {
             reserve0,
             reserve1,
             outstanding_lp_tokens: _,
             ..
-        }) = self.state.amm_pools.get(&txn, &amm_pair)?
+        }) = self
+            .state
+            .amm_pools()
+            .try_get(&rotxn, &amm_pair)
+            .map_err(state::Error::from)?
         else {
             return Ok(None);
         };
@@ -298,8 +317,12 @@ where
         &self,
         pair: AmmPair,
     ) -> Result<Option<AmmPoolState>, Error> {
-        let txn = self.env.read_txn()?;
-        let res = self.state.amm_pools.get(&txn, &pair)?;
+        let rotxn = self.env.read_txn()?;
+        let res = self
+            .state
+            .amm_pools()
+            .try_get(&rotxn, &pair)
+            .map_err(state::Error::from)?;
         Ok(res)
     }
 
@@ -321,43 +344,34 @@ where
     pub fn bitassets(
         &self,
     ) -> Result<Vec<(BitAssetSeqId, BitAssetId, BitAssetData)>, Error> {
-        let txn = self.env.read_txn()?;
+        let rotxn = self.env.read_txn()?;
         let bitasset_ids_to_data: HashMap<_, _> = self
             .state
-            .bitassets
-            .bitassets
-            .iter(&txn)?
-            .map(|res| {
-                res.map(|(bitasset_id, bitasset_data)| {
-                    (bitasset_id, bitasset_data.current())
-                })
+            .bitassets()
+            .bitassets()
+            .iter(&rotxn)
+            .map_err(state::Error::from)?
+            .map_err(state::Error::from)
+            .map(|(bitasset_id, bitasset_data)| {
+                Ok((bitasset_id, bitasset_data.current()))
             })
-            .collect::<Result<_, _>>()?;
+            .collect()?;
         let res = self
             .state
-            .bitassets
-            .seq_to_bitasset
-            .iter(&txn)?
-            .map(|res| {
-                res.map_err(Error::Heed).and_then(
-                    |(bitasset_seq_id, bitasset_id)| {
-                        let bitasset_data = bitasset_ids_to_data
-                            .get(&bitasset_id)
-                            .ok_or_else(|| {
-                                let err = state::error::BitAsset::Missing {
-                                    bitasset: bitasset_id,
-                                };
-                                Error::State(err.into())
-                            })?;
-                        Ok((
-                            bitasset_seq_id,
-                            bitasset_id,
-                            bitasset_data.clone(),
-                        ))
-                    },
-                )
+            .bitassets()
+            .seq_to_bitasset()
+            .iter(&rotxn)
+            .map_err(state::Error::from)?
+            .map_err(state::Error::from)
+            .map(|(bitasset_seq_id, bitasset_id)| {
+                let bitasset_data = bitasset_ids_to_data
+                    .get(&bitasset_id)
+                    .ok_or_else(|| state::error::BitAsset::Missing {
+                        bitasset: bitasset_id,
+                    })?;
+                Ok((bitasset_seq_id, bitasset_id, bitasset_data.clone()))
             })
-            .collect::<Result<_, _>>()?;
+            .collect()?;
         Ok(res)
     }
 
@@ -365,12 +379,14 @@ where
     pub fn dutch_auctions(
         &self,
     ) -> Result<Vec<(DutchAuctionId, DutchAuctionState)>, Error> {
-        let txn = self.env.read_txn()?;
+        let rotxn = self.env.read_txn()?;
         let res = self
             .state
-            .dutch_auctions
-            .iter(&txn)?
-            .collect::<Result<_, _>>()?;
+            .dutch_auctions()
+            .iter(&rotxn)
+            .map_err(state::Error::from)?
+            .map_err(state::Error::from)
+            .collect()?;
         Ok(res)
     }
 
@@ -378,8 +394,12 @@ where
         &self,
         auction_id: DutchAuctionId,
     ) -> Result<Option<DutchAuctionState>, Error> {
-        let txn = self.env.read_txn()?;
-        let res = self.state.dutch_auctions.get(&txn, &auction_id)?;
+        let rotxn = self.env.read_txn()?;
+        let res = self
+            .state
+            .dutch_auctions()
+            .try_get(&rotxn, &auction_id)
+            .map_err(state::Error::from)?;
         Ok(res)
     }
 
@@ -391,7 +411,7 @@ where
             |dutch_auction_state| {
                 dutch_auction_state.ok_or_else(|| {
                     let err = state::error::dutch_auction::Bid::MissingAuction;
-                    Error::State(state::Error::DutchAuction(err.into()))
+                    state::Error::DutchAuction(err.into()).into()
                 })
             },
         )
@@ -439,11 +459,11 @@ where
         bitasset: &BitAssetId,
         height: u32,
     ) -> Result<BitAssetData, Error> {
-        let txn = self.env.read_txn()?;
+        let rotxn = self.env.read_txn()?;
         Ok(self
             .state
-            .bitassets
-            .get_bitasset_data_at_block_height(&txn, bitasset, height)
+            .bitassets()
+            .get_bitasset_data_at_block_height(&rotxn, bitasset, height)
             .map_err(state::Error::BitAsset)?)
     }
 
@@ -452,11 +472,11 @@ where
         &self,
         bitasset: &BitAssetId,
     ) -> Result<Option<BitAssetData>, Error> {
-        let txn = self.env.read_txn()?;
+        let rotxn = self.env.read_txn()?;
         Ok(self
             .state
-            .bitassets
-            .try_get_current_bitasset_data(&txn, bitasset)
+            .bitassets()
+            .try_get_current_bitasset_data(&rotxn, bitasset)
             .map_err(state::Error::BitAsset)?)
     }
 
@@ -465,11 +485,11 @@ where
         &self,
         bitasset: &BitAssetId,
     ) -> Result<BitAssetData, Error> {
-        let txn = self.env.read_txn()?;
+        let rotxn = self.env.read_txn()?;
         Ok(self
             .state
-            .bitassets
-            .get_current_bitasset_data(&txn, bitasset)
+            .bitassets()
+            .get_current_bitasset_data(&rotxn, bitasset)
             .map_err(state::Error::BitAsset)?)
     }
 
@@ -481,7 +501,7 @@ where
             let mut rotxn = self.env.write_txn()?;
             self.state.validate_transaction(&rotxn, &transaction)?;
             self.mempool.put(&mut rotxn, &transaction)?;
-            rotxn.commit()?;
+            rotxn.commit().map_err(RwTxnError::from)?;
         }
         self.net.push_tx(Default::default(), transaction);
         Ok(())
@@ -500,8 +520,7 @@ where
         let rotxn = self.env.read_txn()?;
         let res = self
             .state
-            .get_latest_failed_withdrawal_bundle(&rotxn)
-            .map_err(Error::from)?
+            .get_latest_failed_withdrawal_bundle(&rotxn)?
             .map(|(height, _)| height);
         Ok(res)
     }
@@ -513,7 +532,12 @@ where
         let rotxn = self.env.read_txn()?;
         let mut spent = vec![];
         for outpoint in outpoints {
-            if let Some(output) = self.state.stxos.get(&rotxn, outpoint)? {
+            if let Some(output) = self
+                .state
+                .stxos()
+                .try_get(&rotxn, outpoint)
+                .map_err(state::Error::from)?
+            {
                 spent.push((*outpoint, output));
             }
         }
@@ -527,11 +551,14 @@ where
     where
         OutPoints: IntoIterator<Item = &'a OutPoint>,
     {
-        let txn = self.env.read_txn()?;
+        let rotxn = self.env.read_txn()?;
         let mut spent = vec![];
         for outpoint in outpoints {
-            if let Some(inpoint) =
-                self.mempool.spent_utxos.get(&txn, outpoint)?
+            if let Some(inpoint) = self
+                .mempool
+                .spent_utxos
+                .try_get(&rotxn, outpoint)
+                .map_err(mempool::Error::from)?
             {
                 spent.push((*outpoint, inpoint));
             }
@@ -602,13 +629,13 @@ where
         &self,
         block_hash: BlockHash,
     ) -> Result<Option<Body>, Error> {
-        let txn = self.env.read_txn()?;
-        Ok(self.archive.try_get_body(&txn, block_hash)?)
+        let rotxn = self.env.read_txn()?;
+        Ok(self.archive.try_get_body(&rotxn, block_hash)?)
     }
 
     pub fn get_body(&self, block_hash: BlockHash) -> Result<Body, Error> {
-        let txn = self.env.read_txn()?;
-        Ok(self.archive.get_body(&txn, block_hash)?)
+        let rotxn = self.env.read_txn()?;
+        Ok(self.archive.get_body(&rotxn, block_hash)?)
     }
 
     pub fn get_bmm_inclusions(
@@ -636,15 +663,15 @@ where
     pub fn get_all_transactions(
         &self,
     ) -> Result<Vec<AuthorizedTransaction>, Error> {
-        let txn = self.env.read_txn()?;
-        let transactions = self.mempool.take_all(&txn)?;
+        let rotxn = self.env.read_txn()?;
+        let transactions = self.mempool.take_all(&rotxn)?;
         Ok(transactions)
     }
 
     /// Get total sidechain wealth in Bitcoin
     pub fn get_sidechain_wealth(&self) -> Result<bitcoin::Amount, Error> {
-        let txn = self.env.read_txn()?;
-        Ok(self.state.sidechain_wealth(&txn)?)
+        let rotxn = self.env.read_txn()?;
+        Ok(self.state.sidechain_wealth(&rotxn)?)
     }
 
     pub fn get_transactions(
@@ -703,7 +730,7 @@ where
             spent_utxos.extend(filled_transaction.transaction.inputs());
             returned_transactions.push(filled_transaction);
         }
-        rwtxn.commit()?;
+        rwtxn.commit().map_err(RwTxnError::from)?;
         Ok((returned_transactions, fee))
     }
 
@@ -721,8 +748,11 @@ where
             let body = self.archive.get_body(&rotxn, *block_hash)?;
             let tx = body.transactions.into_iter().nth(*txin as usize).unwrap();
             Ok(Some(tx))
-        } else if let Some(auth_tx) =
-            self.mempool.transactions.get(&rotxn, &txid)?
+        } else if let Some(auth_tx) = self
+            .mempool
+            .transactions
+            .try_get(&rotxn, &txid)
+            .map_err(mempool::Error::from)?
         {
             Ok(Some(auth_tx.transaction))
         } else {
@@ -764,7 +794,12 @@ where
             let res = (auth_tx, Some(txin));
             return Ok(Some(res));
         }
-        if let Some(auth_tx) = self.mempool.transactions.get(&rotxn, &txid)? {
+        if let Some(auth_tx) = self
+            .mempool
+            .transactions
+            .try_get(&rotxn, &txid)
+            .map_err(mempool::Error::from)?
+        {
             match self.state.fill_authorized_transaction(&rotxn, auth_tx) {
                 Ok(filled_tx) => {
                     let res = (filled_tx, None);
@@ -781,10 +816,10 @@ where
     pub fn get_pending_withdrawal_bundle(
         &self,
     ) -> Result<Option<WithdrawalBundle>, Error> {
-        let txn = self.env.read_txn()?;
+        let rotxn = self.env.read_txn()?;
         let bundle = self
             .state
-            .get_pending_withdrawal_bundle(&txn)?
+            .get_pending_withdrawal_bundle(&rotxn)?
             .map(|(bundle, _)| bundle);
         Ok(bundle)
     }
@@ -792,7 +827,7 @@ where
     pub fn remove_from_mempool(&self, txid: Txid) -> Result<(), Error> {
         let mut rwtxn = self.env.write_txn()?;
         let () = self.mempool.delete(&mut rwtxn, txid)?;
-        rwtxn.commit()?;
+        rwtxn.commit().map_err(RwTxnError::from)?;
         Ok(())
     }
 
@@ -868,7 +903,7 @@ where
         {
             let mut rwtxn = self.env.write_txn()?;
             let () = self.archive.put_header(&mut rwtxn, header)?;
-            rwtxn.commit()?;
+            rwtxn.commit().map_err(RwTxnError::from)?;
         }
         tracing::trace!("Stored header: {block_hash}");
         // Check BMM
@@ -885,7 +920,6 @@ where
                 );
                 return Ok(false);
             }
-            rotxn.commit()?;
         }
         // Check that ancestor bodies exist, and store body
         {
@@ -909,11 +943,11 @@ where
                 );
                 return Ok(false);
             }
-            rotxn.commit()?;
+            drop(rotxn);
             if missing_bodies == vec![block_hash] {
                 let mut rwtxn = self.env.write_txn()?;
                 let () = self.archive.put_body(&mut rwtxn, block_hash, body)?;
-                rwtxn.commit()?;
+                rwtxn.commit().map_err(RwTxnError::from)?;
             }
         }
         // Submit new tip
