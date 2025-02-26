@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, task::Poll};
+use std::task::Poll;
 
 use eframe::egui::{self, Color32, RichText};
 use plain_bitassets::{util::Watchable, wallet::Wallet};
@@ -190,7 +190,7 @@ impl EguiApp {
         app: Option<App>,
         cc: &eframe::CreationContext<'_>,
         logs_capture: LineBuffer,
-        rpc_addr: SocketAddr,
+        rpc_addr: url::Url,
     ) -> Self {
         // Customize egui here with cc.egui_ctx.set_fonts and cc.egui_ctx.set_visuals.
         // Restore app state using cc.storage (requires the "persistence" feature).

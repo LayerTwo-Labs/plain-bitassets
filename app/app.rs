@@ -42,10 +42,10 @@ pub enum Error {
     #[error(transparent)]
     Other(#[from] anyhow::Error),
     #[error(
-        "Unable to verify existence of CUSF mainchain service(s) at {address}"
+        "Unable to verify existence of CUSF mainchain service(s) at {url}"
     )]
     VerifyMainchainServices {
-        address: std::net::SocketAddr,
+        url: url::Url,
         source: tonic::Status,
     },
     #[error("wallet error")]
@@ -217,10 +217,13 @@ impl App {
             let mnemonic = std::fs::read_to_string(seed_phrase_path)?;
             let () = wallet.set_seed_from_mnemonic(mnemonic.as_str())?;
         }
-        tracing::info!("Connecting to mainchain at {}", config.main_addr);
+        tracing::info!(
+            url = %config.mainchain_grpc_url,
+            "Connecting to mainchain"
+        );
         let rt_guard = runtime.enter();
         let transport = tonic::transport::channel::Channel::from_shared(
-            format!("https://{}", config.main_addr),
+            config.mainchain_grpc_url.to_string(),
         )
         .unwrap()
         .concurrency_limit(256)
@@ -228,7 +231,7 @@ impl App {
         let (cusf_mainchain, cusf_mainchain_wallet) = if runtime
             .block_on(Self::check_proto_support(transport.clone()))
             .map_err(|err| Error::VerifyMainchainServices {
-                address: config.main_addr,
+                url: config.mainchain_grpc_url.clone(),
                 source: err,
             })? {
             (
