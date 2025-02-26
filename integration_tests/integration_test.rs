@@ -9,6 +9,7 @@ use crate::{
     setup::{Init, PostSetup},
     unknown_withdrawal::unknown_withdrawal_trial,
     util::BinPaths,
+    vote::vote_trial,
 };
 
 fn deposit_withdraw_roundtrip(
@@ -31,6 +32,7 @@ pub fn tests(
     vec![
         deposit_withdraw_roundtrip(bin_paths.clone()),
         ibd_trial(bin_paths.clone()),
-        unknown_withdrawal_trial(bin_paths),
+        unknown_withdrawal_trial(bin_paths.clone()),
+        vote_trial(bin_paths),
     ]
 }

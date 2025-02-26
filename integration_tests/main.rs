@@ -6,6 +6,7 @@ mod integration_test;
 mod setup;
 mod unknown_withdrawal;
 mod util;
+mod vote;
 
 #[derive(Parser)]
 struct Cli {

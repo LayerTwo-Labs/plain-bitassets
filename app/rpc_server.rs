@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, net::SocketAddr};
+use std::{borrow::Cow, cmp::Ordering, net::SocketAddr};
 
 use bitcoin::Amount;
 use fraction::Fraction;
@@ -9,11 +9,12 @@ use jsonrpsee::{
 };
 
 use plain_bitassets::{
+    authorization::{self, Dst, Signature},
     net::Peer,
     state::{self, AmmPair, AmmPoolState, BitAssetSeqId, DutchAuctionState},
     types::{
-        Address, AssetId, BitAssetData, BitAssetId, Block, BlockHash,
-        DutchAuctionId, DutchAuctionParams, EncryptionPubKey,
+        Address, AssetId, Authorization, BitAssetData, BitAssetId, Block,
+        BlockHash, DutchAuctionId, DutchAuctionParams, EncryptionPubKey,
         FilledOutputContent, PointedOutput, Transaction, Txid, VerifyingKey,
         WithdrawalBundle,
     },
@@ -517,6 +518,28 @@ impl RpcServer for RpcServerImpl {
             .map_err(custom_err)
     }
 
+    async fn register_bitasset(
+        &self,
+        plain_name: String,
+        initial_supply: u64,
+        bitasset_data: Option<BitAssetData>,
+    ) -> RpcResult<Txid> {
+        let mut tx = Transaction::default();
+        let bitasset_data = Cow::Owned(bitasset_data.unwrap_or_default());
+        let () = match self.app.wallet.register_bitasset(
+            &mut tx,
+            &plain_name,
+            bitasset_data,
+            initial_supply,
+        ) {
+            Ok(()) => (),
+            Err(err) => return Err(custom_err(err)),
+        };
+        let txid = tx.txid();
+        let () = self.app.sign_and_send(tx).map_err(custom_err)?;
+        Ok(txid)
+    }
+
     async fn reserve_bitasset(&self, plain_name: String) -> RpcResult<Txid> {
         let mut tx = Transaction::default();
         let () = match self.app.wallet.reserve_bitasset(&mut tx, &plain_name) {
@@ -539,6 +562,28 @@ impl RpcServer for RpcServerImpl {
         let sidechain_wealth =
             self.app.node.get_sidechain_wealth().map_err(custom_err)?;
         Ok(sidechain_wealth.to_sat())
+    }
+
+    async fn sign_arbitrary_msg(
+        &self,
+        verifying_key: VerifyingKey,
+        msg: String,
+    ) -> RpcResult<Signature> {
+        self.app
+            .wallet
+            .sign_arbitrary_msg(&verifying_key, &msg)
+            .map_err(custom_err)
+    }
+
+    async fn sign_arbitrary_msg_as_addr(
+        &self,
+        address: Address,
+        msg: String,
+    ) -> RpcResult<Authorization> {
+        self.app
+            .wallet
+            .sign_arbitrary_msg_as_addr(&address, &msg)
+            .map_err(custom_err)
     }
 
     async fn stop(&self) {
@@ -572,6 +617,53 @@ impl RpcServer for RpcServerImpl {
         let txid = tx.txid();
         let () = self.app.sign_and_send(tx).map_err(custom_err)?;
         Ok(txid)
+    }
+
+    async fn transfer_bitasset(
+        &self,
+        dest: Address,
+        asset_id: BitAssetId,
+        amount: u64,
+        fee_sats: u64,
+        memo: Option<String>,
+    ) -> RpcResult<Txid> {
+        let memo = match memo {
+            None => None,
+            Some(memo) => {
+                let hex = hex::decode(memo).map_err(custom_err)?;
+                Some(hex)
+            }
+        };
+        let tx = self
+            .app
+            .wallet
+            .create_bitasset_transfer(
+                dest,
+                asset_id,
+                amount,
+                Amount::from_sat(fee_sats),
+                memo,
+            )
+            .map_err(custom_err)?;
+        let txid = tx.txid();
+        let () = self.app.sign_and_send(tx).map_err(custom_err)?;
+        Ok(txid)
+    }
+
+    async fn verify_signature(
+        &self,
+        signature: Signature,
+        verifying_key: VerifyingKey,
+        dst: Dst,
+        msg: String,
+    ) -> RpcResult<bool> {
+        let res = authorization::verify(
+            signature,
+            &verifying_key,
+            dst,
+            msg.as_bytes(),
+        );
+        Ok(res)
     }
 
     async fn withdraw(

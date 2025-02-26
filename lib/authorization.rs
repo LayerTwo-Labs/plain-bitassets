@@ -1,4 +1,7 @@
+use std::str::FromStr;
+
 use borsh::BorshSerialize;
+use hex::FromHex;
 use rayon::iter::{IntoParallelRefIterator as _, ParallelIterator as _};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -8,9 +11,85 @@ use crate::types::{
     VerifyingKey,
 };
 
-pub use ed25519_dalek::{
-    Signature, SignatureError, Signer, SigningKey, Verifier,
-};
+pub use ed25519_dalek::{SignatureError, Signer, SigningKey, Verifier};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ToSchema)]
+#[repr(transparent)]
+#[schema(value_type = String)]
+pub struct Signature(pub ed25519_dalek::Signature);
+
+impl BorshSerialize for Signature {
+    fn serialize<W: std::io::Write>(
+        &self,
+        writer: &mut W,
+    ) -> std::io::Result<()> {
+        self.0.to_bytes().serialize(writer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Signature {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        if deserializer.is_human_readable() {
+            hex::serde::deserialize(deserializer)
+        } else {
+            ed25519_dalek::Signature::deserialize(deserializer).map(Self)
+        }
+    }
+}
+
+impl std::fmt::Display for Signature {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FromHex for Signature {
+    type Error = <[u8; ed25519_dalek::Signature::BYTE_SIZE] as FromHex>::Error;
+
+    fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Self::Error> {
+        let bytes =
+            <[u8; ed25519_dalek::Signature::BYTE_SIZE] as FromHex>::from_hex(
+                hex,
+            )?;
+        Ok(Self(ed25519_dalek::Signature::from_bytes(&bytes)))
+    }
+}
+
+impl FromStr for Signature {
+    type Err = <Self as FromHex>::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_hex(s)
+    }
+}
+
+impl Serialize for Signature {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        if serializer.is_human_readable() {
+            hex::serde::serialize(self.0.to_bytes(), serializer)
+        } else {
+            self.0.serialize(serializer)
+        }
+    }
+}
+
+/// Domain seperation tag for signing messages
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, ToSchema)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+#[cfg_attr(feature = "clap", value(rename_all = "lower"))]
+#[repr(u8)]
+#[serde(rename_all = "lowercase")]
+pub enum Dst {
+    Transaction = 0,
+    /// Arbitrary, non-protocol messages
+    Arbitrary = u8::MAX,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -28,16 +107,6 @@ pub enum Error {
     },
 }
 
-fn borsh_serialize_signature<W>(
-    sig: &Signature,
-    writer: &mut W,
-) -> borsh::io::Result<()>
-where
-    W: borsh::io::Write,
-{
-    borsh::BorshSerialize::serialize(&sig.to_bytes(), writer)
-}
-
 #[derive(
     BorshSerialize,
     Debug,
@@ -51,8 +120,6 @@ where
 pub struct Authorization {
     #[schema(schema_with = <String as utoipa::PartialSchema>::schema)]
     pub verifying_key: VerifyingKey,
-    #[borsh(serialize_with = "borsh_serialize_signature")]
-    #[schema(schema_with = <String as utoipa::PartialSchema>::schema)]
     pub signature: Signature,
 }
 
@@ -87,22 +154,29 @@ pub fn get_address(verifying_key: &VerifyingKey) -> Address {
 
 struct Package<'a> {
     messages: Vec<&'a [u8]>,
-    signatures: Vec<Signature>,
+    signatures: Vec<ed25519_dalek::Signature>,
     verifying_keys: Vec<ed25519_dalek::VerifyingKey>,
+}
+
+/// Canonical message to sign a tx
+fn tx_msg_canonical(tx: &Transaction) -> borsh::io::Result<Vec<u8>> {
+    let mut buf = vec![Dst::Transaction as u8];
+    borsh::to_writer(&mut buf, tx)?;
+    Ok(buf)
 }
 
 pub fn verify_authorized_transaction(
     transaction: &AuthorizedTransaction,
 ) -> Result<(), Error> {
-    let tx_bytes_canonical = borsh::to_vec(&transaction.transaction)?;
+    let tx_msg_canonical = tx_msg_canonical(&transaction.transaction)?;
     let messages: Vec<_> = std::iter::repeat_n(
-        tx_bytes_canonical.as_slice(),
+        tx_msg_canonical.as_slice(),
         transaction.authorizations.len(),
     )
     .collect();
     let (verifying_keys, signatures): (
         Vec<ed25519_dalek::VerifyingKey>,
-        Vec<Signature>,
+        Vec<ed25519_dalek::Signature>,
     ) = transaction
         .authorizations
         .iter()
@@ -110,7 +184,7 @@ pub fn verify_authorized_transaction(
             |Authorization {
                  verifying_key,
                  signature,
-             }| (verifying_key.0, signature),
+             }| (verifying_key.0, signature.0),
         )
         .unzip();
     ed25519_dalek::verify_batch(&messages, &signatures, &verifying_keys)?;
@@ -125,7 +199,7 @@ pub fn verify_authorizations(body: &Body) -> Result<(), Error> {
     let serialized_transactions: Vec<Vec<u8>> = body
         .transactions
         .par_iter()
-        .map(borsh::to_vec)
+        .map(tx_msg_canonical)
         .collect::<Result<_, _>>()?;
     let serialized_transactions =
         serialized_transactions.iter().map(Vec::as_slice);
@@ -151,7 +225,7 @@ pub fn verify_authorizations(body: &Body) -> Result<(), Error> {
             &pairs[i * package_size..(i + 1) * package_size]
         {
             package.messages.push(*message);
-            package.signatures.push(authorization.signature);
+            package.signatures.push(authorization.signature.0);
             package.verifying_keys.push(authorization.verifying_key.0);
         }
         packages.push(package);
@@ -160,7 +234,7 @@ pub fn verify_authorizations(body: &Body) -> Result<(), Error> {
         packages[num_threads - 1].messages.push(*message);
         packages[num_threads - 1]
             .signatures
-            .push(authorization.signature);
+            .push(authorization.signature.0);
         packages[num_threads - 1]
             .verifying_keys
             .push(authorization.verifying_key.0);
@@ -188,12 +262,32 @@ pub fn verify_authorizations(body: &Body) -> Result<(), Error> {
     Ok(())
 }
 
-pub fn sign(
+/// Sign a message with DST prefix
+pub fn sign(signing_key: &SigningKey, dst: Dst, msg: &[u8]) -> Signature {
+    let msg_buf = [&[dst as u8], msg].concat();
+    Signature(signing_key.sign(&msg_buf))
+}
+
+/// Verify a message with DST prefix
+pub fn verify(
+    signature: Signature,
+    verifying_key: &VerifyingKey,
+    dst: Dst,
+    msg: &[u8],
+) -> bool {
+    let msg_buf = [&[dst as u8], msg].concat();
+    verifying_key
+        .0
+        .verify_strict(&msg_buf, &signature.0)
+        .is_ok()
+}
+
+pub fn sign_tx(
     signing_key: &SigningKey,
     transaction: &Transaction,
 ) -> Result<Signature, Error> {
     let tx_bytes_canonical = borsh::to_vec(&transaction)?;
-    Ok(signing_key.sign(&tx_bytes_canonical))
+    Ok(sign(signing_key, Dst::Transaction, &tx_bytes_canonical))
 }
 
 pub fn authorize(
@@ -214,7 +308,7 @@ pub fn authorize(
         }
         let authorization = Authorization {
             verifying_key,
-            signature: signing_key.sign(&tx_bytes_canonical),
+            signature: sign(signing_key, Dst::Transaction, &tx_bytes_canonical),
         };
         authorizations.push(authorization);
     }

@@ -20,7 +20,7 @@ use thiserror::Error;
 use tokio_stream::{wrappers::WatchStream, StreamMap};
 
 use crate::{
-    authorization::{get_address, Authorization},
+    authorization::{self, get_address, Authorization, Signature},
     types::{
         Address, AmountOverflowError, AmountUnderflowError, AssetId,
         AuthorizedTransaction, BitAssetData, BitAssetId, BitcoinOutputContent,
@@ -296,7 +296,6 @@ impl Wallet {
     }
 
     /// Get the tx signing key that corresponds to the provided verifying key
-    #[allow(dead_code)]
     fn get_message_signing_key_for_vk(
         &self,
         rotxn: &RoTxn,
@@ -488,17 +487,52 @@ impl Wallet {
         )?;
         let change = total - value - fee;
         let inputs = coins.into_keys().collect();
-        let outputs = vec![
-            Output {
-                address,
-                content: OutputContent::Bitcoin(BitcoinOutputContent(value)),
-                memo: memo.unwrap_or_default(),
-            },
-            Output::new(
+        let mut outputs = vec![Output {
+            address,
+            content: OutputContent::Bitcoin(BitcoinOutputContent(value)),
+            memo: memo.unwrap_or_default(),
+        }];
+        if change != Amount::ZERO {
+            outputs.push(Output::new(
                 self.get_new_address()?,
                 OutputContent::Bitcoin(BitcoinOutputContent(change)),
-            ),
-        ];
+            ))
+        }
+        Ok(Transaction::new(inputs, outputs))
+    }
+
+    pub fn create_bitasset_transfer(
+        &self,
+        address: Address,
+        asset_id: BitAssetId,
+        amount: u64,
+        fee: bitcoin::Amount,
+        memo: Option<Vec<u8>>,
+    ) -> Result<Transaction, Error> {
+        let (total_sats, bitcoins) = self.select_bitcoins(fee)?;
+        let change_sats = total_sats - fee;
+        let mut inputs: Vec<_> = bitcoins.into_keys().collect();
+        let (total_bitasset, bitasset_utxos) =
+            self.select_bitasset_utxos(asset_id, amount)?;
+        let bitasset_change = total_bitasset - amount;
+        inputs.extend(bitasset_utxos.into_keys());
+        let mut outputs = vec![Output {
+            address,
+            content: OutputContent::BitAsset(amount),
+            memo: memo.unwrap_or_default(),
+        }];
+        if change_sats != Amount::ZERO {
+            outputs.push(Output::new(
+                self.get_new_address()?,
+                OutputContent::Bitcoin(BitcoinOutputContent(change_sats)),
+            ))
+        }
+        if bitasset_change != 0 {
+            outputs.push(Output::new(
+                self.get_new_address()?,
+                OutputContent::BitAsset(bitasset_change),
+            ))
+        }
         Ok(Transaction::new(inputs, outputs))
     }
 
@@ -1461,7 +1495,7 @@ impl Wallet {
                 })?;
             let tx_signing_key = self.get_tx_signing_key(&rotxn, index)?;
             let signature =
-                crate::authorization::sign(&tx_signing_key, &transaction)?;
+                crate::authorization::sign_tx(&tx_signing_key, &transaction)?;
             authorizations.push(Authorization {
                 verifying_key: tx_signing_key.verifying_key().into(),
                 signature,
@@ -1477,6 +1511,35 @@ impl Wallet {
         let rotxn = self.env.read_txn()?;
         let res = self.index_to_address.len(&rotxn)? as u32;
         Ok(res)
+    }
+
+    pub fn sign_arbitrary_msg(
+        &self,
+        verifying_key: &VerifyingKey,
+        msg: &str,
+    ) -> Result<Signature, Error> {
+        use authorization::{sign, Dst};
+        let rotxn = self.env.read_txn()?;
+        let signing_key =
+            self.get_message_signing_key_for_vk(&rotxn, verifying_key)?;
+        let res = sign(&signing_key, Dst::Arbitrary, msg.as_bytes());
+        Ok(res)
+    }
+
+    pub fn sign_arbitrary_msg_as_addr(
+        &self,
+        address: &Address,
+        msg: &str,
+    ) -> Result<Authorization, Error> {
+        use authorization::{sign, Dst};
+        let rotxn = self.env.read_txn()?;
+        let signing_key = self.get_tx_signing_key_for_addr(&rotxn, address)?;
+        let signature = sign(&signing_key, Dst::Arbitrary, msg.as_bytes());
+        let verifying_key = signing_key.verifying_key().into();
+        Ok(Authorization {
+            verifying_key,
+            signature,
+        })
     }
 }
 
