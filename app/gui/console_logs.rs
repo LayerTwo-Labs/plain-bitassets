@@ -96,14 +96,6 @@ impl ConsoleLogs {
     }
 
     pub fn show(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
-        ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
-            let line_buffer_read = self.line_buffer.as_str();
-            let mut logs: &str = &line_buffer_read;
-            TextEdit::multiline(&mut logs)
-                .font(TextStyle::Monospace)
-                .desired_width(f32::INFINITY)
-                .ui(ui);
-        });
         TopBottomPanel::bottom("command_input").show_inside(ui, |ui| {
             let command_input = TextEdit::multiline(&mut self.command_input)
                 .font(TextStyle::Monospace)
@@ -123,6 +115,14 @@ impl ConsoleLogs {
             }) {
                 self.console_command(app.unwrap());
             }
+        });
+        ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
+            let line_buffer_read = self.line_buffer.as_str();
+            let mut logs: &str = &line_buffer_read;
+            TextEdit::multiline(&mut logs)
+                .font(TextStyle::Monospace)
+                .desired_width(f32::INFINITY)
+                .ui(ui);
         });
     }
 }
