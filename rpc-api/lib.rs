@@ -197,6 +197,24 @@ pub trait Rpc {
         block_hash: plain_bitassets::types::BlockHash,
     ) -> RpcResult<Vec<bitcoin::BlockHash>>;
 
+    /// Get the best mainchain block hash known by Thunder
+    #[open_api_method(output_schema(
+        PartialSchema = "schema::Optional<bitassets_schema::BitcoinBlockHash>"
+    ))]
+    #[method(name = "get_best_mainchain_block_hash")]
+    async fn get_best_mainchain_block_hash(
+        &self,
+    ) -> RpcResult<Option<bitcoin::BlockHash>>;
+
+    /// Get the best sidechain block hash known by Bitnames
+    #[open_api_method(output_schema(
+        PartialSchema = "schema::Optional<BlockHash>"
+    ))]
+    #[method(name = "get_best_sidechain_block_hash")]
+    async fn get_best_sidechain_block_hash(
+        &self,
+    ) -> RpcResult<Option<BlockHash>>;
+
     /// Get a new address
     #[method(name = "get_new_address")]
     async fn get_new_address(&self) -> RpcResult<Address>;

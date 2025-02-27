@@ -638,6 +638,15 @@ where
         Ok(self.archive.get_body(&rotxn, block_hash)?)
     }
 
+    pub fn get_best_main_verification(
+        &self,
+        hash: BlockHash,
+    ) -> Result<bitcoin::BlockHash, Error> {
+        let rotxn = self.env.read_txn()?;
+        let hash = self.archive.get_best_main_verification(&rotxn, hash)?;
+        Ok(hash)
+    }
+
     pub fn get_bmm_inclusions(
         &self,
         block_hash: BlockHash,
