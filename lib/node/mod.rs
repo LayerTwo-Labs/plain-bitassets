@@ -72,7 +72,7 @@ pub enum Error {
     #[error("net error")]
     Net(#[from] net::Error),
     #[error("net task error")]
-    NetTask(#[from] net_task::Error),
+    NetTask(#[source] Box<net_task::Error>),
     #[error("No CUSF mainchain wallet client")]
     NoCusfMainchainWalletClient,
     #[error("peer info stream closed")]
@@ -90,6 +90,12 @@ pub enum Error {
     #[cfg(feature = "zmq")]
     #[error("ZMQ error")]
     Zmq(#[from] zeromq::ZmqError),
+}
+
+impl From<net_task::Error> for Error {
+    fn from(err: net_task::Error) -> Self {
+        Self::NetTask(Box::new(err))
+    }
 }
 
 impl From<state::Error> for Error {

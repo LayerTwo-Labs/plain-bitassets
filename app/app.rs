@@ -36,7 +36,7 @@ pub enum Error {
     #[error("miner error: {0}")]
     Miner(#[from] miner::Error),
     #[error("node error")]
-    Node(#[from] node::Error),
+    Node(#[source] Box<node::Error>),
     #[error("No CUSF mainchain wallet client")]
     NoCusfMainchainWalletClient,
     #[error(transparent)]
@@ -45,11 +45,17 @@ pub enum Error {
         "Unable to verify existence of CUSF mainchain service(s) at {url}"
     )]
     VerifyMainchainServices {
-        url: url::Url,
-        source: tonic::Status,
+        url: Box<url::Url>,
+        source: Box<tonic::Status>,
     },
     #[error("wallet error")]
     Wallet(#[from] wallet::Error),
+}
+
+impl From<node::Error> for Error {
+    fn from(err: node::Error) -> Self {
+        Self::Node(Box::new(err))
+    }
 }
 
 fn update_wallet(node: &Node, wallet: &Wallet) -> Result<(), Error> {
@@ -231,8 +237,8 @@ impl App {
         let (cusf_mainchain, cusf_mainchain_wallet) = if runtime
             .block_on(Self::check_proto_support(transport.clone()))
             .map_err(|err| Error::VerifyMainchainServices {
-                url: config.mainchain_grpc_url.clone(),
-                source: err,
+                url: Box::new(config.mainchain_grpc_url.clone()),
+                source: Box::new(err),
             })? {
             (
                 mainchain::ValidatorClient::new(transport.clone()),
