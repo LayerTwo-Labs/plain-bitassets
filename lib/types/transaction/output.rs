@@ -335,7 +335,7 @@ mod content {
             matches!(self, Self::BitAssetControl)
         }
 
-        /// `true`` if the output content corresponds to a reservation
+        /// `true` if the output content corresponds to a reservation
         pub fn is_reservation(&self) -> bool {
             matches!(self, Self::BitAssetReservation)
         }
@@ -531,6 +531,9 @@ mod filled_content {
         (   $vis:vis $enum_name:ident
             $(, attrs: [$($attr:meta),* $(,)?])?
             $(, bitcoin_attrs: [$($bitcoin_attr:meta),* $(,)?])?
+            $(, bitasset_reservation_commitment_attrs:
+                [$($bitasset_reservation_commitment_attr:meta),* $(,)?]
+            )?
             $(,)?
         ) => {
             /// Representation of Output Content that includes asset type and/or
@@ -555,7 +558,13 @@ mod filled_content {
                 BitAsset(BitAssetId, u64),
                 BitAssetControl(BitAssetId),
                 /// Reservation txid and commitment
-                BitAssetReservation(crate::types::Txid, crate::types::Hash),
+                BitAssetReservation(
+                    crate::types::Txid,
+                    $(
+                        $(#[$bitasset_reservation_commitment_attr])*
+                    )?
+                    crate::types::Hash
+                ),
                 /// Auction ID
                 DutchAuctionReceipt(DutchAuctionId),
             }
@@ -573,6 +582,9 @@ mod filled_content {
         bitcoin_attrs: [
             serde(rename = "BitcoinSats")
         ],
+        bitasset_reservation_commitment_attrs: [
+            serde(with = "hex::serde")
+        ]
     );
 
     type SerdeRepr = serde_with::IfIsHumanReadable<
