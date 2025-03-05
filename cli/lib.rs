@@ -1,6 +1,5 @@
 use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::LazyLock,
+    net::{Ipv4Addr, SocketAddr},
     time::Duration,
 };
 
@@ -16,7 +15,7 @@ use plain_bitassets::{
 };
 use plain_bitassets_app_rpc_api::RpcClient;
 use tracing_subscriber::layer::SubscriberExt as _;
-use url::Url;
+use url::{Host, Url};
 
 #[derive(Clone, Debug, Subcommand)]
 #[command(arg_required_else_help(true))]
@@ -215,14 +214,9 @@ pub enum Command {
     },
 }
 
-const DEFAULT_RPC_ADDR: SocketAddr = SocketAddr::new(
-    IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-    6000 + THIS_SIDECHAIN as u16,
-);
+const DEFAULT_RPC_HOST: Host = Host::Ipv4(Ipv4Addr::LOCALHOST);
 
-static DEFAULT_RPC_URL: LazyLock<Url> = LazyLock::new(|| {
-    Url::parse(&format!("http://{DEFAULT_RPC_ADDR}")).unwrap()
-});
+const DEFAULT_RPC_PORT: u16 = 6000 + THIS_SIDECHAIN as u16;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
 
@@ -231,9 +225,12 @@ const DEFAULT_TIMEOUT_SECS: u64 = 60;
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
-    /// Base URL used for requests to the RPC server.
-    #[arg(default_value_t = DEFAULT_RPC_URL.clone(), long)]
-    pub rpc_url: Url,
+    /// Host used for requests to the RPC server
+    #[arg(default_value_t = DEFAULT_RPC_HOST, long, value_parser = Host::parse)]
+    pub rpc_host: Host,
+    /// Port used for requests to the RPC server
+    #[arg(default_value_t = DEFAULT_RPC_PORT, long)]
+    pub rpc_port: u16,
     /// Timeout for RPC requests in seconds.
     #[arg(default_value_t = DEFAULT_TIMEOUT_SECS, long = "timeout")]
     timeout_secs: u64,
@@ -244,16 +241,23 @@ pub struct Cli {
 impl Cli {
     pub fn new(
         command: Command,
-        rpc_url: Url,
+        rpc_host: Option<Host>,
+        rpc_port: Option<u16>,
         timeout_secs: Option<u64>,
         verbose: Option<bool>,
     ) -> Self {
         Self {
             command,
-            rpc_url,
+            rpc_host: rpc_host.unwrap_or(DEFAULT_RPC_HOST),
+            rpc_port: rpc_port.unwrap_or(DEFAULT_RPC_PORT),
             timeout_secs: timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS),
             verbose: verbose.unwrap_or(false),
         }
+    }
+
+    fn rpc_url(&self) -> url::Url {
+        Url::parse(&format!("http://{}:{}", self.rpc_host, self.rpc_port))
+            .unwrap()
     }
 }
 /// Handle a command, returning CLI output
@@ -549,7 +553,7 @@ impl Cli {
                 http::header::HeaderName::from_static("x-request-id"),
                 http::header::HeaderValue::from_str(&request_id)?,
             )]));
-        let client = builder.build(self.rpc_url)?;
+        let client = builder.build(self.rpc_url())?;
         let result = handle_command(&client, self.command).await?;
         Ok(result)
     }

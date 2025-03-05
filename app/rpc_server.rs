@@ -737,7 +737,7 @@ impl MakeRequestId for RequestIdMaker {
 
 pub async fn run_server(
     app: App,
-    rpc_addr: SocketAddr,
+    rpc_url: url::Url,
 ) -> anyhow::Result<SocketAddr> {
     const REQUEST_ID_HEADER: &str = "x-request-id";
 
@@ -785,7 +785,7 @@ pub async fn run_server(
     let server = Server::builder()
         .set_http_middleware(http_middleware)
         .set_rpc_middleware(rpc_middleware)
-        .build(rpc_addr)
+        .build(rpc_url.socket_addrs(|| None)?.as_slice())
         .await?;
 
     let addr = server.local_addr()?;

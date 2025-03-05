@@ -31,8 +31,9 @@ const DEFAULT_MAIN_PORT: u16 = 50051;
 const DEFAULT_NET_ADDR: SocketAddr =
     ipv4_socket_addr([0, 0, 0, 0], 4000 + THIS_SIDECHAIN as u16);
 
-const DEFAULT_RPC_ADDR: SocketAddr =
-    ipv4_socket_addr([127, 0, 0, 1], 6000 + THIS_SIDECHAIN as u16);
+const DEFAULT_RPC_HOST: Host = Host::Ipv4(Ipv4Addr::LOCALHOST);
+
+const DEFAULT_RPC_PORT: u16 = 6000 + THIS_SIDECHAIN as u16;
 
 #[cfg(feature = "zmq")]
 const DEFAULT_ZMQ_ADDR: SocketAddr =
@@ -139,9 +140,12 @@ pub(super) struct Cli {
     /// Set the network. Setting this may affect other defaults.
     #[arg(default_value_t, long, value_enum)]
     network: Network,
-    /// Socket address to host the RPC server
-    #[arg(default_value_t = DEFAULT_RPC_ADDR, long, short)]
-    rpc_addr: SocketAddr,
+    /// Host for the RPC server
+    #[arg(default_value_t = DEFAULT_RPC_HOST, long, value_parser = Host::parse)]
+    rpc_host: Host,
+    /// Port for the RPC server
+    #[arg(default_value_t = DEFAULT_RPC_PORT, long)]
+    rpc_port: u16,
     /// ZMQ pub/sub address
     #[cfg(feature = "zmq")]
     #[arg(default_value_t = DEFAULT_ZMQ_ADDR, long, short)]
@@ -185,7 +189,8 @@ impl Cli {
             mnemonic_seed_phrase_path: self.mnemonic_seed_phrase_path,
             net_addr: self.net_addr,
             network: self.network,
-            rpc_addr: self.rpc_addr,
+            rpc_host: self.rpc_host,
+            rpc_port: self.rpc_port,
             #[cfg(feature = "zmq")]
             zmq_addr: self.zmq_addr,
         })
@@ -204,7 +209,15 @@ pub struct Config {
     pub mnemonic_seed_phrase_path: Option<PathBuf>,
     pub net_addr: SocketAddr,
     pub network: Network,
-    pub rpc_addr: SocketAddr,
+    pub rpc_host: Host,
+    pub rpc_port: u16,
     #[cfg(feature = "zmq")]
     pub zmq_addr: SocketAddr,
+}
+
+impl Config {
+    pub fn rpc_url(&self) -> url::Url {
+        Url::parse(&format!("http://{}:{}", self.rpc_host, self.rpc_port))
+            .unwrap()
+    }
 }

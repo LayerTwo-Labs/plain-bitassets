@@ -190,7 +190,8 @@ impl EguiApp {
         app: Option<App>,
         cc: &eframe::CreationContext<'_>,
         logs_capture: LineBuffer,
-        rpc_addr: url::Url,
+        rpc_host: url::Host,
+        rpc_port: u16,
     ) -> Self {
         // Customize egui here with cc.egui_ctx.set_fonts and cc.egui_ctx.set_visuals.
         // Restore app state using cc.storage (requires the "persistence" feature).
@@ -216,7 +217,7 @@ impl EguiApp {
         let activity = Activity::new(app.as_ref());
         let bottom_panel = BottomPanel::new(app.clone());
         let coins = Coins::new(app.as_ref());
-        let console_logs = ConsoleLogs::new(logs_capture, rpc_addr);
+        let console_logs = ConsoleLogs::new(logs_capture, rpc_host, rpc_port);
         let parent_chain = ParentChain::new(app.as_ref());
         Self {
             activity,

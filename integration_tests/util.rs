@@ -67,8 +67,8 @@ impl BitAssetsApp {
             self.mainchain_grpc_port.to_string(),
             "--net-addr".to_owned(),
             format!("127.0.0.1:{}", self.net_port),
-            "--rpc-addr".to_owned(),
-            format!("127.0.0.1:{}", self.rpc_port),
+            "--rpc-port".to_owned(),
+            self.rpc_port.to_string(),
             "--zmq-addr".to_owned(),
             format!("127.0.0.1:{}", self.zmq_port),
         ];

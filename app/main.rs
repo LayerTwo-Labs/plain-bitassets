@@ -144,13 +144,17 @@ fn run_egui_app(
     app: Option<crate::app::App>,
 ) -> Result<(), eframe::Error> {
     let native_options = eframe::NativeOptions::default();
-    let rpc_addr = url::Url::parse(&format!("http://{}", config.rpc_addr))
-        .expect("failed to parse rpc addr");
     eframe::run_native(
         "Plain Bitassets",
         native_options,
         Box::new(move |cc| {
-            Ok(Box::new(gui::EguiApp::new(app, cc, line_buffer, rpc_addr)))
+            Ok(Box::new(gui::EguiApp::new(
+                app,
+                cc,
+                line_buffer,
+                config.rpc_host.clone(),
+                config.rpc_port,
+            )))
         }),
     )
 }
@@ -168,11 +172,10 @@ fn main() -> anyhow::Result<()> {
         // spawn rpc server
         app.runtime.spawn({
             let app = app.clone();
+            let rpc_url = config.rpc_url();
             async move {
-                tracing::info!("starting RPC server at `{}`", config.rpc_addr);
-                if let Err(err) =
-                    rpc_server::run_server(app, config.rpc_addr).await
-                {
+                tracing::info!("starting RPC server at `{rpc_url}`");
+                if let Err(err) = rpc_server::run_server(app, rpc_url).await {
                     app_tx.send(err).expect("failed to send error to app");
                 }
             }

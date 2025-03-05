@@ -29,16 +29,22 @@ pub struct ConsoleCommand {
 pub struct ConsoleLogs {
     line_buffer: LineBuffer,
     command_input: String,
-    rpc_url: url::Url,
+    rpc_host: url::Host,
+    rpc_port: u16,
     running_command: Arc<AtomicBool>,
 }
 
 impl ConsoleLogs {
-    pub fn new(line_buffer: LineBuffer, rpc_url: url::Url) -> Self {
+    pub fn new(
+        line_buffer: LineBuffer,
+        rpc_host: url::Host,
+        rpc_port: u16,
+    ) -> Self {
         Self {
             line_buffer,
             command_input: String::new(),
-            rpc_url,
+            rpc_host,
+            rpc_port,
             running_command: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -69,7 +75,8 @@ impl ConsoleLogs {
         };
         let cli = plain_bitassets_app_cli_lib::Cli::new(
             command,
-            self.rpc_url.clone(),
+            Some(self.rpc_host.clone()),
+            Some(self.rpc_port),
             None,
             None,
         );
