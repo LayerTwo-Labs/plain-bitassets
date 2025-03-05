@@ -101,6 +101,10 @@ pub enum Command {
         #[arg(long)]
         quote: AssetId,
     },
+    /// Get the best mainchain block hash
+    GetBestMainchainBlockHash,
+    /// Get the best sidechain block hash
+    GetBestSidechainBlockHash,
     /// Get block data
     GetBlock { block_hash: BlockHash },
     /// Get the current block count
@@ -361,6 +365,14 @@ where
         Command::GetBlockcount => {
             let blockcount = rpc_client.getblockcount().await?;
             format!("{blockcount}")
+        }
+        Command::GetBestMainchainBlockHash => {
+            let block_hash = rpc_client.get_best_mainchain_block_hash().await?;
+            serde_json::to_string_pretty(&block_hash)?
+        }
+        Command::GetBestSidechainBlockHash => {
+            let block_hash = rpc_client.get_best_sidechain_block_hash().await?;
+            serde_json::to_string_pretty(&block_hash)?
         }
         Command::GetBmmInclusions { block_hash } => {
             let bmm_inclusions =
