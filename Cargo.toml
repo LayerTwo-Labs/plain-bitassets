@@ -60,7 +60,6 @@ let_unit_value = "allow"
 print_stderr = "deny"
 print_stdout = "deny"
 significant_drop_in_scrutinee = "deny"
-result_large_err = "allow"
 wildcard_imports = "deny"
 
 [workspace.lints.rust]
