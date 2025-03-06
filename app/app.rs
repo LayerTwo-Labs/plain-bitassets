@@ -39,8 +39,6 @@ pub enum Error {
     Node(#[source] Box<node::Error>),
     #[error("No CUSF mainchain wallet client")]
     NoCusfMainchainWalletClient,
-    #[error(transparent)]
-    Other(#[from] anyhow::Error),
     #[error(
         "Unable to verify existence of CUSF mainchain service(s) at {url}"
     )]
