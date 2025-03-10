@@ -10,8 +10,8 @@ mod activity;
 mod bitassets;
 mod coins;
 mod console_logs;
-mod encrypt_message;
 mod fonts;
+mod messaging;
 mod miner;
 mod parent_chain;
 mod seed;
@@ -21,8 +21,8 @@ use activity::Activity;
 use bitassets::BitAssets;
 use coins::Coins;
 use console_logs::ConsoleLogs;
-use encrypt_message::EncryptMessage;
 use fonts::FONT_DEFINITIONS;
+use messaging::Messaging;
 use miner::Miner;
 use parent_chain::ParentChain;
 use seed::SetSeed;
@@ -161,7 +161,7 @@ pub struct EguiApp {
     bottom_panel: BottomPanel,
     coins: Coins,
     console_logs: ConsoleLogs,
-    encrypt_message: EncryptMessage,
+    messaging: Messaging,
     miner: Miner,
     parent_chain: ParentChain,
     set_seed: SetSeed,
@@ -178,7 +178,7 @@ enum Tab {
     #[strum(to_string = "BitAssets")]
     BitAssets,
     #[strum(to_string = "Messaging")]
-    EncryptMessage,
+    Messaging,
     #[strum(to_string = "Activity")]
     Activity,
     #[strum(to_string = "Console / Logs")]
@@ -226,7 +226,7 @@ impl EguiApp {
             bottom_panel,
             coins,
             console_logs,
-            encrypt_message: EncryptMessage::new(),
+            messaging: Messaging::new(),
             miner: Miner::default(),
             parent_chain,
             set_seed: SetSeed::default(),
@@ -270,8 +270,8 @@ impl eframe::App for EguiApp {
                 Tab::BitAssets => {
                     self.bitassets.show(self.app.as_ref(), ui);
                 }
-                Tab::EncryptMessage => {
-                    self.encrypt_message.show(self.app.as_ref(), ui);
+                Tab::Messaging => {
+                    self.messaging.show(self.app.as_ref(), ui);
                 }
                 Tab::Activity => {
                     self.activity.show(self.app.as_ref(), ui);

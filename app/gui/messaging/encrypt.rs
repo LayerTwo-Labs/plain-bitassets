@@ -1,10 +1,12 @@
 use eframe::egui;
 
 use libes::key::conversion::PublicKeyFrom;
-use plain_bitassets::types::EncryptionPubKey;
+use plain_bitassets::types::{keys::Ecies, EncryptionPubKey};
 
-use super::util::{Ecies, InnerResponseExt, UiExt};
-use crate::app::App;
+use crate::{
+    app::App,
+    gui::util::{InnerResponseExt, UiExt},
+};
 
 #[derive(Debug)]
 pub struct EncryptMessage {

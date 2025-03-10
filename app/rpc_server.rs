@@ -13,8 +13,8 @@ use plain_bitassets::{
     net::Peer,
     state::{self, AmmPair, AmmPoolState, BitAssetSeqId, DutchAuctionState},
     types::{
-        Address, AssetId, Authorization, BitAssetData, BitAssetId, Block,
-        BlockHash, DutchAuctionId, DutchAuctionParams, EncryptionPubKey,
+        keys::Ecies, Address, AssetId, Authorization, BitAssetData, BitAssetId,
+        Block, BlockHash, DutchAuctionId, DutchAuctionParams, EncryptionPubKey,
         FilledOutputContent, PointedOutput, Transaction, Txid, VerifyingKey,
         WithdrawalBundle,
     },
@@ -194,6 +194,19 @@ impl RpcServer for RpcServerImpl {
         .unwrap()
     }
 
+    async fn decrypt_msg(
+        &self,
+        encryption_pubkey: EncryptionPubKey,
+        msg: String,
+    ) -> RpcResult<String> {
+        let ciphertext = hex::decode(msg).map_err(custom_err)?;
+        self.app
+            .wallet
+            .decrypt_msg(&encryption_pubkey, &ciphertext)
+            .map(hex::encode)
+            .map_err(custom_err)
+    }
+
     async fn dutch_auction_bid(
         &self,
         auction_id: DutchAuctionId,
@@ -291,6 +304,17 @@ impl RpcServer for RpcServerImpl {
         &self,
     ) -> RpcResult<Vec<(DutchAuctionId, DutchAuctionState)>> {
         self.app.node.dutch_auctions().map_err(custom_err)
+    }
+
+    async fn encrypt_msg(
+        &self,
+        encryption_pubkey: EncryptionPubKey,
+        msg: String,
+    ) -> RpcResult<String> {
+        Ecies::new(encryption_pubkey.0)
+            .encrypt(msg.as_bytes())
+            .map(hex::encode)
+            .map_err(|err| custom_err(anyhow::anyhow!("{err:?}")))
     }
 
     async fn format_deposit_address(

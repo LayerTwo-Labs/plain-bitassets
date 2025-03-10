@@ -14,6 +14,7 @@ use heed::{
     byteorder::BigEndian,
     types::{Bytes, SerdeBincode, Str, U32, U8},
 };
+use libes::EciesError;
 use serde::{Deserialize, Serialize};
 use sneed::{db, env, rwtxn, DbError, Env, EnvError, RwTxnError, UnitKey};
 use thiserror::Error;
@@ -22,12 +23,12 @@ use tokio_stream::{wrappers::WatchStream, StreamMap};
 use crate::{
     authorization::{self, get_address, Authorization, Signature},
     types::{
-        Address, AmountOverflowError, AmountUnderflowError, AssetId,
-        AuthorizedTransaction, BitAssetData, BitAssetId, BitcoinOutputContent,
-        DutchAuctionId, DutchAuctionParams, EncryptionPubKey, FilledOutput,
-        GetBitcoinValue, Hash, InPoint, OutPoint, Output, OutputContent,
-        SpentOutput, Transaction, TxData, VerifyingKey, Version,
-        WithdrawalOutputContent, VERSION,
+        keys::Ecies, Address, AmountOverflowError, AmountUnderflowError,
+        AssetId, AuthorizedTransaction, BitAssetData, BitAssetId,
+        BitcoinOutputContent, DutchAuctionId, DutchAuctionParams,
+        EncryptionPubKey, FilledOutput, GetBitcoinValue, Hash, InPoint,
+        OutPoint, Output, OutputContent, SpentOutput, Transaction, TxData,
+        VerifyingKey, Version, WithdrawalOutputContent, VERSION,
     },
     util::Watchable,
 };
@@ -81,6 +82,8 @@ pub enum Error {
     DbEnv(#[from] EnvError),
     #[error("Database write error")]
     DbWrite(#[from] RwTxnError),
+    #[error("ECIES error: {:?}", .0)]
+    Ecies(EciesError),
     #[error("Encryption pubkey {epk} does not exist")]
     EpkDoesNotExist { epk: EncryptionPubKey },
     #[error("io error")]
@@ -233,7 +236,6 @@ impl Wallet {
 
     /// Get the tx signing key that corresponds to the provided encryption
     /// pubkey
-    #[allow(dead_code)]
     fn get_encryption_secret_for_epk(
         &self,
         rotxn: &RoTxn,
@@ -418,6 +420,19 @@ impl Wallet {
         let seed = bip39::Seed::new(&mnemonic, "");
         let seed_bytes: [u8; 64] = seed.as_bytes().try_into().unwrap();
         self.set_seed(&seed_bytes)
+    }
+
+    pub fn decrypt_msg(
+        &self,
+        encryption_pubkey: &EncryptionPubKey,
+        ciphertext: &[u8],
+    ) -> Result<Vec<u8>, Error> {
+        let rotxn = self.env.read_txn()?;
+        let encryption_secret =
+            self.get_encryption_secret_for_epk(&rotxn, encryption_pubkey)?;
+        let res = Ecies::decrypt(&encryption_secret, ciphertext)
+            .map_err(Error::Ecies)?;
+        Ok(res)
     }
 
     /// Create a transaction with a fee only.

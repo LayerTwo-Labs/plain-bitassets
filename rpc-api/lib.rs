@@ -116,6 +116,16 @@ pub trait Rpc {
         addr: SocketAddr,
     ) -> RpcResult<()>;
 
+    /// Decrypt a message with the specified encryption key corresponding to
+    /// the specified encryption pubkey.
+    /// Returns a decrypted hex string.
+    #[method(name = "decrypt_msg")]
+    async fn decrypt_msg(
+        &self,
+        encryption_pubkey: EncryptionPubKey,
+        ciphertext: String,
+    ) -> RpcResult<String>;
+
     /// Returns the amount of the base asset to receive
     #[method(name = "dutch_auction_bid")]
     async fn dutch_auction_bid(
@@ -150,6 +160,15 @@ pub trait Rpc {
     async fn dutch_auctions(
         &self,
     ) -> RpcResult<Vec<(DutchAuctionId, DutchAuctionState)>>;
+
+    /// Encrypt a message to the specified encryption pubkey
+    /// Returns the ciphertext as a hex string.
+    #[method(name = "encrypt_msg")]
+    async fn encrypt_msg(
+        &self,
+        encryption_pubkey: EncryptionPubKey,
+        msg: String,
+    ) -> RpcResult<String>;
 
     /// Format a deposit address
     #[method(name = "format_deposit_address")]
@@ -206,7 +225,7 @@ pub trait Rpc {
         &self,
     ) -> RpcResult<Option<bitcoin::BlockHash>>;
 
-    /// Get the best sidechain block hash known by Bitnames
+    /// Get the best sidechain block hash known by BitAssets
     #[open_api_method(output_schema(
         PartialSchema = "schema::Optional<BlockHash>"
     ))]
