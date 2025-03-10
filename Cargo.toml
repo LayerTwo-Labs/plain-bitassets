@@ -53,6 +53,10 @@ rev = "42cfbe73a894186a73cadc36cc398b879fe5bee6"
 git = "https://github.com/Ash-L2L/l2l-openapi"
 rev = "38c42ee637d083f1cdc807b546f6930b880dcad9"
 
+[workspace.dependencies.libes]
+version = "0.9.1"
+features = ["AES256-GCM", "ECIES-MAC", "HMAC-SHA256", "x25519"]
+
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 assertions_on_result_states = "allow"

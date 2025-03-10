@@ -1,4 +1,5 @@
 use borsh::BorshSerialize;
+use libes::{auth::HmacSha256, enc::Aes256Gcm, key::X25519};
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeAs, DisplayFromStr, FromInto, SerializeAs};
 use thiserror::Error;
@@ -250,3 +251,6 @@ impl Serialize for VerifyingKey {
         >::serialize_as(self, serializer)
     }
 }
+
+/// ECIES crypto scheme over x25519
+pub type Ecies = libes::Ecies<X25519, Aes256Gcm, HmacSha256>;

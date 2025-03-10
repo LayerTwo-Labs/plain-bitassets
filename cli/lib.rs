@@ -10,7 +10,7 @@ use plain_bitassets::{
     authorization::{Dst, Signature},
     types::{
         Address, AssetId, BitAssetData, BitAssetId, BlockHash, DutchAuctionId,
-        DutchAuctionParams, VerifyingKey, THIS_SIDECHAIN,
+        DutchAuctionParams, EncryptionPubKey, VerifyingKey, THIS_SIDECHAIN,
     },
 };
 use plain_bitassets_app_rpc_api::RpcClient;
@@ -66,6 +66,17 @@ pub enum Command {
         #[arg(long)]
         fee_sats: u64,
     },
+    /// Decrypt a message with the specified encryption key corresponding to
+    /// the specified encryption pubkey
+    DecryptMsg {
+        #[arg(long)]
+        encryption_pubkey: EncryptionPubKey,
+        #[arg(long)]
+        msg: String,
+        /// If set, decode as UTF-8
+        #[arg(long)]
+        utf8: bool,
+    },
     /// Returns the amount of the base asset to receive
     DutchAuctionBid {
         #[arg(long)]
@@ -82,6 +93,14 @@ pub enum Command {
     DutchAuctionCollect { auction_id: DutchAuctionId },
     /// List all Dutch auctions
     DutchAuctions,
+    /// Encrypt a message to the specified encryption pubkey.
+    /// Returns the ciphertext as a hex string.
+    EncryptMsg {
+        #[arg(long)]
+        encryption_pubkey: EncryptionPubKey,
+        #[arg(long)]
+        msg: String,
+    },
     /// Format a deposit address
     FormatDepositAddress { address: Address },
     /// Generate a mnemonic seed phrase
@@ -325,6 +344,20 @@ where
                 .await?;
             format!("{txid}")
         }
+        Command::DecryptMsg {
+            encryption_pubkey,
+            msg,
+            utf8,
+        } => {
+            let msg_hex =
+                rpc_client.decrypt_msg(encryption_pubkey, msg).await?;
+            if utf8 {
+                let msg_bytes: Vec<u8> = hex::decode(msg_hex)?;
+                String::from_utf8(msg_bytes)?
+            } else {
+                msg_hex
+            }
+        }
         Command::DutchAuctionBid {
             auction_id,
             bid_size,
@@ -350,6 +383,10 @@ where
             let auctions = rpc_client.dutch_auctions().await?;
             serde_json::to_string_pretty(&auctions)?
         }
+        Command::EncryptMsg {
+            encryption_pubkey,
+            msg,
+        } => rpc_client.encrypt_msg(encryption_pubkey, msg).await?,
         Command::FormatDepositAddress { address } => {
             rpc_client.format_deposit_address(address).await?
         }
