@@ -11,16 +11,17 @@ use crate::types::{
 
 /// Errors related to an AMM pool
 #[derive(Debug, Error, Transitive)]
-#[transitive(from(db::Delete))]
-#[transitive(from(db::Put))]
-#[transitive(from(db::TryGet))]
+#[transitive(from(db::Delete, db::Error))]
+#[transitive(from(db::Error, sneed::Error))]
+#[transitive(from(db::Put, db::Error))]
+#[transitive(from(db::TryGet, db::Error))]
 pub enum Amm {
     #[error("AMM burn overflow")]
     BurnOverflow,
     #[error("AMM burn underflow")]
     BurnUnderflow,
-    #[error("heed error")]
-    Db(#[from] heed::Error),
+    #[error(transparent)]
+    Db(#[from] sneed::Error),
     #[error("Insufficient liquidity")]
     InsufficientLiquidity,
     #[error("Invalid AMM burn")]
@@ -47,10 +48,10 @@ pub enum Amm {
 
 /// Errors related to BitAssets
 #[derive(Debug, Error, Transitive)]
-#[transitive(from(db::Delete))]
-#[transitive(from(db::Last))]
-#[transitive(from(db::Put))]
-#[transitive(from(db::TryGet))]
+#[transitive(from(db::Delete, db::Error))]
+#[transitive(from(db::Last, db::Error))]
+#[transitive(from(db::Put, db::Error))]
+#[transitive(from(db::TryGet, db::Error))]
 pub enum BitAsset {
     #[error(transparent)]
     Db(#[from] db::Error),
@@ -150,9 +151,10 @@ pub mod dutch_auction {
 
     /// Errors related to Dutch auctions
     #[derive(Debug, Error, Transitive)]
-    #[transitive(from(db::Delete))]
-    #[transitive(from(db::Put))]
-    #[transitive(from(db::TryGet))]
+    #[transitive(from(db::Delete, db::Error))]
+    #[transitive(from(db::Error, sneed::Error))]
+    #[transitive(from(db::Put, db::Error))]
+    #[transitive(from(db::TryGet, db::Error))]
     pub enum Error {
         #[error(transparent)]
         Bid(#[from] Bid),
@@ -160,8 +162,8 @@ pub mod dutch_auction {
         Collect(#[from] Collect),
         #[error(transparent)]
         Create(#[from] Create),
-        #[error("heed error")]
-        Heed(#[from] heed::Error),
+        #[error(transparent)]
+        Db(#[from] sneed::Error),
         #[error("missing Dutch auction {0}")]
         Missing(DutchAuctionId),
         #[error("Too few BitAssets to create a Dutch auction")]
@@ -185,16 +187,19 @@ pub enum InvalidHeader {
 }
 
 #[derive(Debug, Error, Transitive)]
-#[transitive(from(db::Clear))]
-#[transitive(from(db::Delete))]
-#[transitive(from(db::IterInit))]
-#[transitive(from(db::IterItem))]
-#[transitive(from(db::Last))]
-#[transitive(from(db::Put))]
-#[transitive(from(db::TryGet))]
-#[transitive(from(env::CreateDb))]
-#[transitive(from(env::WriteTxn))]
-#[transitive(from(rwtxn::Commit))]
+#[transitive(from(db::Clear, db::Error))]
+#[transitive(from(db::Delete, db::Error))]
+#[transitive(from(db::Error, sneed::Error))]
+#[transitive(from(db::IterInit, db::Error))]
+#[transitive(from(db::IterItem, db::Error))]
+#[transitive(from(db::Last, db::Error))]
+#[transitive(from(db::Put, db::Error))]
+#[transitive(from(db::TryGet, db::Error))]
+#[transitive(from(env::CreateDb, env::Error))]
+#[transitive(from(env::Error, sneed::Error))]
+#[transitive(from(env::WriteTxn, env::Error))]
+#[transitive(from(rwtxn::Commit, rwtxn::Error))]
+#[transitive(from(rwtxn::Error, sneed::Error))]
 pub enum Error {
     #[error(transparent)]
     Amm(#[from] Amm),

@@ -52,19 +52,20 @@ pub struct VkDoesNotExistError {
     vk: VerifyingKey,
 }
 
+#[allow(clippy::duplicated_attributes)]
 #[derive(transitive::Transitive, Debug, Error)]
-#[transitive(from(db::error::Delete))]
-#[transitive(from(db::error::IterInit))]
-#[transitive(from(db::error::IterItem))]
-#[transitive(from(db::error::Last))]
-#[transitive(from(db::error::Len))]
-#[transitive(from(db::error::Put))]
-#[transitive(from(db::error::TryGet))]
-#[transitive(from(env::error::CreateDb))]
-#[transitive(from(env::error::OpenEnv))]
-#[transitive(from(env::error::ReadTxn))]
-#[transitive(from(env::error::WriteTxn))]
-#[transitive(from(rwtxn::error::Commit))]
+#[transitive(from(db::error::Delete, DbError))]
+#[transitive(from(db::error::IterInit, DbError))]
+#[transitive(from(db::error::IterItem, DbError))]
+#[transitive(from(db::error::Last, DbError))]
+#[transitive(from(db::error::Len, DbError))]
+#[transitive(from(db::error::Put, DbError))]
+#[transitive(from(db::error::TryGet, DbError))]
+#[transitive(from(env::error::CreateDb, EnvError))]
+#[transitive(from(env::error::OpenEnv, EnvError))]
+#[transitive(from(env::error::ReadTxn, EnvError))]
+#[transitive(from(env::error::WriteTxn, EnvError))]
+#[transitive(from(rwtxn::error::Commit, RwTxnError))]
 pub enum Error {
     #[error("address {address} does not exist")]
     AddressDoesNotExist { address: crate::types::Address },

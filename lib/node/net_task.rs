@@ -35,9 +35,10 @@ use crate::{
     },
 };
 
+#[allow(clippy::duplicated_attributes)]
 #[derive(thiserror::Error, transitive::Transitive, Debug)]
-#[transitive(from(db::error::IterInit))]
-#[transitive(from(db::error::IterItem))]
+#[transitive(from(db::error::IterInit, DbError))]
+#[transitive(from(db::error::IterItem, DbError))]
 pub enum Error {
     #[error("archive error")]
     Archive(#[from] archive::Error),

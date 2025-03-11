@@ -12,13 +12,14 @@ use crate::types::{
     VERSION,
 };
 
+#[allow(clippy::duplicated_attributes)]
 #[derive(thiserror::Error, transitive::Transitive, Debug)]
-#[transitive(from(db::error::Delete))]
-#[transitive(from(db::error::Put))]
-#[transitive(from(db::error::TryGet))]
-#[transitive(from(env::error::CreateDb))]
-#[transitive(from(env::error::WriteTxn))]
-#[transitive(from(rwtxn::error::Commit))]
+#[transitive(from(db::error::Delete, DbError))]
+#[transitive(from(db::error::Put, DbError))]
+#[transitive(from(db::error::TryGet, DbError))]
+#[transitive(from(env::error::CreateDb, EnvError))]
+#[transitive(from(env::error::WriteTxn, EnvError))]
+#[transitive(from(rwtxn::error::Commit, RwTxnError))]
 pub enum Error {
     #[error(transparent)]
     Db(#[from] DbError),
