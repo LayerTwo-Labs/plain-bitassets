@@ -42,10 +42,11 @@ use net_task::NetTaskHandle;
 #[cfg(feature = "zmq")]
 use net_task::ZmqPubHandler;
 
+#[allow(clippy::duplicated_attributes)]
 #[derive(thiserror::Error, transitive::Transitive, Debug)]
-#[transitive(from(env::error::OpenEnv))]
-#[transitive(from(env::error::ReadTxn))]
-#[transitive(from(env::error::WriteTxn))]
+#[transitive(from(env::error::OpenEnv, EnvError))]
+#[transitive(from(env::error::ReadTxn, EnvError))]
+#[transitive(from(env::error::WriteTxn, EnvError))]
 pub enum Error {
     #[error("address parse error")]
     AddrParse(#[from] std::net::AddrParseError),
