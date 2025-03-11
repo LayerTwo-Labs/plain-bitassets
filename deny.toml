@@ -277,6 +277,7 @@ allow-git = [
     "https://gitlab.com/A-Manning/leonhard-llc-ops",
     "https://github.com/erikjohnston/ouroboros.git?rev=ea82b33947f60c511dac6eb3815b6af3f6c3f555",
     "https://github.com/LayerTwo-Labs/cusf-enforcer-mempool.git",
+    "https://github.com/torkelrogstad/cusf-enforcer-mempool.git",
 ]
 
 [sources.allow-org]

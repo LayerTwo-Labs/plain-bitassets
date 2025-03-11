@@ -285,15 +285,19 @@ where
     Transport: proto::Transport,
 {
     let mut rwtxn = env.write_txn().map_err(EnvError::from)?;
-    let tip_hash = state.try_get_tip(&rwtxn)?;
     let tip_height = state.try_get_height(&rwtxn)?;
-    if let Some(tip_hash) = tip_hash {
-        let bmm_verification =
-            archive.get_best_main_verification(&rwtxn, tip_hash)?;
-        let tip = Tip {
-            block_hash: tip_hash,
-            main_block_hash: bmm_verification,
-        };
+    let tip = state
+        .try_get_tip(&rwtxn)?
+        .map(|tip_hash| {
+            let bmm_verification =
+                archive.get_best_main_verification(&rwtxn, tip_hash)?;
+            Ok::<_, Error>(Tip {
+                block_hash: tip_hash,
+                main_block_hash: bmm_verification,
+            })
+        })
+        .transpose()?;
+    if let Some(tip) = tip {
         // check that new tip is better than current tip
         if archive.better_tip(&rwtxn, tip, new_tip)? != Some(new_tip) {
             tracing::debug!(
@@ -304,8 +308,12 @@ where
             return Ok(false);
         }
     }
-    let common_ancestor = if let Some(tip_hash) = tip_hash {
-        archive.last_common_ancestor(&rwtxn, tip_hash, new_tip.block_hash)?
+    let common_ancestor = if let Some(tip) = tip {
+        archive.last_common_ancestor(
+            &rwtxn,
+            tip.block_hash,
+            new_tip.block_hash,
+        )?
     } else {
         None
     };
@@ -330,7 +338,7 @@ where
                 Some(archive.get_height(&rwtxn, common_ancestor)?);
         }
         tracing::debug!(
-            ?tip_hash,
+            ?tip,
             ?tip_height,
             ?common_ancestor,
             ?common_ancestor_height,
@@ -353,8 +361,10 @@ where
             .await?;
         }
     }
-    let tip = state.try_get_tip(&rwtxn)?;
-    assert_eq!(tip, common_ancestor);
+    {
+        let tip_hash = state.try_get_tip(&rwtxn)?;
+        assert_eq!(tip_hash, common_ancestor);
+    }
     // Apply blocks until new tip is reached
     for (header, body) in blocks_to_apply.iter().rev() {
         let () = connect_tip_(
@@ -367,6 +377,21 @@ where
             body,
         )
         .await?;
+        let new_tip_hash = state.try_get_tip(&rwtxn)?.unwrap();
+        let bmm_verification =
+            archive.get_best_main_verification(&rwtxn, new_tip_hash)?;
+        let new_tip = Tip {
+            block_hash: new_tip_hash,
+            main_block_hash: bmm_verification,
+        };
+        if let Some(tip) = tip
+            && archive.better_tip(&rwtxn, tip, new_tip)? != Some(new_tip)
+        {
+            continue;
+        }
+        rwtxn.commit().map_err(RwTxnError::from)?;
+        tracing::info!("synced to tip: {}", new_tip.block_hash);
+        rwtxn = env.write_txn().map_err(EnvError::from)?;
     }
     let tip = state.try_get_tip(&rwtxn)?;
     assert_eq!(tip, Some(new_tip.block_hash));

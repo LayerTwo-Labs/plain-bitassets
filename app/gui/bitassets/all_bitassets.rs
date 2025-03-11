@@ -156,7 +156,8 @@ impl AllBitAssets {
             };
             match app.node.bitassets() {
                 Err(node_err) => {
-                    ui.monospace_selectable_multiline(node_err.to_string());
+                    let err = anyhow::Error::from(node_err);
+                    ui.monospace_selectable_multiline(format!("{err:#}"));
                 }
                 Ok(bitassets) => self.show_bitassets(ui, bitassets),
             }
