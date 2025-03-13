@@ -3,7 +3,7 @@ use std::{borrow::Cow, cmp::Ordering, net::SocketAddr};
 use bitcoin::Amount;
 use fraction::Fraction;
 use jsonrpsee::{
-    core::{async_trait, RpcResult},
+    core::{RpcResult, async_trait},
     server::{RpcServiceBuilder, Server},
     types::ErrorObject,
 };
@@ -13,10 +13,10 @@ use plain_bitassets::{
     net::Peer,
     state::{self, AmmPair, AmmPoolState, BitAssetSeqId, DutchAuctionState},
     types::{
-        keys::Ecies, Address, AssetId, Authorization, BitAssetData, BitAssetId,
-        Block, BlockHash, DutchAuctionId, DutchAuctionParams, EncryptionPubKey,
+        Address, AssetId, Authorization, BitAssetData, BitAssetId, Block,
+        BlockHash, DutchAuctionId, DutchAuctionParams, EncryptionPubKey,
         FilledOutputContent, PointedOutput, Transaction, Txid, VerifyingKey,
-        WithdrawalBundle,
+        WithdrawalBundle, keys::Ecies,
     },
     wallet::Balance,
 };

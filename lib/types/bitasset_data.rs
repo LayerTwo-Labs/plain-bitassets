@@ -3,8 +3,8 @@ use std::net::{SocketAddrV4, SocketAddrV6};
 use borsh::BorshSerialize;
 use serde::{Deserialize, Serialize};
 use utoipa::{
-    openapi::{RefOr, Schema},
     PartialSchema, ToSchema,
+    openapi::{RefOr, Schema},
 };
 
 use crate::types::{EncryptionPubKey, Hash, VerifyingKey};

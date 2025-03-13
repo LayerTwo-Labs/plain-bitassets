@@ -1,16 +1,16 @@
 use std::{
-    collections::{hash_map, HashMap, HashSet},
+    collections::{HashMap, HashSet, hash_map},
     net::{IpAddr, SocketAddr},
     sync::Arc,
 };
 
 use fallible_iterator::FallibleIterator;
-use futures::{channel::mpsc, StreamExt};
+use futures::{StreamExt, channel::mpsc};
 use heed::types::{SerdeBincode, Unit};
 use parking_lot::RwLock;
 use quinn::{ClientConfig, Endpoint, ServerConfig};
 use sneed::{
-    db, env, rwtxn, DatabaseUnique, DbError, EnvError, RwTxnError, UnitKey,
+    DatabaseUnique, DbError, EnvError, RwTxnError, UnitKey, db, env, rwtxn,
 };
 use tokio_stream::StreamNotifyClose;
 use tracing::instrument;
@@ -18,7 +18,7 @@ use tracing::instrument;
 use crate::{
     archive::Archive,
     state::State,
-    types::{AuthorizedTransaction, Network, Version, THIS_SIDECHAIN, VERSION},
+    types::{AuthorizedTransaction, Network, THIS_SIDECHAIN, VERSION, Version},
 };
 
 mod peer;
@@ -150,8 +150,8 @@ impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
             .supported_schemes()
     }
 }
-fn configure_client(
-) -> Result<ClientConfig, quinn::crypto::rustls::NoInitialCipherSuite> {
+fn configure_client()
+-> Result<ClientConfig, quinn::crypto::rustls::NoInitialCipherSuite> {
     let crypto = rustls::ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(SkipServerVerification::new())
@@ -486,7 +486,9 @@ impl Net {
             .unbounded_send(message)
         {
             let message = send_err.into_inner();
-            tracing::error!("Failed to push internal message to peer connection {addr}: {message:?}")
+            tracing::error!(
+                "Failed to push internal message to peer connection {addr}: {message:?}"
+            )
         }
         Ok(())
     }

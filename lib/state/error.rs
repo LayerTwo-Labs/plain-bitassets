@@ -109,9 +109,7 @@ pub mod dutch_auction {
     pub enum Create {
         #[error("Tx expired; Auction start block already exists")]
         Expired,
-        #[error(
-            "Invalid tx; Final price cannot be greater than initial price"
-        )]
+        #[error("Invalid tx; Final price cannot be greater than initial price")]
         FinalPrice,
         #[error(
             "Invalid tx; For a single-block auction, 
@@ -179,7 +177,9 @@ pub enum InvalidHeader {
         expected: BlockHash,
         computed: BlockHash,
     },
-    #[error("expected previous sidechain block hash {expected:?}, but received {received:?}")]
+    #[error(
+        "expected previous sidechain block hash {expected:?}, but received {received:?}"
+    )]
     PrevSideHash {
         expected: Option<BlockHash>,
         received: Option<BlockHash>,
@@ -225,7 +225,9 @@ pub enum Error {
     DutchAuction(#[from] DutchAuction),
     #[error("failed to fill tx output contents: invalid transaction")]
     FillTxOutputContentsFailed,
-    #[error("invalid body: expected merkle root {expected}, but computed {computed}")]
+    #[error(
+        "invalid body: expected merkle root {expected}, but computed {computed}"
+    )]
     InvalidBody {
         expected: MerkleRoot,
         computed: MerkleRoot,
@@ -271,12 +273,16 @@ pub enum Error {
         n_bitasset_control_inputs: usize,
         n_bitasset_control_outputs: usize,
     },
-    #[error("unbalanced BitAssets: {n_unique_bitasset_inputs} unique BitAsset inputs, {n_bitasset_outputs} BitAsset outputs")]
+    #[error(
+        "unbalanced BitAssets: {n_unique_bitasset_inputs} unique BitAsset inputs, {n_bitasset_outputs} BitAsset outputs"
+    )]
     UnbalancedBitAssets {
         n_unique_bitasset_inputs: usize,
         n_bitasset_outputs: usize,
     },
-    #[error("unbalanced reservations: {n_reservation_inputs} reservation inputs, {n_reservation_outputs} reservation outputs")]
+    #[error(
+        "unbalanced reservations: {n_reservation_inputs} reservation inputs, {n_reservation_outputs} reservation outputs"
+    )]
     UnbalancedReservations {
         n_reservation_inputs: usize,
         n_reservation_outputs: usize,

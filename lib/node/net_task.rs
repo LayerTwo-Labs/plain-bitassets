@@ -9,13 +9,14 @@ use std::{
 
 use fallible_iterator::{FallibleIterator, IteratorExt};
 use futures::{
+    StreamExt,
     channel::{
         mpsc::{self, TrySendError, UnboundedReceiver, UnboundedSender},
         oneshot,
     },
-    stream, StreamExt,
+    stream,
 };
-use sneed::{db, DbError, EnvError, RwTxn, RwTxnError};
+use sneed::{DbError, EnvError, RwTxn, RwTxnError, db};
 use tokio::task::JoinHandle;
 use tokio_stream::StreamNotifyClose;
 use tokio_util::task::LocalPoolHandle;
@@ -30,8 +31,8 @@ use crate::{
     },
     state::{self, State},
     types::{
-        proto::{self, mainchain},
         BmmResult, Body, Header, Tip,
+        proto::{self, mainchain},
     },
 };
 
@@ -921,7 +922,7 @@ where
                     }
                 }
                 MailboxItem::PeerInfo(None) => {
-                    return Err(Error::PeerInfoRxClosed)
+                    return Err(Error::PeerInfoRxClosed);
                 }
                 MailboxItem::PeerInfo(Some((addr, None))) => {
                     // peer connection is closed, remove it

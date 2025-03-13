@@ -3,13 +3,13 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use fallible_iterator::FallibleIterator as _;
 use heed::types::SerdeBincode;
 use sneed::{
-    db, env, rwtxn, DatabaseUnique, DbError, EnvError, RoTxn, RwTxn,
-    RwTxnError, UnitKey,
+    DatabaseUnique, DbError, EnvError, RoTxn, RwTxn, RwTxnError, UnitKey, db,
+    env, rwtxn,
 };
 
 use crate::types::{
-    Address, AuthorizedTransaction, InPoint, OutPoint, Output, Txid, Version,
-    VERSION,
+    Address, AuthorizedTransaction, InPoint, OutPoint, Output, Txid, VERSION,
+    Version,
 };
 
 #[allow(clippy::duplicated_attributes)]

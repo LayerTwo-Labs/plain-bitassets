@@ -10,12 +10,12 @@ use sneed::{DatabaseUnique, RoDatabaseUnique, RoTxn, RwTxn, UnitKey};
 use crate::{
     authorization::Authorization,
     types::{
-        proto::mainchain::TwoWayPegData, Address, AmountOverflowError,
-        Authorized, AuthorizedTransaction, BitAssetId, BlockHash, Body,
-        FilledOutput, FilledTransaction, GetAddress as _, GetBitcoinValue as _,
-        Header, InPoint, M6id, OutPoint, SpentOutput, Transaction, TxData,
-        Verify as _, Version, WithdrawalBundle, WithdrawalBundleStatus,
-        VERSION,
+        Address, AmountOverflowError, Authorized, AuthorizedTransaction,
+        BitAssetId, BlockHash, Body, FilledOutput, FilledTransaction,
+        GetAddress as _, GetBitcoinValue as _, Header, InPoint, M6id, OutPoint,
+        SpentOutput, Transaction, TxData, VERSION, Verify as _, Version,
+        WithdrawalBundle, WithdrawalBundleStatus,
+        proto::mainchain::TwoWayPegData,
     },
     util::Watchable,
 };

@@ -6,7 +6,7 @@ use std::path::Path;
 use clap::Parser as _;
 use tokio::{signal::ctrl_c, sync::oneshot};
 use tracing_subscriber::{
-    filter as tracing_filter, layer::SubscriberExt, Layer,
+    Layer, filter as tracing_filter, layer::SubscriberExt,
 };
 
 mod app;

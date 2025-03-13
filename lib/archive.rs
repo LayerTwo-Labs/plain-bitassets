@@ -7,13 +7,14 @@ use bitcoin::{self, hashes::Hash as _};
 use fallible_iterator::{FallibleIterator, IteratorExt};
 use heed::types::SerdeBincode;
 use sneed::{
+    DatabaseUnique, EnvError, RoTxn, RwTxn, RwTxnError, UnitKey,
     db::{self, error::Error as DbError},
-    env, rwtxn, DatabaseUnique, EnvError, RoTxn, RwTxn, RwTxnError, UnitKey,
+    env, rwtxn,
 };
 
 use crate::types::{
+    Block, BlockHash, BmmResult, Body, Header, Tip, Txid, VERSION, Version,
     proto::mainchain::{self, Deposit},
-    Block, BlockHash, BmmResult, Body, Header, Tip, Txid, Version, VERSION,
 };
 
 #[allow(clippy::duplicated_attributes)]

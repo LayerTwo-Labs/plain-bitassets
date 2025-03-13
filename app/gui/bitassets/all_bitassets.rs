@@ -4,7 +4,7 @@ use eframe::egui;
 use hex::FromHex;
 use plain_bitassets::{
     state::BitAssetSeqId,
-    types::{hashes::BitAssetId, BitAssetData},
+    types::{BitAssetData, hashes::BitAssetId},
 };
 
 use crate::{
