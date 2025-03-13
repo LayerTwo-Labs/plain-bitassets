@@ -5,30 +5,30 @@ use std::{
 };
 
 use bitcoin::{
-    bip32::{ChildNumber, DerivationPath, Xpriv},
     Amount,
+    bip32::{ChildNumber, DerivationPath, Xpriv},
 };
 use fallible_iterator::FallibleIterator as _;
 use futures::{Stream, StreamExt};
 use heed::{
     byteorder::BigEndian,
-    types::{Bytes, SerdeBincode, Str, U32, U8},
+    types::{Bytes, SerdeBincode, Str, U8, U32},
 };
 use libes::EciesError;
 use serde::{Deserialize, Serialize};
-use sneed::{db, env, rwtxn, DbError, Env, EnvError, RwTxnError, UnitKey};
+use sneed::{DbError, Env, EnvError, RwTxnError, UnitKey, db, env, rwtxn};
 use thiserror::Error;
-use tokio_stream::{wrappers::WatchStream, StreamMap};
+use tokio_stream::{StreamMap, wrappers::WatchStream};
 
 use crate::{
-    authorization::{self, get_address, Authorization, Signature},
+    authorization::{self, Authorization, Signature, get_address},
     types::{
-        keys::Ecies, Address, AmountOverflowError, AmountUnderflowError,
-        AssetId, AuthorizedTransaction, BitAssetData, BitAssetId,
-        BitcoinOutputContent, DutchAuctionId, DutchAuctionParams,
-        EncryptionPubKey, FilledOutput, GetBitcoinValue, Hash, InPoint,
-        OutPoint, Output, OutputContent, SpentOutput, Transaction, TxData,
-        VerifyingKey, Version, WithdrawalOutputContent, VERSION,
+        Address, AmountOverflowError, AmountUnderflowError, AssetId,
+        AuthorizedTransaction, BitAssetData, BitAssetId, BitcoinOutputContent,
+        DutchAuctionId, DutchAuctionParams, EncryptionPubKey, FilledOutput,
+        GetBitcoinValue, Hash, InPoint, OutPoint, Output, OutputContent,
+        SpentOutput, Transaction, TxData, VERSION, VerifyingKey, Version,
+        WithdrawalOutputContent, keys::Ecies,
     },
     util::Watchable,
 };
@@ -1534,7 +1534,7 @@ impl Wallet {
         verifying_key: &VerifyingKey,
         msg: &str,
     ) -> Result<Signature, Error> {
-        use authorization::{sign, Dst};
+        use authorization::{Dst, sign};
         let rotxn = self.env.read_txn()?;
         let signing_key =
             self.get_message_signing_key_for_vk(&rotxn, verifying_key)?;
@@ -1547,7 +1547,7 @@ impl Wallet {
         address: &Address,
         msg: &str,
     ) -> Result<Authorization, Error> {
-        use authorization::{sign, Dst};
+        use authorization::{Dst, sign};
         let rotxn = self.env.read_txn()?;
         let signing_key = self.get_tx_signing_key_for_addr(&rotxn, address)?;
         let signature = sign(&signing_key, Dst::Arbitrary, msg.as_bytes());

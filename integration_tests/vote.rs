@@ -7,13 +7,13 @@ use bip300301_enforcer_integration_tests::{
         activate_sidechain, deposit, fund_enforcer, propose_sidechain,
     },
     setup::{
-        setup as setup_enforcer, Mode, Network, PostSetup as EnforcerPostSetup,
-        Sidechain as _,
+        Mode, Network, PostSetup as EnforcerPostSetup, Sidechain as _,
+        setup as setup_enforcer,
     },
     util::{AbortOnDrop, AsyncTrial},
 };
 use futures::{
-    channel::mpsc, future::BoxFuture, FutureExt as _, StreamExt as _,
+    FutureExt as _, StreamExt as _, channel::mpsc, future::BoxFuture,
 };
 use plain_bitassets::{
     authorization::{Dst, Signature},

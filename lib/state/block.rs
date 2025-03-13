@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use sneed::{RoTxn, RwTxn};
 
 use crate::{
-    state::{amm, dutch_auction, error, Error, State},
+    state::{Error, State, amm, dutch_auction, error},
     types::{
         AmountOverflowError, Authorization, BitAssetId, Body, FilledOutput,
         FilledOutputContent, GetAddress as _, GetBitcoinValue as _, Header,

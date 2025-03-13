@@ -12,13 +12,14 @@ use utoipa::{PartialSchema, ToSchema};
 use crate::{
     authorization::Authorization,
     types::{
+        AmountOverflowError, BitAssetData, BitAssetDataUpdates, GetAddress,
+        GetBitcoinValue,
         address::Address,
         hashes::{
             self, AssetId, BitAssetId, DutchAuctionId, Hash, M6id, MerkleRoot,
             Txid,
         },
-        serde_hexstr_human_readable, AmountOverflowError, BitAssetData,
-        BitAssetDataUpdates, GetAddress, GetBitcoinValue,
+        serde_hexstr_human_readable,
     },
 };
 

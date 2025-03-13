@@ -1,12 +1,12 @@
 use borsh::BorshSerialize;
 use serde::{Deserialize, Serialize};
-use serde_with::{serde_as, DeserializeAs, IfIsHumanReadable, SerializeAs};
+use serde_with::{DeserializeAs, IfIsHumanReadable, SerializeAs, serde_as};
 use utoipa::ToSchema;
 
 use crate::types::{
-    serde_display_fromstr_human_readable, serde_hexstr_human_readable, Address,
-    AssetId, BitAssetId, DutchAuctionId, GetBitcoinValue, Hash, InPoint,
-    OutPoint, Txid,
+    Address, AssetId, BitAssetId, DutchAuctionId, GetBitcoinValue, Hash,
+    InPoint, OutPoint, Txid, serde_display_fromstr_human_readable,
+    serde_hexstr_human_readable,
 };
 
 /// Serialize [`bitcoin::Amount`] as sats

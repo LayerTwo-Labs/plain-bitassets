@@ -4,7 +4,7 @@ use std::net::{SocketAddrV4, SocketAddrV6};
 
 use heed::types::SerdeBincode;
 use serde::{Deserialize, Serialize};
-use sneed::{db, env, DatabaseUnique, RoDatabaseUnique, RoTxn, RwTxn};
+use sneed::{DatabaseUnique, RoDatabaseUnique, RoTxn, RwTxn, db, env};
 
 use crate::{
     state::{
@@ -89,11 +89,11 @@ impl BitAssetData {
         height: u32,
     ) {
         let Self {
-            ref mut commitment,
-            ref mut socket_addr_v4,
-            ref mut socket_addr_v6,
-            ref mut encryption_pubkey,
-            ref mut signing_pubkey,
+            commitment,
+            socket_addr_v4,
+            socket_addr_v6,
+            encryption_pubkey,
+            signing_pubkey,
             total_supply: _,
         } = self;
 
@@ -178,11 +178,11 @@ impl BitAssetData {
         }
 
         let Self {
-            ref mut commitment,
-            ref mut socket_addr_v4,
-            ref mut socket_addr_v6,
-            ref mut encryption_pubkey,
-            ref mut signing_pubkey,
+            commitment,
+            socket_addr_v4,
+            socket_addr_v6,
+            encryption_pubkey,
+            signing_pubkey,
             total_supply: _,
         } = self;
         revert_field_update(

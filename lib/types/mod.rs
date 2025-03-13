@@ -125,7 +125,9 @@ pub trait GetBitcoinValue {
 pub enum Bech32mDecodeError {
     #[error(transparent)]
     Bech32m(#[from] bech32::DecodeError),
-    #[error("Wrong Bech32 HRP. Perhaps this key is being used somewhere it shouldn't be.")]
+    #[error(
+        "Wrong Bech32 HRP. Perhaps this key is being used somewhere it shouldn't be."
+    )]
     WrongHrp,
     #[error("Wrong decoded byte length. Must decode to 32 bytes of data.")]
     WrongSize,

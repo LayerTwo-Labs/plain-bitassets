@@ -4,7 +4,7 @@ use plain_bitassets::types::EncryptionPubKey;
 
 use crate::{
     app::App,
-    gui::util::{borsh_deserialize_hex, InnerResponseExt, UiExt},
+    gui::util::{InnerResponseExt, UiExt, borsh_deserialize_hex},
 };
 
 #[derive(Debug)]

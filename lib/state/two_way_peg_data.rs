@@ -7,15 +7,15 @@ use sneed::{RoTxn, RwTxn};
 
 use crate::{
     state::{
+        Error, State, WITHDRAWAL_BUNDLE_FAILURE_GAP, WithdrawalBundleInfo,
         rollback::{HeightStamped, RollBack},
-        Error, State, WithdrawalBundleInfo, WITHDRAWAL_BUNDLE_FAILURE_GAP,
     },
     types::{
-        proto::mainchain::{BlockEvent, TwoWayPegData},
         AggregatedWithdrawal, AmountOverflowError, FilledOutput,
         FilledOutputContent, InPoint, M6id, OutPoint, SpentOutput,
         WithdrawalBundle, WithdrawalBundleEvent, WithdrawalBundleStatus,
         WithdrawalOutputContent,
+        proto::mainchain::{BlockEvent, TwoWayPegData},
     },
 };
 

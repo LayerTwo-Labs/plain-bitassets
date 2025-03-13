@@ -159,25 +159,33 @@ impl DutchAuctionState {
     /// Returns the dutch auction state after reverting a bid
     fn revert_bid(&self, txid: Txid) -> Result<Self, Error> {
         let mut most_recent_bid_block = self.most_recent_bid_block.clone();
-        assert!(most_recent_bid_block
-            .pop()
-            .is_some_and(|ts| ts.txid == txid));
+        assert!(
+            most_recent_bid_block
+                .pop()
+                .is_some_and(|ts| ts.txid == txid)
+        );
         let mut base_amount_remaining = self.base_amount_remaining.clone();
-        assert!(base_amount_remaining
-            .pop()
-            .is_some_and(|ts| ts.txid == txid));
+        assert!(
+            base_amount_remaining
+                .pop()
+                .is_some_and(|ts| ts.txid == txid)
+        );
         let mut quote_amount = self.quote_amount.clone();
         assert!(quote_amount.pop().is_some_and(|ts| ts.txid == txid));
         let mut price_after_most_recent_bid =
             self.price_after_most_recent_bid.clone();
-        assert!(price_after_most_recent_bid
-            .pop()
-            .is_some_and(|ts| ts.txid == txid));
+        assert!(
+            price_after_most_recent_bid
+                .pop()
+                .is_some_and(|ts| ts.txid == txid)
+        );
         let mut end_price_after_most_recent_bid =
             self.end_price_after_most_recent_bid.clone();
-        assert!(end_price_after_most_recent_bid
-            .pop()
-            .is_some_and(|ts| ts.txid == txid));
+        assert!(
+            end_price_after_most_recent_bid
+                .pop()
+                .is_some_and(|ts| ts.txid == txid)
+        );
         Ok(Self {
             most_recent_bid_block,
             base_amount_remaining,
@@ -418,18 +426,22 @@ pub(in crate::state) fn revert_collect(
     let mut auction_state = db
         .try_get(rwtxn, &auction_id)?
         .ok_or(error::Collect::Revert)?;
-    assert!(auction_state
-        .base_amount_remaining
-        .pop()
-        .is_some_and(|ts| { ts.txid == txid && ts.data == 0 }));
+    assert!(
+        auction_state
+            .base_amount_remaining
+            .pop()
+            .is_some_and(|ts| { ts.txid == txid && ts.data == 0 })
+    );
     assert_eq!(
         auction_state.base_amount_remaining.latest().data,
         amount_offered_remaining
     );
-    assert!(auction_state
-        .quote_amount
-        .pop()
-        .is_some_and(|ts| { ts.txid == txid && ts.data == 0 }));
+    assert!(
+        auction_state
+            .quote_amount
+            .pop()
+            .is_some_and(|ts| { ts.txid == txid && ts.data == 0 })
+    );
     assert_eq!(auction_state.quote_amount.latest().data, amount_received);
     db.put(rwtxn, &auction_id, &auction_state)?;
     Ok(())

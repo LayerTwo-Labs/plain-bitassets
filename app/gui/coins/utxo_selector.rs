@@ -9,7 +9,7 @@ use strum::{EnumIter, IntoEnumIterator, IntoStaticStr};
 
 use crate::{
     app::App,
-    gui::util::{borsh_deserialize_hex, UiExt},
+    gui::util::{UiExt, borsh_deserialize_hex},
 };
 
 #[derive(

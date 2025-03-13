@@ -9,7 +9,7 @@ use bip300301_enforcer_integration_tests::{
     util::AbortOnDrop,
 };
 use bip300301_enforcer_lib::types::SidechainNumber;
-use futures::{channel::mpsc, future, TryFutureExt as _};
+use futures::{TryFutureExt as _, channel::mpsc, future};
 use plain_bitassets::types::{FilledOutputContent, PointedOutput};
 use plain_bitassets_app_rpc_api::RpcClient as _;
 use reserve_port::ReservedPort;

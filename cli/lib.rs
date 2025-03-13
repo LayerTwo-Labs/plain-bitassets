@@ -10,7 +10,7 @@ use plain_bitassets::{
     authorization::{Dst, Signature},
     types::{
         Address, AssetId, BitAssetData, BitAssetId, BlockHash, DutchAuctionId,
-        DutchAuctionParams, EncryptionPubKey, VerifyingKey, THIS_SIDECHAIN,
+        DutchAuctionParams, EncryptionPubKey, THIS_SIDECHAIN, VerifyingKey,
     },
 };
 use plain_bitassets_app_rpc_api::RpcClient;

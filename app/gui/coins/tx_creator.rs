@@ -18,7 +18,7 @@ use plain_bitassets::{
 
 use crate::{
     app::App,
-    gui::util::{borsh_deserialize_hex, InnerResponseExt},
+    gui::util::{InnerResponseExt, borsh_deserialize_hex},
 };
 
 // struct representing the outcome of trying to set an Option<T> from a String

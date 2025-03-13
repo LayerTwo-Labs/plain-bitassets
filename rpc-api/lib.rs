@@ -11,12 +11,13 @@ use plain_bitassets::{
     net::{Peer, PeerConnectionStatus},
     state::{AmmPoolState, BitAssetSeqId, DutchAuctionState},
     types::{
-        schema as bitassets_schema, Address, AssetId, Authorization,
-        BitAssetData, BitAssetDataUpdates, BitAssetId, BitcoinOutputContent,
-        Block, BlockHash, Body, DutchAuctionId, DutchAuctionParams,
-        EncryptionPubKey, FilledOutputContent, Header, MerkleRoot, OutPoint,
-        Output, OutputContent, PointedOutput, Transaction, TxData, TxIn, Txid,
+        Address, AssetId, Authorization, BitAssetData, BitAssetDataUpdates,
+        BitAssetId, BitcoinOutputContent, Block, BlockHash, Body,
+        DutchAuctionId, DutchAuctionParams, EncryptionPubKey,
+        FilledOutputContent, Header, MerkleRoot, OutPoint, Output,
+        OutputContent, PointedOutput, Transaction, TxData, TxIn, Txid,
         VerifyingKey, WithdrawalBundle, WithdrawalOutputContent,
+        schema as bitassets_schema,
     },
     wallet::Balance,
 };
