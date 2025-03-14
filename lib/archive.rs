@@ -1,6 +1,7 @@
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashMap, HashSet},
+    path::PathBuf,
 };
 
 use bitcoin::{self, hashes::Hash as _};
@@ -14,7 +15,7 @@ use sneed::{
 
 use crate::types::{
     Block, BlockHash, BmmResult, Body, Header, Tip, Txid, VERSION, Version,
-    proto::mainchain::{self, Deposit},
+    proto::mainchain,
 };
 
 #[allow(clippy::duplicated_attributes)]
@@ -31,6 +32,12 @@ pub enum Error {
     DbEnv(#[from] EnvError),
     #[error("Database write error")]
     DbWrite(#[from] RwTxnError),
+    #[error(
+        "Incompatible DB version ({}). Please clear the DB (`{}`) and re-sync",
+        .version,
+        .db_path.display()
+    )]
+    IncompatibleVersion { version: Version, db_path: PathBuf },
     #[error("invalid previous side hash")]
     InvalidPrevSideHash,
     #[error("invalid merkle root")]
@@ -58,8 +65,8 @@ pub enum Error {
     },
     #[error("unknown mainchain block hash: {0}")]
     NoMainBlockHash(bitcoin::BlockHash),
-    #[error("no BMM commitments data for mainchain block {0}")]
-    NoMainBmmCommitments(bitcoin::BlockHash),
+    #[error("no mainchain block info for block hash {0}")]
+    NoMainBlockInfo(bitcoin::BlockHash),
     #[error("no mainchain header info for block hash {0}")]
     NoMainHeaderInfo(bitcoin::BlockHash),
     #[error("no height info for mainchain block hash {0}")]
@@ -82,11 +89,6 @@ pub struct Archive {
         SerdeBincode<HashMap<bitcoin::BlockHash, BmmResult>>,
     >,
     bodies: DatabaseUnique<SerdeBincode<BlockHash>, SerdeBincode<Body>>,
-    /// Deposits by mainchain block, sorted first-to-last in each block
-    deposits: DatabaseUnique<
-        SerdeBincode<bitcoin::BlockHash>,
-        SerdeBincode<Vec<Deposit>>,
-    >,
     /// Ancestors, indexed exponentially such that the nth element in a vector
     /// corresponds to the ancestor 2^(i+1) blocks before.
     /// eg.
@@ -109,16 +111,14 @@ pub struct Archive {
     headers: DatabaseUnique<SerdeBincode<BlockHash>, SerdeBincode<Header>>,
     main_block_hash_to_height:
         DatabaseUnique<SerdeBincode<bitcoin::BlockHash>, SerdeBincode<u32>>,
-    /// BMM commitments in each mainchain block.
-    /// All ancestors must be present.
-    /// Mainchain blocks MUST be present in `main_headers`, but not all
-    /// mainchain headers will be present, if the blocks are not available.
+    /// Mainchain block infos.
+    /// All ancestors of any header should always be present.
     /// BMM commitments do not imply existence of a sidechain block header.
     /// BMM commitments do not imply BMM validity of a sidechain block,
     /// as BMM commitments for ancestors may not exist.
-    main_bmm_commitments: DatabaseUnique<
+    main_block_infos: DatabaseUnique<
         SerdeBincode<bitcoin::BlockHash>,
-        SerdeBincode<Option<BlockHash>>,
+        SerdeBincode<mainchain::BlockInfo>,
     >,
     /// Mainchain header infos.
     /// All ancestors of any header should always be present.
@@ -152,16 +152,36 @@ pub struct Archive {
 }
 
 impl Archive {
-    pub const NUM_DBS: u32 = 15;
+    pub const NUM_DBS: u32 = 14;
 
     pub fn new(env: &sneed::Env) -> Result<Self, Error> {
         let mut rwtxn = env.write_txn()?;
+        let version =
+            DatabaseUnique::create(env, &mut rwtxn, "archive_version")?;
+        match version.try_get(&rwtxn, &())? {
+            Some(db_version)
+                if db_version
+                    < Version {
+                        major: 0,
+                        minor: 12,
+                        patch: 0,
+                    } =>
+            {
+                // `deposits` and `main_bmm_commitments` were removed in
+                // 0.12.0, and `main_block_infos` was added
+                return Err(Error::IncompatibleVersion {
+                    version: db_version,
+                    db_path: env.path().to_path_buf(),
+                });
+            }
+            Some(_) => (),
+            None => version.put(&mut rwtxn, &(), &*VERSION)?,
+        }
         let block_hash_to_height =
             DatabaseUnique::create(env, &mut rwtxn, "hash_to_height")?;
         let bmm_results =
             DatabaseUnique::create(env, &mut rwtxn, "bmm_results")?;
         let bodies = DatabaseUnique::create(env, &mut rwtxn, "bodies")?;
-        let deposits = DatabaseUnique::create(env, &mut rwtxn, "deposits")?;
         let exponential_ancestors =
             DatabaseUnique::create(env, &mut rwtxn, "exponential_ancestors")?;
         let exponential_main_ancestors = DatabaseUnique::create(
@@ -172,8 +192,8 @@ impl Archive {
         let headers = DatabaseUnique::create(env, &mut rwtxn, "headers")?;
         let main_block_hash_to_height =
             DatabaseUnique::create(env, &mut rwtxn, "main_hash_to_height")?;
-        let main_bmm_commitments =
-            DatabaseUnique::create(env, &mut rwtxn, "main_bmm_commitments")?;
+        let main_block_infos =
+            DatabaseUnique::create(env, &mut rwtxn, "main_block_infos")?;
         let main_header_infos =
             DatabaseUnique::create(env, &mut rwtxn, "main_header_infos")?;
         let main_successors =
@@ -204,22 +224,16 @@ impl Archive {
         let total_work = DatabaseUnique::create(env, &mut rwtxn, "total_work")?;
         let txid_to_inclusions =
             DatabaseUnique::create(env, &mut rwtxn, "txid_to_inclusions")?;
-        let version =
-            DatabaseUnique::create(env, &mut rwtxn, "archive_version")?;
-        if version.try_get(&rwtxn, &())?.is_none() {
-            version.put(&mut rwtxn, &(), &*VERSION)?;
-        }
         rwtxn.commit()?;
         Ok(Self {
             block_hash_to_height,
             bmm_results,
             bodies,
-            deposits,
             exponential_ancestors,
             exponential_main_ancestors,
             headers,
             main_block_hash_to_height,
-            main_bmm_commitments,
+            main_block_infos,
             main_header_infos,
             main_successors,
             successors,
@@ -306,27 +320,6 @@ impl Archive {
             .ok_or(Error::NoBody(block_hash))
     }
 
-    pub fn try_get_deposits(
-        &self,
-        rotxn: &RoTxn,
-        block_hash: bitcoin::BlockHash,
-    ) -> Result<Option<Vec<Deposit>>, Error> {
-        let deposits = self
-            .deposits
-            .try_get(rotxn, &block_hash)
-            .map_err(DbError::from)?;
-        Ok(deposits)
-    }
-
-    pub fn get_deposits(
-        &self,
-        rotxn: &RoTxn,
-        block_hash: bitcoin::BlockHash,
-    ) -> Result<Vec<Deposit>, Error> {
-        self.try_get_deposits(rotxn, block_hash)?
-            .ok_or(Error::NoDepositsInfo(block_hash))
-    }
-
     pub fn try_get_header(
         &self,
         rotxn: &RoTxn,
@@ -372,25 +365,25 @@ impl Archive {
             .ok_or(Error::NoBlock(block_hash))
     }
 
-    pub fn try_get_main_bmm_commitment(
+    pub fn try_get_main_block_info(
         &self,
         rotxn: &RoTxn,
-        main_hash: bitcoin::BlockHash,
-    ) -> Result<Option<Option<BlockHash>>, Error> {
-        let commitments = self
-            .main_bmm_commitments
-            .try_get(rotxn, &main_hash)
+        main_hash: &bitcoin::BlockHash,
+    ) -> Result<Option<mainchain::BlockInfo>, Error> {
+        let block_info = self
+            .main_block_infos
+            .try_get(rotxn, main_hash)
             .map_err(DbError::from)?;
-        Ok(commitments)
+        Ok(block_info)
     }
 
-    pub fn get_main_bmm_commitment(
+    pub fn get_main_block_info(
         &self,
         rotxn: &RoTxn,
-        main_hash: bitcoin::BlockHash,
-    ) -> Result<Option<BlockHash>, Error> {
-        self.try_get_main_bmm_commitment(rotxn, main_hash)?
-            .ok_or(Error::NoMainBmmCommitments(main_hash))
+        main_hash: &bitcoin::BlockHash,
+    ) -> Result<mainchain::BlockInfo, Error> {
+        self.try_get_main_block_info(rotxn, main_hash)?
+            .ok_or_else(|| Error::NoMainBlockInfo(*main_hash))
     }
 
     pub fn try_get_main_height(
@@ -419,11 +412,11 @@ impl Archive {
     pub fn try_get_main_header_info(
         &self,
         rotxn: &RoTxn,
-        block_hash: bitcoin::BlockHash,
+        block_hash: &bitcoin::BlockHash,
     ) -> Result<Option<mainchain::BlockHeaderInfo>, Error> {
         let header_info = self
             .main_header_infos
-            .try_get(rotxn, &block_hash)
+            .try_get(rotxn, block_hash)
             .map_err(DbError::from)?;
         Ok(header_info)
     }
@@ -431,10 +424,10 @@ impl Archive {
     fn get_main_header_info(
         &self,
         rotxn: &RoTxn,
-        block_hash: bitcoin::BlockHash,
+        block_hash: &bitcoin::BlockHash,
     ) -> Result<mainchain::BlockHeaderInfo, Error> {
         self.try_get_main_header_info(rotxn, block_hash)?
-            .ok_or(Error::NoMainHeaderInfo(block_hash))
+            .ok_or_else(|| Error::NoMainHeaderInfo(*block_hash))
     }
 
     /// Try to get the best valid mainchain verification for the specified block.
@@ -519,7 +512,7 @@ impl Archive {
             }
             if n == 1 {
                 let parent = self
-                    .get_main_header_info(rotxn, block_hash)?
+                    .get_main_header_info(rotxn, &block_hash)?
                     .prev_block_hash;
                 return Ok(parent);
             } else {
@@ -700,20 +693,6 @@ impl Archive {
             })
     }
 
-    /// Store deposit info for a block
-    pub fn put_deposits(
-        &self,
-        rwtxn: &mut RwTxn,
-        block_hash: bitcoin::BlockHash,
-        mut deposits: Vec<Deposit>,
-    ) -> Result<(), Error> {
-        deposits.sort_by_key(|deposit| deposit.tx_index);
-        self.deposits
-            .put(rwtxn, &block_hash, &deposits)
-            .map_err(DbError::from)?;
-        Ok(())
-    }
-
     /// Store a header.
     ///
     /// The following predicates MUST be met before calling this function:
@@ -793,8 +772,9 @@ impl Archive {
             let main_blocks =
                 self.get_main_successors(rwtxn, header.prev_main_hash)?;
             for main_block in main_blocks {
-                let Some(commitment) =
-                    self.get_main_bmm_commitment(rwtxn, main_block)?
+                let Some(commitment) = self
+                    .get_main_block_info(rwtxn, &main_block)?
+                    .bmm_commitment
                 else {
                     tracing::trace!(%block_hash, "Failed BMM @ {main_block}: missing commitment");
                     bmm_results.insert(main_block, BmmResult::Failed);
@@ -806,7 +786,7 @@ impl Archive {
                     continue;
                 }
                 let main_header_info =
-                    self.get_main_header_info(rwtxn, main_block)?;
+                    self.get_main_header_info(rwtxn, &main_block)?;
                 if header.prev_main_hash != main_header_info.prev_block_hash {
                     tracing::trace!(%block_hash, "Failed BMM @ {main_block}: should be impossible?");
                     bmm_results.insert(main_block, BmmResult::Failed);
@@ -850,13 +830,69 @@ impl Archive {
         Ok(())
     }
 
+    /// All ancestors MUST be present.
+    /// Mainchain blocks MUST be present in `main_headers`.
+    pub fn put_main_block_info(
+        &self,
+        rwtxn: &mut RwTxn,
+        main_hash: bitcoin::BlockHash,
+        block_info: &mainchain::BlockInfo,
+    ) -> Result<(), Error> {
+        let main_header_info = self.get_main_header_info(rwtxn, &main_hash)?;
+        if main_header_info.prev_block_hash != bitcoin::BlockHash::all_zeros() {
+            let _parent_info = self.get_main_block_info(
+                rwtxn,
+                &main_header_info.prev_block_hash,
+            )?;
+        }
+        self.main_block_infos.put(rwtxn, &main_hash, block_info)?;
+        let Some(commitment) = block_info.bmm_commitment else {
+            return Ok(());
+        };
+        let Some(header) = self.try_get_header(rwtxn, commitment)? else {
+            return Ok(());
+        };
+        let bmm_result = if header.prev_main_hash
+            != main_header_info.prev_block_hash
+        {
+            BmmResult::Failed
+        } else if let Some(parent) = header.prev_side_hash {
+            // Check if there is a valid BMM commitment to the parent in the
+            // main ancestry
+            let parent_bmm_results = self.get_bmm_results(rwtxn, parent)?;
+            let main_ancestry_contains_valid_bmm_commitment_to_parent =
+                parent_bmm_results
+                    .into_iter()
+                    .map(Ok)
+                    .transpose_into_fallible()
+                    .any(|(bmm_block, bmm_result)| {
+                        let parent_verified = bmm_result == BmmResult::Verified
+                            && self.is_main_descendant(
+                                rwtxn, bmm_block, main_hash,
+                            )?;
+                        Result::<bool, Error>::Ok(parent_verified)
+                    })?;
+            if main_ancestry_contains_valid_bmm_commitment_to_parent {
+                BmmResult::Verified
+            } else {
+                BmmResult::Failed
+            }
+        } else {
+            BmmResult::Verified
+        };
+        let mut bmm_results = self.get_bmm_results(rwtxn, commitment)?;
+        bmm_results.insert(main_hash, bmm_result);
+        self.bmm_results.put(rwtxn, &commitment, &bmm_results)?;
+        Ok(())
+    }
+
     pub fn put_main_header_info(
         &self,
         rwtxn: &mut RwTxn,
         header_info: &mainchain::BlockHeaderInfo,
     ) -> Result<(), Error> {
         if self
-            .try_get_main_header_info(rwtxn, header_info.prev_block_hash)?
+            .try_get_main_header_info(rwtxn, &header_info.prev_block_hash)?
             .is_none()
             && header_info.prev_block_hash != bitcoin::BlockHash::all_zeros()
         {
@@ -927,63 +963,6 @@ impl Archive {
         Ok(())
     }
 
-    /// All ancestors MUST be present.
-    /// Mainchain blocks MUST be present in `main_headers`.
-    pub fn put_main_bmm_commitment(
-        &self,
-        rwtxn: &mut RwTxn,
-        main_hash: bitcoin::BlockHash,
-        commitment: Option<BlockHash>,
-    ) -> Result<(), Error> {
-        let main_header_info = self.get_main_header_info(rwtxn, main_hash)?;
-        if main_header_info.prev_block_hash != bitcoin::BlockHash::all_zeros() {
-            let _ = self.get_main_bmm_commitment(
-                rwtxn,
-                main_header_info.prev_block_hash,
-            )?;
-        }
-        self.main_bmm_commitments
-            .put(rwtxn, &main_hash, &commitment)?;
-        let Some(commitment) = commitment else {
-            return Ok(());
-        };
-        let Some(header) = self.try_get_header(rwtxn, commitment)? else {
-            return Ok(());
-        };
-        let bmm_result = if header.prev_main_hash
-            != main_header_info.prev_block_hash
-        {
-            BmmResult::Failed
-        } else if let Some(parent) = header.prev_side_hash {
-            // Check if there is a valid BMM commitment to the parent in the
-            // main ancestry
-            let parent_bmm_results = self.get_bmm_results(rwtxn, parent)?;
-            let main_ancestry_contains_valid_bmm_commitment_to_parent =
-                parent_bmm_results
-                    .into_iter()
-                    .map(Ok)
-                    .transpose_into_fallible()
-                    .any(|(bmm_block, bmm_result)| {
-                        let parent_verified = bmm_result == BmmResult::Verified
-                            && self.is_main_descendant(
-                                rwtxn, bmm_block, main_hash,
-                            )?;
-                        Result::<bool, Error>::Ok(parent_verified)
-                    })?;
-            if main_ancestry_contains_valid_bmm_commitment_to_parent {
-                BmmResult::Verified
-            } else {
-                BmmResult::Failed
-            }
-        } else {
-            BmmResult::Verified
-        };
-        let mut bmm_results = self.get_bmm_results(rwtxn, commitment)?;
-        bmm_results.insert(main_hash, bmm_result);
-        self.bmm_results.put(rwtxn, &commitment, &bmm_results)?;
-        Ok(())
-    }
-
     /// Return a fallible iterator over ancestors of a block,
     /// starting with the specified block's header
     pub fn ancestors<'a>(
@@ -1043,7 +1022,7 @@ impl Archive {
             } else {
                 let res = Some(block_hash);
                 let header_info =
-                    self.get_main_header_info(rotxn, block_hash)?;
+                    self.get_main_header_info(rotxn, &block_hash)?;
                 block_hash = header_info.prev_block_hash;
                 Ok(res)
             }

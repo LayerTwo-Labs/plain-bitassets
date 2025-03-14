@@ -91,8 +91,20 @@ fn set_tracing_subscriber(
             ("", saturating_pred_level(log_level)),
             ("bip300301", log_level),
             ("jsonrpsee_core::tracing", log_level),
+            (
+                "h2::codec::framed_read",
+                saturating_pred_level(saturating_pred_level(log_level)),
+            ),
+            (
+                "h2::codec::framed_write",
+                saturating_pred_level(saturating_pred_level(log_level)),
+            ),
             ("plain_bitassets", log_level),
             ("plain_bitassets_app", log_level),
+            (
+                "tower::buffer::worker",
+                saturating_pred_level(saturating_pred_level(log_level)),
+            ),
         ]);
         let directives_str =
             match std::env::var(tracing_filter::EnvFilter::DEFAULT_ENV) {

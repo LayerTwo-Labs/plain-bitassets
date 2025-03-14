@@ -254,7 +254,7 @@ impl App {
             config.network,
             cusf_mainchain,
             cusf_mainchain_wallet,
-            local_pool.clone(),
+            &runtime,
             #[cfg(feature = "zmq")]
             config.zmq_addr,
         ))?;
