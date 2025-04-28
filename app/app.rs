@@ -186,8 +186,7 @@ impl App {
         .await?
         {
             return Err(tonic::Status::aborted(format!(
-                "{} is not supported in mainchain client",
-                validator_service_name
+                "{validator_service_name} is not supported in mainchain client",
             )));
         }
         tracing::info!("Verified existence of {}", validator_service_name);

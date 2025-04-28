@@ -126,25 +126,22 @@ impl AllBitAssets {
             if let Some(bitasset_data) = bitassets.get(&name_hash_pattern) {
                 show_bitasset_with_data(ui, &name_hash_pattern, bitasset_data);
             };
-            if let Ok(bitasset_id_pattern) = BitAssetId::from_hex(&self.query) {
-                if let Some(bitasset_data) = bitassets.get(&bitasset_id_pattern)
-                {
-                    show_bitasset_with_data(
-                        ui,
-                        &bitasset_id_pattern,
-                        bitasset_data,
-                    );
-                }
+            if let Ok(bitasset_id_pattern) = BitAssetId::from_hex(&self.query)
+                && let Some(bitasset_data) = bitassets.get(&bitasset_id_pattern)
+            {
+                show_bitasset_with_data(
+                    ui,
+                    &bitasset_id_pattern,
+                    bitasset_data,
+                );
             };
             if let Ok(bitasset_seq_id_pattern) =
                 self.query.parse().map(BitAssetSeqId)
-            {
-                if let Some(bitasset_id) =
+                && let Some(bitasset_id) =
                     seq_id_to_bitasset_id.get(&bitasset_seq_id_pattern)
-                {
-                    let bitasset_data = &bitassets[bitasset_id];
-                    show_bitasset_with_data(ui, bitasset_id, bitasset_data);
-                }
+            {
+                let bitasset_data = &bitassets[bitasset_id];
+                show_bitasset_with_data(ui, bitasset_id, bitasset_data);
             }
         }
     }
