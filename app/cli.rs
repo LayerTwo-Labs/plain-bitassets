@@ -9,6 +9,8 @@ use clap::{Arg, Parser};
 use plain_bitassets::types::{Network, THIS_SIDECHAIN};
 use url::{Host, Url};
 
+use crate::util::saturating_pred_level;
+
 const fn ipv4_socket_addr(ipv4_octets: [u8; 4], port: u16) -> SocketAddr {
     let [a, b, c, d] = ipv4_octets;
     let ipv4 = Ipv4Addr::new(a, b, c, d);
@@ -179,12 +181,17 @@ impl Cli {
                 }
             }
         };
+        let log_level = if self.headless {
+            self.log_level
+        } else {
+            saturating_pred_level(self.log_level)
+        };
         Ok(Config {
             datadir: self.datadir.0,
             file_log_level: self.file_log_level,
             headless: self.headless,
             log_dir,
-            log_level: self.log_level,
+            log_level,
             mainchain_grpc_url,
             mnemonic_seed_phrase_path: self.mnemonic_seed_phrase_path,
             net_addr: self.net_addr,
