@@ -23,6 +23,7 @@ use crate::{
 
 mod peer;
 
+pub(crate) use peer::error::mailbox::Error as PeerConnectionMailboxError;
 use peer::{
     Connection, ConnectionContext as PeerConnectionCtxt,
     ConnectionHandle as PeerConnectionHandle,
@@ -264,6 +265,20 @@ impl Net {
             drop(peer_connection);
             tracing::info!(%addr, "disconnected");
         }
+    }
+
+    /// Apply the provided function to the peer connection handle,
+    /// if it exists.
+    pub fn try_with_active_peer_connection<F, T>(
+        &self,
+        addr: SocketAddr,
+        f: F,
+    ) -> Option<T>
+    where
+        F: FnMut(&PeerConnectionHandle) -> T,
+    {
+        let active_peers_read = self.active_peers.read();
+        active_peers_read.get(&addr).map(f)
     }
 
     // TODO: This should have more context.
