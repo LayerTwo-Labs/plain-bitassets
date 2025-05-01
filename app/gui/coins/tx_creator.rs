@@ -501,10 +501,10 @@ impl TxCreator {
             Ok(None) => option_dropdown.join(),
             Err(ref mut bad_value) => {
                 let text_edit = ui.add(egui::TextEdit::singleline(bad_value));
-                if text_edit.changed() {
-                    if let Ok(value) = try_from_str(bad_value.clone()) {
-                        try_set.0 = Ok(Some(value));
-                    }
+                if text_edit.changed()
+                    && let Ok(value) = try_from_str(bad_value.clone())
+                {
+                    try_set.0 = Ok(Some(value));
                 }
                 option_dropdown.join() | text_edit
             }

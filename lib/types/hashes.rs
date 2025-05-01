@@ -10,18 +10,6 @@ use super::serde_hexstr_human_readable;
 
 pub type Hash = [u8; blake3::OUT_LEN];
 
-pub fn hash<T: serde::Serialize>(data: &T) -> Hash {
-    let data_serialized = bincode::serialize(data)
-        .expect("failed to serialize a type to compute a hash");
-    blake3::hash(&data_serialized).into()
-}
-
-pub fn update<T: serde::Serialize>(hasher: &mut blake3::Hasher, data: &T) {
-    let data_serialized = bincode::serialize(data)
-        .expect("failed to serialize a type to compute a hash");
-    let _hasher = hasher.update(&data_serialized);
-}
-
 #[derive(
     BorshSerialize,
     BorshDeserialize,
@@ -428,4 +416,13 @@ impl std::fmt::Display for M6id {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
     }
+}
+
+pub fn hash<T>(data: &T) -> Hash
+where
+    T: BorshSerialize,
+{
+    let data_serialized = borsh::to_vec(data)
+        .expect("failed to serialize with borsh to compute a hash");
+    blake3::hash(&data_serialized).into()
 }

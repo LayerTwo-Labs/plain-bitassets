@@ -186,8 +186,7 @@ impl App {
         .await?
         {
             return Err(tonic::Status::aborted(format!(
-                "{} is not supported in mainchain client",
-                validator_service_name
+                "{validator_service_name} is not supported in mainchain client",
             )));
         }
         tracing::info!("Verified existence of {}", validator_service_name);
@@ -254,7 +253,7 @@ impl App {
             config.network,
             cusf_mainchain,
             cusf_mainchain_wallet,
-            local_pool.clone(),
+            &runtime,
             #[cfg(feature = "zmq")]
             config.zmq_addr,
         ))?;

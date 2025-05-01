@@ -143,6 +143,13 @@ async fn initial_block_download_task(
     tracing::debug!("Sender has connection to syncer");
     // Wait for sync to occur
     sleep(std::time::Duration::from_secs(10)).await;
+    // Check peer connections
+    let () = check_peer_connection(
+        &bitassets_nodes.syncer,
+        bitassets_nodes.sender.net_addr().into(),
+    )
+    .await?;
+    tracing::debug!("Syncer still has connection to sender");
     // Check that sender and syncer have all blocks
     {
         let sender_blocks =

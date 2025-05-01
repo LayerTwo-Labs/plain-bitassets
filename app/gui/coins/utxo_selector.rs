@@ -153,8 +153,7 @@ impl UtxoSelector {
                     bitcoin::Amount::from_sat(total_confirmed_value)
                         + total_unconfirmed_value;
                 ui.monospace(format!(
-                    "Total: ₿{total_value} (₿{} unconfirmed)",
-                    total_unconfirmed_value
+                    "Total: ₿{total_value} (₿{total_unconfirmed_value} unconfirmed)",
                 ));
             } else {
                 ui.monospace(format!(
@@ -248,7 +247,7 @@ pub fn show_utxo(
                     if show_asset_id {
                         ui.monospace_selectable_singleline(
                             true,
-                            format!("{}", asset_id),
+                            format!("{asset_id}"),
                         );
                     }
                     ui.monospace_selectable_singleline(

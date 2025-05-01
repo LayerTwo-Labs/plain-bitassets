@@ -119,14 +119,9 @@ impl DutchAuctionExplorer {
                         );
                     })
             } else if let Ok(auction_id) = DutchAuctionId::from_hex(&self.query)
+                && let Some(auction_state) = auctions.get(&auction_id)
             {
-                if let Some(auction_state) = auctions.get(&auction_id) {
-                    show_dutch_auction_with_state(
-                        ui,
-                        auction_id,
-                        auction_state,
-                    );
-                }
+                show_dutch_auction_with_state(ui, auction_id, auction_state);
             }
         });
     }
