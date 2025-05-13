@@ -384,14 +384,39 @@ impl App {
             .await?;
         tracing::trace!("confirming bmm...");
         if let Some((main_hash, header, body)) =
-            miner_write.confirm_bmm().await?
+            miner_write.confirm_bmm().await.inspect_err(|err| {
+                tracing::error!(
+                    "{:#}",
+                    plain_bitassets::util::ErrorChain::new(err)
+                )
+            })?
         {
             tracing::trace!(
                 %main_hash,
                 side_hash = %header.hash(),
                 "mine: confirmed BMM, submitting block",
             );
-            self.node.submit_block(main_hash, &header, &body).await?;
+            match self
+                .node
+                .submit_block(main_hash, &header, &body)
+                .await
+                .inspect_err(|err| {
+                    tracing::error!(
+                        "{:#}",
+                        plain_bitassets::util::ErrorChain::new(err)
+                    )
+                })? {
+                true => {
+                    tracing::debug!(
+                         %main_hash, "mine: BMM accepted as new tip",
+                    );
+                }
+                false => {
+                    tracing::warn!(
+                        %main_hash, "mine: BMM not accepted as new tip",
+                    );
+                }
+            }
         }
         let () = self.update()?;
         Ok(())
