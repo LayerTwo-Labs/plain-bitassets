@@ -5081,7 +5081,7 @@ checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
 
 [[package]]
 name = "plain_bitassets"
-version = "0.12.2"
+version = "0.12.3"
 dependencies = [
  "addr",
  "anyhow",
@@ -5141,7 +5141,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitassets_app"
-version = "0.12.2"
+version = "0.12.3"
 dependencies = [
  "anyhow",
  "bincode",
@@ -5187,7 +5187,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitassets_app_cli"
-version = "0.12.2"
+version = "0.12.3"
 dependencies = [
  "anyhow",
  "bitcoin",
@@ -5208,7 +5208,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitassets_app_rpc_api"
-version = "0.12.2"
+version = "0.12.3"
 dependencies = [
  "anyhow",
  "bitcoin",
@@ -5224,7 +5224,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitassets_integration_tests"
-version = "0.12.2"
+version = "0.12.3"
 dependencies = [
  "anyhow",
  "bip300301_enforcer_integration_tests",
