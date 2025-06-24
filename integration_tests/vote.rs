@@ -229,10 +229,10 @@ async fn vote_task(
         let mut weights = HashMap::new();
         let utxos = bitassets_nodes.issuer.rpc_client.list_utxos().await?;
         for utxo in utxos {
-            if let Some((asset_id, value)) = utxo.output.bitasset_value() {
-                if asset_id == bitasset_id {
-                    *weights.entry(utxo.output.address).or_default() += value;
-                }
+            if let Some((asset_id, value)) = utxo.output.bitasset_value()
+                && asset_id == bitasset_id
+            {
+                *weights.entry(utxo.output.address).or_default() += value;
             }
         }
         weights
@@ -279,10 +279,9 @@ async fn vote_task(
                     VOTE_NO_MSG.to_owned(),
                 )
                 .await?
+                && let Some(weight) = vote_weights.remove(&voter_addr)
             {
-                if let Some(weight) = vote_weights.remove(&voter_addr) {
-                    total_no += weight;
-                }
+                total_no += weight;
             }
         }
         (total_yes, total_no)
