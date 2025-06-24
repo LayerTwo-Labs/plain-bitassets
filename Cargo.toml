@@ -42,12 +42,12 @@ uuid = "1.13.1"
 [workspace.dependencies.bip300301_enforcer_lib]
 default-features = false
 git = "https://github.com/LayerTwo-Labs/bip300301_enforcer"
-rev = "ae376cbe83da87f8487eceb407e8c3109aa49d4d"
+rev = "01597d384fdb556c728569697c9f3901171f76d7"
 
 [workspace.dependencies.bip300301_enforcer_integration_tests]
 default-features = false
 git = "https://github.com/LayerTwo-Labs/bip300301_enforcer"
-rev = "ae376cbe83da87f8487eceb407e8c3109aa49d4d"
+rev = "01597d384fdb556c728569697c9f3901171f76d7"
 
 [workspace.dependencies.l2l-openapi]
 git = "https://github.com/Ash-L2L/l2l-openapi"
@@ -74,6 +74,11 @@ let_underscore_drop = "deny"
 [patch.crates-io.temp-dir]
 git = "https://gitlab.com/A-Manning/leonhard-llc-ops.git"
 branch = "temp-dir-leak"
+
+# Have to use a patch here. Depending directly on the fork breaks macros. 
+[patch.crates-io.tracing-appender]
+git = "https://github.com/torkelrogstad/tokio-tracing.git"
+branch = "log-rotation-size"
 
 [profile.release]
 # lto = "fat"
