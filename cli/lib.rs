@@ -10,7 +10,8 @@ use plain_bitassets::{
     authorization::{Dst, Signature},
     types::{
         Address, AssetId, BitAssetData, BitAssetId, BlockHash, DutchAuctionId,
-        DutchAuctionParams, EncryptionPubKey, THIS_SIDECHAIN, VerifyingKey,
+        DutchAuctionParams, EncryptionPubKey, THIS_SIDECHAIN, Txid,
+        VerifyingKey,
     },
 };
 use plain_bitassets_app_rpc_api::RpcClient;
@@ -51,13 +52,17 @@ pub enum Command {
     },
     /// Retrieve data for a single BitAsset
     #[command(name = "bitasset-data")]
-    BitAssetData { bitasset_id: BitAssetId },
+    BitAssetData {
+        bitasset_id: BitAssetId,
+    },
     /// List all BitAssets
     Bitassets,
     /// Get Bitcoin balance in sats
     BitcoinBalance,
     /// Connect to a peer
-    ConnectPeer { addr: SocketAddr },
+    ConnectPeer {
+        addr: SocketAddr,
+    },
     /// Deposit to address
     CreateDeposit {
         address: Address,
@@ -90,7 +95,9 @@ pub enum Command {
         params: DutchAuctionParams,
     },
     /// Returns the amount of the base asset and quote asset to receive
-    DutchAuctionCollect { auction_id: DutchAuctionId },
+    DutchAuctionCollect {
+        auction_id: DutchAuctionId,
+    },
     /// List all Dutch auctions
     DutchAuctions,
     /// Encrypt a message to the specified encryption pubkey.
@@ -102,7 +109,9 @@ pub enum Command {
         msg: String,
     },
     /// Format a deposit address
-    FormatDepositAddress { address: Address },
+    FormatDepositAddress {
+        address: Address,
+    },
     /// Generate a mnemonic seed phrase
     GenerateMnemonic,
     /// Get the state of the specified AMM pool
@@ -124,7 +133,9 @@ pub enum Command {
     /// Get the best sidechain block hash
     GetBestSidechainBlockHash,
     /// Get block data
-    GetBlock { block_hash: BlockHash },
+    GetBlock {
+        block_hash: BlockHash,
+    },
     /// Get the current block count
     GetBlockcount,
     /// Get mainchain blocks that commit to a specified block hash
@@ -138,6 +149,14 @@ pub enum Command {
     /// Get a new verifying key
     GetNewVerifyingKey,
     /// Get wallet addresses, sorted by base58 encoding
+    /// Get transaction by txid
+    GetTransaction {
+        txid: Txid,
+    },
+    /// Get information about a transaction in the current chain
+    GetTransactionInfo {
+        txid: Txid,
+    },
     GetWalletAddresses,
     /// Get wallet UTXOs
     GetWalletUtxos,
@@ -169,10 +188,18 @@ pub enum Command {
         #[command(flatten)]
         bitasset_data: Box<BitAssetData>,
     },
+    /// Remove a tx from the mempool
+    RemoveFromMempool {
+        txid: Txid,
+    },
     /// Reserve a BitAsset
-    ReserveBitasset { plaintext_name: String },
+    ReserveBitasset {
+        plaintext_name: String,
+    },
     /// Set the wallet seed from a mnemonic seed phrase
-    SetSeedFromMnemonic { mnemonic: String },
+    SetSeedFromMnemonic {
+        mnemonic: String,
+    },
     /// Get total sidechain wealth
     SidechainWealth,
     /// Sign an arbitrary message with the specified verifying key
@@ -432,6 +459,14 @@ where
             let vk = rpc_client.get_new_verifying_key().await?;
             format!("{vk}")
         }
+        Command::GetTransaction { txid } => {
+            let tx = rpc_client.get_transaction(txid).await?;
+            serde_json::to_string_pretty(&tx)?
+        }
+        Command::GetTransactionInfo { txid } => {
+            let tx_info = rpc_client.get_transaction_info(txid).await?;
+            serde_json::to_string_pretty(&tx_info)?
+        }
         Command::GetWalletAddresses => {
             let addresses = rpc_client.get_wallet_addresses().await?;
             serde_json::to_string_pretty(&addresses)?
@@ -488,6 +523,10 @@ where
                 )
                 .await?;
             format!("{txid}")
+        }
+        Command::RemoveFromMempool { txid } => {
+            let () = rpc_client.remove_from_mempool(txid).await?;
+            String::default()
         }
         Command::ReserveBitasset { plaintext_name } => {
             let txid = rpc_client.reserve_bitasset(plaintext_name).await?;

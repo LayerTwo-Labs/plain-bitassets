@@ -186,6 +186,26 @@ pub enum InvalidHeader {
     },
 }
 
+#[derive(Debug)]
+pub struct FillTxOutputContents(pub Box<crate::types::FilledTransaction>);
+
+impl std::fmt::Display for FillTxOutputContents {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let txid = self.0.txid();
+        write!(
+            f,
+            "failed to fill tx output contents ({txid}): invalid transaction"
+        )?;
+        if f.alternate() {
+            let tx_json = serde_json::to_string(&self.0).unwrap();
+            write!(f, " ({tx_json})")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for FillTxOutputContents {}
+
 #[derive(Debug, Error, Transitive)]
 #[transitive(from(db::Clear, db::Error))]
 #[transitive(from(db::Delete, db::Error))]
@@ -223,8 +243,8 @@ pub enum Error {
     Db(#[from] sneed::Error),
     #[error(transparent)]
     DutchAuction(#[from] DutchAuction),
-    #[error("failed to fill tx output contents: invalid transaction")]
-    FillTxOutputContentsFailed,
+    #[error(transparent)]
+    FillTxOutputContents(#[from] FillTxOutputContents),
     #[error(
         "invalid body: expected merkle root {expected}, but computed {computed}"
     )]

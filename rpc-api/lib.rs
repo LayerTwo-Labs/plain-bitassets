@@ -335,6 +335,11 @@ pub trait Rpc {
         bitasset_data: Option<BitAssetData>,
     ) -> RpcResult<Txid>;
 
+    /// Remove a tx from the mempool
+    #[open_api_method(output_schema(ToSchema))]
+    #[method(name = "remove_from_mempool")]
+    async fn remove_from_mempool(&self, txid: Txid) -> RpcResult<()>;
+
     /// Reserve a BitAsset
     #[method(name = "reserve_bitasset")]
     async fn reserve_bitasset(&self, plain_name: String) -> RpcResult<Txid>;

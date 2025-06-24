@@ -145,9 +145,10 @@ pub fn connect(
             state.utxos.delete(rwtxn, input)?;
             state.stxos.put(rwtxn, input, &spent_output)?;
         }
-        let filled_outputs = filled_tx
-            .filled_outputs()
-            .ok_or(Error::FillTxOutputContentsFailed)?;
+        let Some(filled_outputs) = filled_tx.filled_outputs() else {
+            let err = error::FillTxOutputContents(Box::new(filled_tx));
+            return Err(err.into());
+        };
         for (vout, filled_output) in filled_outputs.iter().enumerate() {
             let outpoint = OutPoint::Regular {
                 txid,

@@ -587,6 +587,10 @@ impl RpcServer for RpcServerImpl {
         Ok(txid)
     }
 
+    async fn remove_from_mempool(&self, txid: Txid) -> RpcResult<()> {
+        self.app.node.remove_from_mempool(txid).map_err(custom_err)
+    }
+
     async fn reserve_bitasset(&self, plain_name: String) -> RpcResult<Txid> {
         let mut tx = Transaction::default();
         let () = match self.app.wallet.reserve_bitasset(&mut tx, &plain_name) {

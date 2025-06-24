@@ -535,6 +535,12 @@ impl State {
                     n_bitasset_outputs,
                 });
             }
+            if n_unique_bitasset_inputs == 0 && n_bitasset_outputs != 0 {
+                return Err(Error::UnbalancedBitAssets {
+                    n_unique_bitasset_inputs,
+                    n_bitasset_outputs,
+                });
+            }
             Ok(())
         }
     }
