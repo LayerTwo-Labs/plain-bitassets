@@ -130,7 +130,7 @@ impl DecryptMessage {
             };
         });
         // show UTF8-decoded plaintext if possible
-        if let Ok(plaintext) = str::from_utf8(plaintext_bytes) {
+        if let Ok(plaintext) = std::str::from_utf8(plaintext_bytes) {
             let _resp = ui.horizontal_wrapped(|ui| {
                 ui.monospace_selectable_multiline(format!(
                     "Decrypted message (UTF-8): \n{plaintext}",
