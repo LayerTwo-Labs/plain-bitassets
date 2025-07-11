@@ -624,7 +624,10 @@ impl Cli {
         tracing::info!(%request_id);
         let builder = HttpClientBuilder::default()
             .request_timeout(Duration::from_secs(self.timeout_secs))
-            .set_max_logging_length(1024)
+            .set_rpc_middleware(
+                jsonrpsee::core::middleware::RpcServiceBuilder::new()
+                    .rpc_logger(1024),
+            )
             .set_headers(HeaderMap::from_iter([(
                 http::header::HeaderName::from_static("x-request-id"),
                 http::header::HeaderValue::from_str(&request_id)?,
