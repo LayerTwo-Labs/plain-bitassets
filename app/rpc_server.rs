@@ -3,8 +3,8 @@ use std::{borrow::Cow, cmp::Ordering, net::SocketAddr};
 use bitcoin::Amount;
 use fraction::Fraction;
 use jsonrpsee::{
-    core::{RpcResult, async_trait},
-    server::{RpcServiceBuilder, Server},
+    core::{RpcResult, async_trait, middleware::RpcServiceBuilder},
+    server::Server,
     types::ErrorObject,
 };
 
