@@ -108,6 +108,11 @@ pub enum Command {
         #[arg(long)]
         msg: String,
     },
+    /// Delete peer from known_peers DB.
+    /// Connections to the peer are not terminated.
+    ForgetPeer {
+        addr: SocketAddr,
+    },
     /// Format a deposit address
     FormatDepositAddress {
         address: Address,
@@ -414,6 +419,10 @@ where
             encryption_pubkey,
             msg,
         } => rpc_client.encrypt_msg(encryption_pubkey, msg).await?,
+        Command::ForgetPeer { addr } => {
+            rpc_client.forget_peer(addr).await?;
+            String::default()
+        }
         Command::FormatDepositAddress { address } => {
             rpc_client.format_deposit_address(address).await?
         }
