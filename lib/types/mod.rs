@@ -347,10 +347,12 @@ impl Body {
             .collect()
     }
 
-    pub fn compute_merkle_root(&self) -> MerkleRoot {
+    pub fn compute_merkle_root(
+        coinbase: &[Output],
+        txs: &[Transaction],
+    ) -> MerkleRoot {
         // FIXME: Compute actual merkle root instead of just a hash.
-        hashes::hash_with_scratch_buffer(&(&self.coinbase, &self.transactions))
-            .into()
+        hashes::hash_with_scratch_buffer(&(coinbase, txs)).into()
     }
 
     pub fn get_inputs(&self) -> Vec<OutPoint> {
@@ -363,7 +365,8 @@ impl Body {
 
     pub fn get_outputs(&self) -> HashMap<OutPoint, Output> {
         let mut outputs = HashMap::new();
-        let merkle_root = self.compute_merkle_root();
+        let merkle_root =
+            Body::compute_merkle_root(&self.coinbase, &self.transactions);
         for (vout, output) in self.coinbase.iter().enumerate() {
             let vout = vout as u32;
             let outpoint = OutPoint::Coinbase { merkle_root, vout };

@@ -1,13 +1,13 @@
 use std::{
+    borrow::Borrow,
     cmp::Ordering,
     collections::{HashMap, HashSet},
     io::Cursor,
 };
 
+use bitcoin::amount::CheckedSum as _;
 use borsh::{self, BorshDeserialize, BorshSerialize};
 use heed::{BoxedError, BytesDecode, BytesEncode};
-
-use bitcoin::amount::CheckedSum as _;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use utoipa::{PartialSchema, ToSchema};
@@ -1586,6 +1586,12 @@ impl AuthorizedTransaction {
         let output_addrs =
             self.transaction.outputs.iter().map(|output| output.address);
         input_addrs.chain(output_addrs).collect()
+    }
+}
+
+impl<T> Borrow<T> for Authorized<T> {
+    fn borrow(&self) -> &T {
+        &self.transaction
     }
 }
 

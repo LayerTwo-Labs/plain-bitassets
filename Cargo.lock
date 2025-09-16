@@ -5165,6 +5165,7 @@ dependencies = [
  "dirs",
  "eframe",
  "either",
+ "fallible-iterator",
  "fraction",
  "futures",
  "hex 0.4.3",
