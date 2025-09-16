@@ -1,3 +1,4 @@
+#![allow(clippy::duplicated_attributes)]
 use std::net::{IpAddr, SocketAddr};
 
 use fatality::fatality;

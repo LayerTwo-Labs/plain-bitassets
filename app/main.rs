@@ -1,9 +1,7 @@
-#![feature(let_chains)]
 #![feature(try_find)]
-
-use std::path::Path;
-
 use clap::Parser as _;
+use mimalloc::MiMalloc;
+use std::{env, path::Path};
 use tokio::{signal::ctrl_c, sync::oneshot};
 use tracing_subscriber::{
     Layer, filter as tracing_filter, layer::SubscriberExt,
@@ -18,6 +16,26 @@ mod util;
 
 use line_buffer::{LineBuffer, LineBufferWriter};
 use util::saturating_pred_level;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
+pub fn configure_mimalloc() {
+    // This code is safe because it only sets environment variables
+    unsafe {
+        env::set_var("MIMALLOC_ABANDONED_PAGE_LIMIT", "4");
+        env::set_var("MIMALLOC_ABANDONED_PAGE_RESET", "1");
+        env::set_var("MIMALLOC_ARENA_LIMIT", "4");
+        env::set_var("MIMALLOC_USE_NUMA_NODES", "all");
+        env::set_var("MIMALLOC_EAGER_COMMIT", "1");
+        env::set_var("MIMALLOC_EAGER_REGION_COMMIT", "1");
+        env::set_var("MIMALLOC_SEGMENT_CACHE", "32"); // Increase from default 4. Costs RAM
+        env::set_var("MIMALLOC_LARGE_OS_PAGES", "1"); // Use large OS pages - something to play around with tbh
+        env::set_var("MIMALLOC_RESERVE_HUGE_OS_PAGES", "4"); // Reserve 4x2MB = 8MB huge pages
+        env::set_var("MIMALLOC_PAGE_RESET", "0"); // Don't zero pages on free
+        env::set_var("MIMALLOC_SEGMENT_RESET", "0");
+    }
+}
 
 /// The empty string target `""` can be used to set a default level.
 fn targets_directive_str<'a, Targets>(targets: Targets) -> String
@@ -163,6 +181,7 @@ fn run_egui_app(
 }
 
 fn main() -> anyhow::Result<()> {
+    configure_mimalloc();
     let cli = cli::Cli::parse();
     let config = cli.get_config()?;
     let (line_buffer, _rolling_log_guard) = set_tracing_subscriber(

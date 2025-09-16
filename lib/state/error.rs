@@ -1,4 +1,5 @@
 //! State errors
+#![allow(clippy::duplicated_attributes)]
 
 use sneed::{db::error as db, env::error as env, rwtxn::error as rwtxn};
 use thiserror::Error;

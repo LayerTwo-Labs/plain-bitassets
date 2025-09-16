@@ -10,6 +10,7 @@ use bitcoin::amount::CheckedSum as _;
 use fallible_iterator::FallibleIterator;
 use fraction::Fraction;
 use futures::{Stream, future::BoxFuture};
+use heed::EnvFlags;
 use sneed::{DbError, Env, EnvError, RwTxnError, env};
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
@@ -26,7 +27,8 @@ use crate::{
         Authorized, AuthorizedTransaction, BitAssetData, BitAssetId, Block,
         BlockHash, BmmResult, Body, DutchAuctionId, FilledOutput,
         FilledTransaction, GetBitcoinValue, Header, InPoint, Network, OutPoint,
-        Output, SpentOutput, Tip, Transaction, TxIn, Txid, WithdrawalBundle,
+        OutPointKey, Output, SpentOutput, Tip, Transaction, TxIn, Txid,
+        WithdrawalBundle,
         proto::{self, mainchain},
     },
     util::Watchable,
@@ -164,6 +166,14 @@ where
                         + MemPool::NUM_DBS
                         + Net::NUM_DBS,
                 );
+            // Apply fast flags consistent with the benchmark setup
+            let fast_flags = EnvFlags::WRITE_MAP
+                | EnvFlags::MAP_ASYNC
+                | EnvFlags::NO_SYNC
+                | EnvFlags::NO_META_SYNC
+                | EnvFlags::NO_READ_AHEAD
+                | EnvFlags::NO_TLS;
+            unsafe { env_open_opts.flags(fast_flags) };
             unsafe { Env::open(&env_open_opts, &env_path) }?
         };
         let state = State::new(&env)?;
@@ -483,10 +493,11 @@ where
         let rotxn = self.env.read_txn()?;
         let mut spent = vec![];
         for outpoint in outpoints {
+            let outpoint_key = OutPointKey::from_outpoint(outpoint);
             if let Some(output) = self
                 .state
                 .stxos()
-                .try_get(&rotxn, outpoint)
+                .try_get(&rotxn, &outpoint_key)
                 .map_err(state::Error::from)?
             {
                 spent.push((*outpoint, output));

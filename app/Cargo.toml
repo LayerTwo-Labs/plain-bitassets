@@ -24,6 +24,7 @@ human-size = "0.4.3"
 itertools = { workspace = true }
 include_path = "0.1.1"
 jsonrpsee = { workspace = true, features = ["server"] }
+mimalloc = { version = "0.1.48", features = ["v3"] }
 parking_lot = { workspace = true }
 plain_bitassets = { path = "../lib", features = ["clap"] }
 plain_bitassets_app_cli = { path = "../cli" }
