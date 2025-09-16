@@ -28,7 +28,8 @@ pub fn validate(
         };
         return Err(Error::InvalidHeader(err));
     };
-    let merkle_root = body.compute_merkle_root();
+    let merkle_root =
+        Body::compute_merkle_root(&body.coinbase, &body.transactions);
     if merkle_root != header.merkle_root {
         let err = Error::InvalidBody {
             expected: header.merkle_root,
@@ -92,7 +93,8 @@ pub fn connect(
         };
         return Err(Error::InvalidHeader(err));
     }
-    let merkle_root = body.compute_merkle_root();
+    let merkle_root =
+        Body::compute_merkle_root(&body.coinbase, &body.transactions);
     if merkle_root != header.merkle_root {
         let err = Error::InvalidBody {
             expected: merkle_root,
@@ -250,7 +252,8 @@ pub fn disconnect_tip(
         };
         return Err(Error::InvalidHeader(err));
     }
-    let merkle_root = body.compute_merkle_root();
+    let merkle_root =
+        Body::compute_merkle_root(&body.coinbase, &body.transactions);
     if merkle_root != header.merkle_root {
         let err = Error::InvalidBody {
             expected: header.merkle_root,

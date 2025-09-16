@@ -140,7 +140,8 @@ fn connect_tip_(
     let block_hash = header.hash();
     let _fees: bitcoin::Amount = state.validate_block(rwtxn, header, body)?;
     if tracing::enabled!(tracing::Level::DEBUG) {
-        let merkle_root = body.compute_merkle_root();
+        let merkle_root =
+            Body::compute_merkle_root(&body.coinbase, &body.transactions);
         let height = state.try_get_height(rwtxn)?;
         let () = state.connect_block(rwtxn, header, body)?;
         tracing::debug!(?height, %merkle_root, %block_hash,

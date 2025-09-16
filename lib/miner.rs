@@ -58,7 +58,10 @@ where
             )
             .await?;
         tracing::info!(%txid, "created BMM tx");
-        assert_eq!(header.merkle_root, body.compute_merkle_root());
+        assert_eq!(
+            header.merkle_root,
+            Body::compute_merkle_root(&body.coinbase, &body.transactions),
+        );
         self.block = Some((header, body));
         Ok(txid)
     }

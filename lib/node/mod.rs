@@ -209,6 +209,14 @@ where
         })
     }
 
+    pub fn env(&self) -> &Env {
+        &self.env
+    }
+
+    pub fn archive(&self) -> &Archive {
+        &self.archive
+    }
+
     /// Borrow the CUSF mainchain client, and execute the provided future.
     /// The CUSF mainchain client will be locked while the future is running.
     pub async fn with_cusf_mainchain<F, Output>(&self, f: F) -> Output
@@ -806,6 +814,21 @@ where
 
     pub fn get_active_peers(&self) -> Vec<Peer> {
         self.net.get_active_peers()
+    }
+
+    pub async fn request_mainchain_ancestor_infos(
+        &self,
+        block_hash: bitcoin::BlockHash,
+    ) -> Result<bool, Error> {
+        let mainchain_task::Response::AncestorInfos(_, res): mainchain_task::Response = self
+            .mainchain_task
+            .request_oneshot(mainchain_task::Request::AncestorInfos(
+                block_hash,
+            ))
+            .map_err(|_| Error::SendMainchainTaskRequest)?
+            .await
+            .map_err(|_| Error::ReceiveMainchainTaskResponse)?;
+        res.map_err(Error::MainchainAncestors)
     }
 
     /// Attempt to submit a block.
