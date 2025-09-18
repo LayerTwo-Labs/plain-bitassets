@@ -92,6 +92,7 @@ impl utoipa::ToSchema for BlockHash {
 }
 
 #[derive(
+    BorshDeserialize,
     BorshSerialize,
     Clone,
     Copy,

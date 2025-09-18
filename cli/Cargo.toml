@@ -13,7 +13,6 @@ clap = { workspace = true, features = ["derive"] }
 hex = { workspace = true }
 http = { workspace = true }
 jsonrpsee = { workspace = true, features = ["http-client"] }
-mimalloc = { version = "0.1.48", features = ["v3"] }
 plain_bitassets = { path = "../lib", features = ["clap"] }
 plain_bitassets_app_rpc_api = { path = "../rpc-api" }
 serde_json = { workspace = true }
