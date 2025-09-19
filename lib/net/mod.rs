@@ -138,11 +138,16 @@ pub type PeerInfoRx =
     mpsc::UnboundedReceiver<(SocketAddr, Option<PeerConnectionInfo>)>;
 
 const SIGNET_SEED_NODE_ADDRS: &[SocketAddr] = {
-    const SEED_NODE_ADDR: SocketAddr = SocketAddr::new(
+    const SIGNET_MINING_SERVER: SocketAddr = SocketAddr::new(
         std::net::IpAddr::V4(std::net::Ipv4Addr::new(172, 105, 148, 135)),
         4000 + THIS_SIDECHAIN as u16,
     );
-    &[SEED_NODE_ADDR]
+    // bitassets.bip300.xyz
+    const BIP300_XYZ: SocketAddr = SocketAddr::new(
+        std::net::IpAddr::V4(std::net::Ipv4Addr::new(95, 217, 243, 12)),
+        4000 + THIS_SIDECHAIN as u16,
+    );
+    &[SIGNET_MINING_SERVER, BIP300_XYZ]
 };
 
 const fn seed_node_addrs(network: Network) -> &'static [SocketAddr] {
