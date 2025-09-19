@@ -10,6 +10,7 @@ use crate::types::{
 };
 
 /// Errors related to an AMM pool
+#[allow(clippy::duplicated_attributes)]
 #[derive(Debug, Error, Transitive)]
 #[transitive(from(db::Delete, db::Error))]
 #[transitive(from(db::Error, sneed::Error))]
@@ -21,7 +22,7 @@ pub enum Amm {
     #[error("AMM burn underflow")]
     BurnUnderflow,
     #[error(transparent)]
-    Db(#[from] sneed::Error),
+    Db(Box<sneed::Error>),
     #[error("Insufficient liquidity")]
     InsufficientLiquidity,
     #[error("Invalid AMM burn")]
@@ -46,7 +47,14 @@ pub enum Amm {
     TooFewBitAssetsToMint,
 }
 
+impl From<sneed::Error> for Amm {
+    fn from(err: sneed::Error) -> Self {
+        Self::Db(Box::new(err))
+    }
+}
+
 /// Errors related to BitAssets
+#[allow(clippy::duplicated_attributes)]
 #[derive(Debug, Error, Transitive)]
 #[transitive(from(db::Delete, db::Error))]
 #[transitive(from(db::Last, db::Error))]
@@ -54,7 +62,7 @@ pub enum Amm {
 #[transitive(from(db::TryGet, db::Error))]
 pub enum BitAsset {
     #[error(transparent)]
-    Db(#[from] db::Error),
+    Db(Box<db::Error>),
     #[error("missing BitAsset {bitasset:?}")]
     Missing { bitasset: BitAssetId },
     #[error(
@@ -71,6 +79,12 @@ pub enum BitAsset {
     TotalSupplyOverflow,
     #[error("Reverting Mint would cause total supply to underflow")]
     TotalSupplyUnderflow,
+}
+
+impl From<db::Error> for BitAsset {
+    fn from(err: db::Error) -> Self {
+        Self::Db(Box::new(err))
+    }
 }
 
 /// Errors related to Dutch auctions
@@ -148,6 +162,7 @@ pub mod dutch_auction {
     }
 
     /// Errors related to Dutch auctions
+    #[allow(clippy::duplicated_attributes)]
     #[derive(Debug, Error, Transitive)]
     #[transitive(from(db::Delete, db::Error))]
     #[transitive(from(db::Error, sneed::Error))]
@@ -161,11 +176,17 @@ pub mod dutch_auction {
         #[error(transparent)]
         Create(#[from] Create),
         #[error(transparent)]
-        Db(#[from] sneed::Error),
+        Db(Box<sneed::Error>),
         #[error("missing Dutch auction {0}")]
         Missing(DutchAuctionId),
         #[error("Too few BitAssets to create a Dutch auction")]
         TooFewBitAssetsToCreate,
+    }
+
+    impl From<sneed::Error> for Error {
+        fn from(err: sneed::Error) -> Self {
+            Self::Db(Box::new(err))
+        }
     }
 }
 pub use dutch_auction::Error as DutchAuction;
@@ -206,6 +227,7 @@ impl std::fmt::Display for FillTxOutputContents {
 
 impl std::error::Error for FillTxOutputContents {}
 
+#[allow(clippy::duplicated_attributes)]
 #[derive(Debug, Error, Transitive)]
 #[transitive(from(db::Clear, db::Error))]
 #[transitive(from(db::Delete, db::Error))]
@@ -240,7 +262,7 @@ pub enum Error {
     #[error(transparent)]
     BorshSerialize(borsh::io::Error),
     #[error(transparent)]
-    Db(#[from] sneed::Error),
+    Db(Box<sneed::Error>),
     #[error(transparent)]
     DutchAuction(#[from] DutchAuction),
     #[error(transparent)]
@@ -322,4 +344,10 @@ pub enum Error {
     WithdrawalBundle(#[from] WithdrawalBundleError),
     #[error("wrong public key for address")]
     WrongPubKeyForAddress,
+}
+
+impl From<sneed::Error> for Error {
+    fn from(err: sneed::Error) -> Self {
+        Self::Db(Box::new(err))
+    }
 }
