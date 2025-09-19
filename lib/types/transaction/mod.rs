@@ -1,9 +1,10 @@
 use std::{
+    borrow::Borrow,
     cmp::Ordering,
     collections::{HashMap, HashSet},
 };
 
-use bitcoin::amount::CheckedSum as _;
+use bitcoin::amount::CheckedSum;
 use borsh::BorshSerialize;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -1415,6 +1416,12 @@ impl AuthorizedTransaction {
         let output_addrs =
             self.transaction.outputs.iter().map(|output| output.address);
         input_addrs.chain(output_addrs).collect()
+    }
+}
+
+impl<T> Borrow<T> for Authorized<T> {
+    fn borrow(&self) -> &T {
+        &self.transaction
     }
 }
 
