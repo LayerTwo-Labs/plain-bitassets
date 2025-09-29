@@ -1,3 +1,4 @@
+#![allow(clippy::duplicated_attributes)]
 use thiserror::Error;
 
 use crate::net::peer::{BanReason, PeerStateId};

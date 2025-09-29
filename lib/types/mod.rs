@@ -32,9 +32,9 @@ pub use transaction::{
     AmmBurn, AmmMint, AmmSwap, AssetOutput, AssetOutputContent, Authorized,
     AuthorizedTransaction, BitcoinOutput, BitcoinOutputContent,
     DutchAuctionBid, DutchAuctionCollect, DutchAuctionParams, FilledOutput,
-    FilledOutputContent, FilledTransaction, InPoint, OutPoint, Output,
-    OutputContent, PointedOutput, SpentOutput, Transaction, TxData, TxInputs,
-    WithdrawalOutputContent,
+    FilledOutputContent, FilledTransaction, InPoint, OutPoint, OutPointKey,
+    Output, OutputContent, PointedOutput, SpentOutput, Transaction, TxData,
+    TxInputs, WithdrawalOutputContent,
 };
 
 pub const THIS_SIDECHAIN: u8 = 4;
@@ -167,7 +167,7 @@ pub struct Header {
 
 impl Header {
     pub fn hash(&self) -> BlockHash {
-        hashes::hash(self).into()
+        hashes::hash_with_scratch_buffer(self).into()
     }
 }
 
@@ -237,7 +237,7 @@ impl WithdrawalBundle {
                 }],
             ]
             .concat();
-            let commitment = hashes::hash(&inputs);
+            let commitment = hashes::hash_with_scratch_buffer(&inputs);
             let script_pubkey = bitcoin::script::Builder::new()
                 .push_opcode(bitcoin::opcodes::all::OP_RETURN)
                 .push_slice(commitment)
@@ -349,7 +349,8 @@ impl Body {
 
     pub fn compute_merkle_root(&self) -> MerkleRoot {
         // FIXME: Compute actual merkle root instead of just a hash.
-        hashes::hash(&(&self.coinbase, &self.transactions)).into()
+        hashes::hash_with_scratch_buffer(&(&self.coinbase, &self.transactions))
+            .into()
     }
 
     pub fn get_inputs(&self) -> Vec<OutPoint> {

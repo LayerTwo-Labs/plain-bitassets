@@ -13,8 +13,8 @@ use crate::{
         Address, AmountOverflowError, Authorized, AuthorizedTransaction,
         BitAssetId, BlockHash, Body, FilledOutput, FilledTransaction,
         GetAddress as _, GetBitcoinValue as _, Header, InPoint, M6id, OutPoint,
-        SpentOutput, Transaction, TxData, VERSION, Verify as _, Version,
-        WithdrawalBundle, WithdrawalBundleStatus,
+        OutPointKey, SpentOutput, Transaction, TxData, VERSION, Verify as _,
+        Version, WithdrawalBundle, WithdrawalBundleStatus,
         proto::mainchain::TwoWayPegData,
     },
     util::Watchable,
@@ -35,6 +35,16 @@ pub use error::Error;
 use rollback::{HeightStamped, RollBack};
 
 pub const WITHDRAWAL_BUNDLE_FAILURE_GAP: u32 = 4;
+
+/// Prevalidated block data containing computed values from validation
+/// to avoid redundant computation during connection
+pub struct PrevalidatedBlock {
+    pub filled_transactions: Vec<FilledTransaction>,
+    pub computed_merkle_root: crate::types::BlockHash,
+    pub total_fees: bitcoin::Amount,
+    pub coinbase_value: bitcoin::Amount,
+    pub next_height: u32, // Precomputed next height to avoid DB read in write txn
+}
 
 /// Information we have regarding a withdrawal bundle
 #[derive(Debug, Deserialize, Serialize)]
@@ -78,8 +88,8 @@ pub struct State {
     bitassets: bitassets::Dbs,
     /// Associates Dutch auction sequence numbers with auction state
     dutch_auctions: dutch_auction::Db,
-    utxos: DatabaseUnique<SerdeBincode<OutPoint>, SerdeBincode<FilledOutput>>,
-    stxos: DatabaseUnique<SerdeBincode<OutPoint>, SerdeBincode<SpentOutput>>,
+    utxos: DatabaseUnique<OutPointKey, SerdeBincode<FilledOutput>>,
+    stxos: DatabaseUnique<OutPointKey, SerdeBincode<SpentOutput>>,
     /// Pending withdrawal bundle and block height
     pending_withdrawal_bundle:
         DatabaseUnique<UnitKey, SerdeBincode<(WithdrawalBundle, u32)>>,
@@ -180,8 +190,7 @@ impl State {
 
     pub fn stxos(
         &self,
-    ) -> &RoDatabaseUnique<SerdeBincode<OutPoint>, SerdeBincode<SpentOutput>>
-    {
+    ) -> &RoDatabaseUnique<OutPointKey, SerdeBincode<SpentOutput>> {
         &self.stxos
     }
 
@@ -211,7 +220,11 @@ impl State {
         &self,
         rotxn: &RoTxn,
     ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
-        let utxos = self.utxos.iter(rotxn)?.collect()?;
+        let utxos: HashMap<OutPoint, FilledOutput> = self
+            .utxos
+            .iter(rotxn)?
+            .map(|(key, output)| Ok((key.to_outpoint(), output)))
+            .collect()?;
         Ok(utxos)
     }
 
@@ -220,10 +233,11 @@ impl State {
         rotxn: &RoTxn,
         addresses: &HashSet<Address>,
     ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
-        let utxos = self
+        let utxos: HashMap<OutPoint, FilledOutput> = self
             .utxos
             .iter(rotxn)?
             .filter(|(_, output)| Ok(addresses.contains(&output.address)))
+            .map(|(key, output)| Ok((key.to_outpoint(), output)))
             .collect()?;
         Ok(utxos)
     }
@@ -251,11 +265,12 @@ impl State {
         rotxn: &RoTxn,
         transaction: &Transaction,
     ) -> Result<FilledTransaction, Error> {
-        let mut spent_utxos = vec![];
+        let mut spent_utxos = Vec::with_capacity(transaction.inputs.len());
         for input in &transaction.inputs {
+            let key = OutPointKey::from_outpoint(input);
             let utxo = self
                 .utxos
-                .try_get(rotxn, input)?
+                .try_get(rotxn, &key)?
                 .ok_or(Error::NoUtxo { outpoint: *input })?;
             spent_utxos.push(utxo);
         }
@@ -272,12 +287,13 @@ impl State {
         tx: Transaction,
     ) -> Result<FilledTransaction, Error> {
         let txid = tx.txid();
-        let mut spent_utxos = vec![];
+        let mut spent_utxos = Vec::with_capacity(tx.inputs.len());
         // fill inputs last-to-first
         for (vin, input) in tx.inputs.iter().enumerate().rev() {
+            let key = OutPointKey::from_outpoint(input);
             let stxo = self
                 .stxos
-                .try_get(rotxn, input)?
+                .try_get(rotxn, &key)?
                 .ok_or(Error::NoStxo { outpoint: *input })?;
             assert_eq!(
                 stxo.inpoint,
@@ -609,7 +625,8 @@ impl State {
     ) -> Result<bitcoin::Amount, Error> {
         let mut total_deposit_utxo_value = bitcoin::Amount::ZERO;
         self.utxos.iter(rotxn)?.map_err(Error::from).for_each(
-            |(outpoint, output)| {
+            |(outpoint_key, output)| {
+                let outpoint = outpoint_key.to_outpoint();
                 if let OutPoint::Deposit(_) = outpoint {
                     total_deposit_utxo_value = total_deposit_utxo_value
                         .checked_add(output.get_bitcoin_value())
@@ -621,7 +638,8 @@ impl State {
         let mut total_deposit_stxo_value = bitcoin::Amount::ZERO;
         let mut total_withdrawal_stxo_value = bitcoin::Amount::ZERO;
         self.stxos.iter(rotxn)?.map_err(Error::from).for_each(
-            |(outpoint, spent_output)| {
+            |(outpoint_key, spent_output)| {
+                let outpoint = outpoint_key.to_outpoint();
                 if let OutPoint::Deposit(_) = outpoint {
                     total_deposit_stxo_value = total_deposit_stxo_value
                         .checked_add(spent_output.output.get_bitcoin_value())
@@ -684,6 +702,36 @@ impl State {
         two_way_peg_data: &TwoWayPegData,
     ) -> Result<(), Error> {
         two_way_peg_data::disconnect(self, rwtxn, two_way_peg_data)
+    }
+
+    pub fn prevalidate_block(
+        &self,
+        rotxn: &RoTxn,
+        header: &Header,
+        body: &Body,
+    ) -> Result<PrevalidatedBlock, Error> {
+        block::prevalidate(self, rotxn, header, body)
+    }
+
+    pub fn connect_prevalidated_block(
+        &self,
+        rwtxn: &mut RwTxn,
+        header: &Header,
+        body: &Body,
+        prevalidated: PrevalidatedBlock,
+    ) -> Result<(), Error> {
+        block::connect_prevalidated(self, rwtxn, header, body, prevalidated)
+    }
+
+    pub fn apply_block(
+        &self,
+        rwtxn: &mut RwTxn,
+        header: &Header,
+        body: &Body,
+    ) -> Result<(), Error> {
+        let prevalidated = self.prevalidate_block(rwtxn, header, body)?;
+        self.connect_prevalidated_block(rwtxn, header, body, prevalidated)?;
+        Ok(())
     }
 }
 

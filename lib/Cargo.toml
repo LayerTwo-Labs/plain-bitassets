@@ -49,6 +49,7 @@ semver = { version = "1.0.25", features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_with = {  workspace = true }
+smallvec = { version = "1.13.2", features = ["write"] }
 sneed = { version = "0.0.11", features = ["observe"] }
 strum = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
