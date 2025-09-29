@@ -2,13 +2,11 @@
 use std::path::Path;
 
 use clap::Parser as _;
-use line_buffer::{LineBuffer, LineBufferWriter};
 use mimalloc::MiMalloc;
 use tokio::{signal::ctrl_c, sync::oneshot};
 use tracing_subscriber::{
     Layer, filter as tracing_filter, layer::SubscriberExt,
 };
-use util::saturating_pred_level;
 
 mod app;
 mod cli;
@@ -16,6 +14,9 @@ mod gui;
 mod line_buffer;
 mod rpc_server;
 mod util;
+
+use line_buffer::{LineBuffer, LineBufferWriter};
+use util::saturating_pred_level;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;

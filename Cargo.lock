@@ -199,12 +199,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "250f629c0161ad8107cf89319e990051fae62832fd343083bea452d93e2205fd"
 
 [[package]]
-name = "allocator-api2"
-version = "0.2.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
-
-[[package]]
 name = "android-activity"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2877,8 +2871,6 @@ version = "0.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf151400ff0baff5465007dd2f3e717f3fe502074ca563069ce3a6629d07b289"
 dependencies = [
- "allocator-api2",
- "equivalent",
  "foldhash",
 ]
 
@@ -5283,7 +5275,6 @@ name = "plain_bitassets"
 version = "0.12.4"
 dependencies = [
  "addr",
- "ahash",
  "anyhow",
  "async-lock",
  "bech32",
@@ -5301,7 +5292,6 @@ dependencies = [
  "fraction",
  "futures",
  "governor",
- "hashbrown 0.15.2",
  "hashlink 0.10.0",
  "heed",
  "hex 0.4.3",
