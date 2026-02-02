@@ -1231,10 +1231,12 @@ impl Wallet {
             let content = match base_asset {
                 AssetId::Bitcoin => {
                     OutputContent::Bitcoin(BitcoinOutputContent(
-                        bitcoin::Amount::from_sat(change_amount),
+                        bitcoin::Amount::from_sat(receive_quantity),
                     ))
                 }
-                AssetId::BitAsset(_) => OutputContent::BitAsset(change_amount),
+                AssetId::BitAsset(_) => {
+                    OutputContent::BitAsset(receive_quantity)
+                }
                 AssetId::BitAssetControl(_) => OutputContent::BitAssetControl,
             };
             Output {
