@@ -117,7 +117,7 @@ impl Register {
             })
             .response
         });
-        let initial_supply = self.fee.parse();
+        let initial_supply = self.initial_supply.parse();
         ui.add_sized((110., 10.), |ui: &mut egui::Ui| {
             ui.horizontal(|ui| {
                 let fee_edit = egui::TextEdit::singleline(&mut self.fee)
