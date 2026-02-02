@@ -3,8 +3,8 @@ use std::{borrow::Cow, cmp::Ordering, net::SocketAddr};
 use bitcoin::Amount;
 use fraction::Fraction;
 use jsonrpsee::{
-    core::{RpcResult, async_trait},
-    server::{RpcServiceBuilder, Server},
+    core::{RpcResult, async_trait, middleware::RpcServiceBuilder},
+    server::Server,
     types::ErrorObject,
 };
 
@@ -315,6 +315,13 @@ impl RpcServer for RpcServerImpl {
             .encrypt(msg.as_bytes())
             .map(hex::encode)
             .map_err(|err| custom_err(anyhow::anyhow!("{err:?}")))
+    }
+
+    async fn forget_peer(&self, addr: SocketAddr) -> RpcResult<()> {
+        match self.app.node.forget_peer(&addr) {
+            Ok(_) => Ok(()),
+            Err(err) => Err(custom_err(err)),
+        }
     }
 
     async fn format_deposit_address(
