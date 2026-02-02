@@ -10,7 +10,7 @@ use bip300301_enforcer_integration_tests::{
         Mode, Network, PostSetup as EnforcerPostSetup, Sidechain as _,
         setup as setup_enforcer,
     },
-    util::{AbortOnDrop, AsyncTrial},
+    util::{AbortOnDrop, AsyncTrial, TestFailureCollector, TestFileRegistry},
 };
 use futures::{
     FutureExt as _, StreamExt as _, channel::mpsc, future::BoxFuture,
@@ -293,12 +293,12 @@ async fn vote_task(
         drop(bitassets_nodes);
         tracing::info!(
             "Removing {}",
-            enforcer_post_setup.out_dir.path().display()
+            enforcer_post_setup.directories.base_dir.path().display()
         );
         drop(enforcer_post_setup.tasks);
         // Wait for tasks to die
         sleep(std::time::Duration::from_secs(1)).await;
-        enforcer_post_setup.out_dir.cleanup()?;
+        enforcer_post_setup.directories.base_dir.cleanup()?;
     }
     Ok(())
 }
@@ -321,6 +321,13 @@ async fn vote(bin_paths: BinPaths) -> anyhow::Result<()> {
 
 pub fn vote_trial(
     bin_paths: BinPaths,
+    file_registry: TestFileRegistry,
+    failure_collector: TestFailureCollector,
 ) -> AsyncTrial<BoxFuture<'static, anyhow::Result<()>>> {
-    AsyncTrial::new("vote", vote(bin_paths).boxed())
+    AsyncTrial::new(
+        "vote",
+        vote(bin_paths).boxed(),
+        file_registry,
+        failure_collector,
+    )
 }

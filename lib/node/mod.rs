@@ -71,7 +71,7 @@ pub enum Error {
     #[error("mempool error")]
     MemPool(#[from] mempool::Error),
     #[error("net error")]
-    Net(#[from] Box<net::Error>),
+    Net(#[source] Box<net::Error>),
     #[error("net task error")]
     NetTask(#[source] Box<net_task::Error>),
     #[error("No CUSF mainchain wallet client")]
@@ -150,7 +150,7 @@ where
         mainchain::ValidatorClient<MainchainTransport>: Clone,
         MainchainTransport: Send + 'static,
         <MainchainTransport as tonic::client::GrpcService<
-            tonic::body::BoxBody,
+            tonic::body::Body,
         >>::Future: Send,
     {
         let env_path = datadir.join("data.mdb");

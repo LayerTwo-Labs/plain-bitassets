@@ -490,6 +490,7 @@ pub enum Network {
     #[default]
     Signet,
     Regtest,
+    Forknet,
 }
 
 /// Semver-compatible version
