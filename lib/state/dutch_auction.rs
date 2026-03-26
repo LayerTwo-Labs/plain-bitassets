@@ -304,10 +304,8 @@ pub(in crate::state) fn apply_create(
     };
     match duration {
         0 => do yeet error::Create::ZeroDuration,
-        1 => {
-            if final_price != initial_price {
-                do yeet error::Create::PriceMismatch
-            }
+        1 if final_price != initial_price => {
+            do yeet error::Create::PriceMismatch
         }
         _ => (),
     };

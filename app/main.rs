@@ -1,4 +1,3 @@
-#![feature(try_find)]
 use std::path::Path;
 
 use clap::Parser as _;

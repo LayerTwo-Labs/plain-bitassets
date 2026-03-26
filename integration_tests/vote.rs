@@ -1,14 +1,15 @@
 //! Test an unknown withdrawal event
 
-use std::collections::HashMap;
+use std::{collections::HashMap, path::Path};
 
 use bip300301_enforcer_integration_tests::{
     integration_test::{
         activate_sidechain, deposit, fund_enforcer, propose_sidechain,
     },
     setup::{
-        Mode, Network, PostSetup as EnforcerPostSetup, Sidechain as _,
-        setup as setup_enforcer,
+        Mode, Network, PostSetup as EnforcerPostSetup,
+        PreSetup as EnforcerPreSetup, SetupOpts as EnforcerSetupOpts,
+        Sidechain as _,
     },
     util::{AbortOnDrop, AsyncTrial, TestFailureCollector, TestFileRegistry},
 };
@@ -40,7 +41,7 @@ struct BitAssetsNodes {
 
 impl BitAssetsNodes {
     async fn setup(
-        bin_paths: &BinPaths,
+        bitassets_bin_path: &Path,
         res_tx: mpsc::UnboundedSender<anyhow::Result<()>>,
         enforcer_post_setup: &EnforcerPostSetup,
     ) -> anyhow::Result<Self> {
@@ -48,7 +49,7 @@ impl BitAssetsNodes {
         let setup_single = |suffix: &str| {
             PostSetup::setup(
                 Init {
-                    bitassets_app: bin_paths.bitassets.clone(),
+                    bitassets_app: bitassets_bin_path.to_owned(),
                     data_dir_suffix: Some(suffix.to_owned()),
                 },
                 enforcer_post_setup,
@@ -87,23 +88,28 @@ const DEPOSIT_FEE: bitcoin::Amount = bitcoin::Amount::from_sat(1_000_000);
 
 /// Initial setup for the test
 async fn setup(
-    bin_paths: &BinPaths,
+    bin_paths: BinPaths,
     res_tx: mpsc::UnboundedSender<anyhow::Result<()>>,
 ) -> anyhow::Result<(EnforcerPostSetup, BitAssetsNodes)> {
-    let mut enforcer_post_setup = setup_enforcer(
-        &bin_paths.others,
-        Network::Regtest,
-        Mode::Mempool,
-        res_tx.clone(),
-    )
-    .await?;
+    let enforcer_pre_setup =
+        EnforcerPreSetup::new(bin_paths.others, Network::Regtest)?;
+    let mut enforcer_post_setup = {
+        let setup_opts: EnforcerSetupOpts = Default::default();
+        enforcer_pre_setup
+            .setup(Mode::Mempool, setup_opts, res_tx.clone())
+            .await?
+    };
     let () = propose_sidechain::<PostSetup>(&mut enforcer_post_setup).await?;
     tracing::info!("Proposed sidechain successfully");
     let () = activate_sidechain::<PostSetup>(&mut enforcer_post_setup).await?;
     tracing::info!("Activated sidechain successfully");
     let () = fund_enforcer::<PostSetup>(&mut enforcer_post_setup).await?;
-    let mut bitassets_nodes =
-        BitAssetsNodes::setup(bin_paths, res_tx, &enforcer_post_setup).await?;
+    let mut bitassets_nodes = BitAssetsNodes::setup(
+        &bin_paths.bitassets,
+        res_tx,
+        &enforcer_post_setup,
+    )
+    .await?;
     let issuer_deposit_address =
         bitassets_nodes.issuer.get_deposit_address().await?;
     let () = deposit(
@@ -133,7 +139,7 @@ async fn vote_task(
     res_tx: mpsc::UnboundedSender<anyhow::Result<()>>,
 ) -> anyhow::Result<()> {
     let (mut enforcer_post_setup, bitassets_nodes) =
-        setup(&bin_paths, res_tx.clone()).await?;
+        setup(bin_paths, res_tx.clone()).await?;
     tracing::info!("Reserving BitAsset");
     let _: Txid = bitassets_nodes
         .issuer

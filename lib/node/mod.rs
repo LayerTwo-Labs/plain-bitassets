@@ -806,13 +806,13 @@ where
         }
     }
 
-    pub fn get_pending_withdrawal_bundle(
+    pub fn try_get_pending_withdrawal_bundle(
         &self,
     ) -> Result<Option<WithdrawalBundle>, Error> {
         let rotxn = self.env.read_txn()?;
         let bundle = self
             .state
-            .get_pending_withdrawal_bundle(&rotxn)?
+            .try_get_pending_withdrawal_bundle(&rotxn)?
             .map(|(bundle, _)| bundle);
         Ok(bundle)
     }
@@ -954,7 +954,7 @@ where
             return Ok(false);
         };
         let rotxn = self.env.read_txn()?;
-        let bundle = self.state.get_pending_withdrawal_bundle(&rotxn)?;
+        let bundle = self.state.try_get_pending_withdrawal_bundle(&rotxn)?;
         #[cfg(feature = "zmq")]
         {
             let height = self

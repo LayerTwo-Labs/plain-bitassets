@@ -56,8 +56,14 @@ impl<T> RollBack<HeightStamped<T>> {
     }
 
     /// Returns the earliest value
+    #[allow(dead_code)]
     pub(in crate::state) fn earliest(&self) -> &HeightStamped<T> {
         self.0.first()
+    }
+
+    /// Iterate values, earliest to latest
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &HeightStamped<T>> {
+        self.0.iter()
     }
 
     /// Returns the most recent value
