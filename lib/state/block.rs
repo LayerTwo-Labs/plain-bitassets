@@ -443,7 +443,7 @@ pub fn connect(
             let spent_output = state
                 .utxos
                 .try_get(rwtxn, &input_key)?
-                .ok_or(Error::NoUtxo { outpoint: *input })?;
+                .ok_or(error::NoUtxo { outpoint: *input })?;
             let spent_output = SpentOutput {
                 output: spent_output,
                 inpoint: InPoint::Regular {
@@ -607,6 +607,7 @@ pub fn disconnect_tip(
                     BitAssetId(*name_hash),
                 )?;
             }
+            #[allow(clippy::collapsible_match)]
             Some(TxData::BitAssetReservation { commitment: _ }) => {
                 if !state.bitassets.delete_reservation(rwtxn, &txid)? {
                     let err = error::BitAsset::MissingReservation { txid };
@@ -652,9 +653,9 @@ pub fn disconnect_tip(
                 };
                 let outpoint_key = OutPointKey::from_outpoint(&outpoint);
                 if state.utxos.delete(rwtxn, &outpoint_key)? {
-                    Ok(())
+                    Ok::<_, Error>(())
                 } else {
-                    Err(Error::NoUtxo { outpoint })
+                    Err(error::NoUtxo { outpoint }.into())
                 }
             },
         )?;
@@ -685,9 +686,9 @@ pub fn disconnect_tip(
             };
             let outpoint_key = OutPointKey::from_outpoint(&outpoint);
             if state.utxos.delete(rwtxn, &outpoint_key)? {
-                Ok(())
+                Ok::<_, Error>(())
             } else {
-                Err(Error::NoUtxo { outpoint })
+                Err(error::NoUtxo { outpoint }.into())
             }
         },
     )?;

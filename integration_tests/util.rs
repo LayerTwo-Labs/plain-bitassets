@@ -7,6 +7,7 @@ use bip300301_enforcer_integration_tests::util::{
     AbortOnDrop, BinPaths as EnforcerBinPaths, VarError, get_env_var,
     spawn_command_with_args,
 };
+use plain_bitassets::types::Network;
 
 fn load_env_var_from_string(s: &str) -> Result<(), VarError> {
     dotenvy::from_read_override(s.as_bytes())
@@ -39,6 +40,7 @@ pub struct BitAssetsApp {
     pub mainchain_grpc_port: u16,
     /// Port to use for P2P networking
     pub net_port: u16,
+    pub network: Network,
     /// Port to use for the RPC server
     pub rpc_port: u16,
     /// Port to use for ZMQ server
@@ -67,6 +69,7 @@ impl BitAssetsApp {
             self.mainchain_grpc_port.to_string(),
             "--net-addr".to_owned(),
             format!("127.0.0.1:{}", self.net_port),
+            format!("--network={}", self.network),
             "--rpc-port".to_owned(),
             self.rpc_port.to_string(),
             "--zmq-addr".to_owned(),
