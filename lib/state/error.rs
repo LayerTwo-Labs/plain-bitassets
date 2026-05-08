@@ -419,12 +419,30 @@ pub enum Error {
         n_reservation_inputs: usize,
         n_reservation_outputs: usize,
     },
+    #[error(
+        "protocol would be insolvent after confirming unexpected withdrawal bundle {} in {}; bundle outpoint {} already spent",
+        .m6id,
+        .event_block_hash,
+        .outpoint,
+    )]
+    UnexpectedWithdrawalBundleInsolvency {
+        event_block_hash: bitcoin::BlockHash,
+        m6id: M6id,
+        outpoint: OutPoint,
+    },
     #[error("Unknown withdrawal bundle: {m6id}")]
     UnknownWithdrawalBundle { m6id: M6id },
     #[error(
         "Unknown withdrawal bundle confirmed in {event_block_hash}: {m6id}"
     )]
     UnknownWithdrawalBundleConfirmed {
+        event_block_hash: bitcoin::BlockHash,
+        m6id: M6id,
+    },
+    #[error(
+        "Unknown confirmed withdrawal bundle reconfirmed in {event_block_hash}: {m6id}"
+    )]
+    UnknownWithdrawalBundleReconfirmed {
         event_block_hash: bitcoin::BlockHash,
         m6id: M6id,
     },
