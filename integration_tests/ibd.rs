@@ -35,7 +35,7 @@ async fn setup(
     res_tx: mpsc::UnboundedSender<anyhow::Result<()>>,
 ) -> anyhow::Result<(EnforcerPostSetup, BitAssetsNodes)> {
     let enforcer_pre_setup =
-        EnforcerPreSetup::new(bin_paths.others, Network::Regtest)?;
+        EnforcerPreSetup::new(&bin_paths.others, Network::Regtest)?;
     let mut enforcer_post_setup = {
         let setup_opts: EnforcerSetupOpts = Default::default();
         enforcer_pre_setup
@@ -44,7 +44,7 @@ async fn setup(
     };
     let sidechain_sender = PostSetup::setup(
         Init {
-            bitassets_app: bin_paths.bitassets.clone(),
+            bitassets_app: bin_paths.bitassets()?.clone(),
             data_dir_suffix: Some("sender".to_owned()),
         },
         &enforcer_post_setup,
@@ -54,7 +54,7 @@ async fn setup(
     tracing::info!("Setup BitAssets send node successfully");
     let sidechain_syncer = PostSetup::setup(
         Init {
-            bitassets_app: bin_paths.bitassets.clone(),
+            bitassets_app: bin_paths.bitassets()?.clone(),
             data_dir_suffix: Some("syncer".to_owned()),
         },
         &enforcer_post_setup,

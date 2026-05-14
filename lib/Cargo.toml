@@ -26,8 +26,8 @@ bytes = { workspace = true }
 clap = { workspace = true, features = ["derive"], optional = true }
 ed25519-dalek = { workspace = true, features = ["batch", "serde"] }
 educe = { workspace = true, features = ["Clone", "Debug"] }
+error-fatality = { workspace = true }
 fallible-iterator = { workspace = true }
-fatality = { workspace = true }
 futures = { workspace = true, features = ["alloc"] }
 hashlink = { workspace = true, features = ["serde_impl"] }
 fraction = { workspace = true }
