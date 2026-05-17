@@ -92,7 +92,7 @@ async fn setup(
     res_tx: mpsc::UnboundedSender<anyhow::Result<()>>,
 ) -> anyhow::Result<(EnforcerPostSetup, BitAssetsNodes)> {
     let enforcer_pre_setup =
-        EnforcerPreSetup::new(bin_paths.others, Network::Regtest)?;
+        EnforcerPreSetup::new(&bin_paths.others, Network::Regtest)?;
     let mut enforcer_post_setup = {
         let setup_opts: EnforcerSetupOpts = Default::default();
         enforcer_pre_setup
@@ -105,7 +105,7 @@ async fn setup(
     tracing::info!("Activated sidechain successfully");
     let () = fund_enforcer::<PostSetup>(&mut enforcer_post_setup).await?;
     let mut bitassets_nodes = BitAssetsNodes::setup(
-        &bin_paths.bitassets,
+        bin_paths.bitassets()?,
         res_tx,
         &enforcer_post_setup,
     )
