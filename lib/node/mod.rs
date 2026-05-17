@@ -274,10 +274,7 @@ where
         let rotxn = self.env.read_txn()?;
         let amm_pair = AmmPair::new(base, quote);
         let Some(AmmPoolState {
-            reserve0,
-            reserve1,
-            outstanding_lp_tokens: _,
-            ..
+            reserve0, reserve1, ..
         }) = self
             .state
             .amm_pools()
