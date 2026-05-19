@@ -35,15 +35,28 @@ pub struct TxInfo {
     pub txin: Option<TxIn>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+pub struct TxProof {
+    pub txid: Txid,
+    pub transaction: Transaction,
+    pub txin: Option<TxIn>,
+    pub block: Option<Block>,
+    pub sidechain_block_height: Option<u32>,
+    pub bmm_inclusions: Vec<String>,
+    pub best_main_verification: Option<String>,
+    pub confirmations: Option<u32>,
+    pub fee_sats: u64,
+}
+
 #[open_api(ref_schemas[
     bitassets_schema::BitcoinAddr, bitassets_schema::BitcoinBlockHash,
     bitassets_schema::BitcoinTransaction, bitassets_schema::BitcoinOutPoint,
     bitassets_schema::SocketAddr, Address, AssetId, Authorization,
-    BitAssetData, BitAssetDataUpdates, BitAssetId, BitcoinOutputContent,
+    BitAssetData, BitAssetDataUpdates, BitAssetId, BitcoinOutputContent, Block,
     BlockHash, Body, DutchAuctionId, DutchAuctionParams, EncryptionPubKey,
     FilledOutputContent, Header, MerkleRoot, OutPoint, Output, OutputContent,
     PeerConnectionStatus, Signature, Transaction, TxData, Txid, TxIn,
-    WithdrawalOutputContent, VerifyingKey,
+    TxProof, WithdrawalOutputContent, VerifyingKey,
 ])]
 #[rpc(client, server)]
 pub trait Rpc {
@@ -271,6 +284,13 @@ pub trait Rpc {
         &self,
         txid: Txid,
     ) -> RpcResult<Option<TxInfo>>;
+
+    /// Get proof-oriented archive data for a transaction in the current chain
+    #[method(name = "get_transaction_proof")]
+    async fn get_transaction_proof(
+        &self,
+        txid: Txid,
+    ) -> RpcResult<Option<TxProof>>;
 
     /// Get wallet addresses, sorted by base58 encoding
     #[method(name = "get_wallet_addresses")]

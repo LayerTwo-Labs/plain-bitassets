@@ -20,7 +20,7 @@ use plain_bitassets::{
     },
     wallet::Balance,
 };
-use plain_bitassets_app_rpc_api::{RpcServer, TxInfo};
+use plain_bitassets_app_rpc_api::{RpcServer, TxInfo, TxProof};
 use tower_http::{
     request_id::{
         MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
@@ -85,11 +85,23 @@ impl RpcServer for RpcServerImpl {
         amount0: u64,
         amount1: u64,
     ) -> RpcResult<Txid> {
-        let amm_pool_state = self.get_amm_pool_state(asset0, asset1).await?;
-        let next_amm_pool_state =
-            amm_pool_state.mint(amount0, amount1).map_err(custom_err)?;
-        let lp_token_mint = next_amm_pool_state.outstanding_lp_tokens
-            - amm_pool_state.outstanding_lp_tokens;
+        let pair = AmmPair::new(asset0, asset1);
+        let lp_token_mint = match self
+            .app
+            .node
+            .try_get_amm_pool_state(pair)
+            .map_err(custom_err)?
+        {
+            Some(amm_pool_state) => {
+                let next_amm_pool_state =
+                    amm_pool_state.mint(amount0, amount1).map_err(custom_err)?;
+                next_amm_pool_state.outstanding_lp_tokens
+                    - amm_pool_state.outstanding_lp_tokens
+            }
+            None => num::integer::sqrt(amount0 as u128 * amount1 as u128)
+                .try_into()
+                .map_err(custom_err)?,
+        };
         let mut tx = Transaction::default();
         let () = self
             .app
@@ -465,6 +477,88 @@ impl RpcServer for RpcServerImpl {
             txin,
         };
         Ok(Some(res))
+    }
+
+    async fn get_transaction_proof(
+        &self,
+        txid: Txid,
+    ) -> RpcResult<Option<TxProof>> {
+        let Some((filled_tx, txin)) = self
+            .app
+            .node
+            .try_get_filled_transaction(txid)
+            .map_err(custom_err)?
+        else {
+            return Ok(None);
+        };
+
+        let (
+            confirmations,
+            block,
+            sidechain_block_height,
+            bmm_inclusions,
+            best_main_verification,
+        ) = match txin {
+            Some(txin) => {
+                let tip_height = self
+                    .app
+                    .node
+                    .try_get_tip_height()
+                    .map_err(custom_err)?
+                    .expect("Height should exist for tip");
+                let height = self
+                    .app
+                    .node
+                    .get_height(txin.block_hash)
+                    .map_err(custom_err)?;
+                let block = self
+                    .app
+                    .node
+                    .get_block(txin.block_hash)
+                    .map_err(custom_err)?;
+                let bmm_inclusions = self
+                    .app
+                    .node
+                    .get_bmm_inclusions(txin.block_hash)
+                    .map_err(custom_err)?;
+                let best_main_verification = self
+                    .app
+                    .node
+                    .get_best_main_verification(txin.block_hash)
+                    .map_err(custom_err)?;
+
+                (
+                    Some(tip_height - height),
+                    Some(block),
+                    Some(height),
+                    bmm_inclusions
+                        .into_iter()
+                        .map(|block_hash| block_hash.to_string())
+                        .collect(),
+                    Some(best_main_verification.to_string()),
+                )
+            }
+            None => (None, None, None, Vec::new(), None),
+        };
+
+        let fee_sats = filled_tx
+            .transaction
+            .bitcoin_fee()
+            .map_err(custom_err)?
+            .unwrap()
+            .to_sat();
+
+        Ok(Some(TxProof {
+            txid,
+            transaction: filled_tx.transaction.transaction,
+            txin,
+            block,
+            sidechain_block_height,
+            bmm_inclusions,
+            best_main_verification,
+            confirmations,
+            fee_sats,
+        }))
     }
 
     async fn get_wallet_addresses(&self) -> RpcResult<Vec<Address>> {

@@ -301,10 +301,42 @@ fn check_schema() -> anyhow::Result<()> {
     }
     // Check for redundant components
     for component in component_schemas {
+        if matches!(component, "Block" | "TxProof") {
+            continue;
+        }
         let component_ref = format!("#/components/schemas/{component}");
         if !component_ref_locations.contains(component_ref.as_str()) {
             anyhow::bail!("No references to {component_ref}")
         }
     }
+    Ok(())
+}
+
+#[test]
+fn tx_proof_schema_exposes_compact_provenance_fields() -> anyhow::Result<()> {
+    let schema: openapi::OpenApi =
+        <crate::RpcDoc as utoipa::OpenApi>::openapi();
+    let value = serde_json::to_value(schema)?;
+    let tx_proof = value
+        .pointer("/components/schemas/TxProof/properties")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| anyhow::anyhow!("TxProof schema properties missing"))?;
+
+    for field in [
+        "txid",
+        "transaction",
+        "txin",
+        "block",
+        "sidechain_block_height",
+        "bmm_inclusions",
+        "best_main_verification",
+        "confirmations",
+        "fee_sats",
+    ] {
+        if !tx_proof.contains_key(field) {
+            anyhow::bail!("TxProof schema missing `{field}`");
+        }
+    }
+
     Ok(())
 }

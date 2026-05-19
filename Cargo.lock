@@ -5228,6 +5228,7 @@ dependencies = [
  "jsonrpsee 0.25.1",
  "libes",
  "mimalloc",
+ "num",
  "parking_lot",
  "plain_bitassets",
  "plain_bitassets_app_cli",

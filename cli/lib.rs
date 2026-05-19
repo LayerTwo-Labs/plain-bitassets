@@ -162,6 +162,10 @@ pub enum Command {
     GetTransactionInfo {
         txid: Txid,
     },
+    /// Get proof-oriented archive data for a transaction
+    GetTransactionProof {
+        txid: Txid,
+    },
     GetWalletAddresses,
     /// Get wallet UTXOs
     GetWalletUtxos,
@@ -475,6 +479,10 @@ where
         Command::GetTransactionInfo { txid } => {
             let tx_info = rpc_client.get_transaction_info(txid).await?;
             serde_json::to_string_pretty(&tx_info)?
+        }
+        Command::GetTransactionProof { txid } => {
+            let tx_proof = rpc_client.get_transaction_proof(txid).await?;
+            serde_json::to_string_pretty(&tx_proof)?
         }
         Command::GetWalletAddresses => {
             let addresses = rpc_client.get_wallet_addresses().await?;
