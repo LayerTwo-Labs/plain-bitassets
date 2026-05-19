@@ -1,16 +1,21 @@
-use std::{borrow::Cow, cmp::Ordering, collections::HashSet, net::SocketAddr};
+use std::{
+    borrow::Cow, cmp::Ordering, collections::HashSet, net::SocketAddr,
+    time::Duration,
+};
 
 use bitcoin::Amount;
 use fraction::Fraction;
+use futures::StreamExt as _;
 use jsonrpsee::{
     core::{RpcResult, async_trait, middleware::RpcServiceBuilder},
     server::Server,
     types::ErrorObject,
 };
+use serde::{Deserialize, Serialize};
 
 use plain_bitassets::{
     authorization::{self, Dst, Signature},
-    net::Peer,
+    net::{self, Peer},
     state::{self, AmmPair, AmmPoolState, BitAssetSeqId, DutchAuctionState},
     types::{
         Address, AssetId, Authorization, AuthorizedTransaction, BitAssetData,
@@ -55,6 +60,27 @@ where
 pub struct RpcServerImpl {
     app: App,
 }
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum LiteWalletQuicRequest {
+    Subscribe {
+        script_hashes: Vec<String>,
+        from_block_hash: Option<String>,
+    },
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum LiteWalletQuicResponse {
+    Snapshot { update: LiteWalletUpdate },
+    Mempool { update: LiteWalletUpdate },
+    Confirmed { update: LiteWalletUpdate },
+    Error { message: String },
+}
+
+const LITE_WALLET_QUIC_MAX_REQUEST_BYTES: usize = 64 * 1024;
+const LITE_WALLET_QUIC_MEMPOOL_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 impl RpcServerImpl {
     fn script_hash(address: &Address) -> String {
@@ -219,6 +245,232 @@ impl RpcServerImpl {
             sidechain_block_height: Some(sidechain_block_height),
             bmm_inclusions,
             best_main_verification: Some(best_main_verification),
+        })
+    }
+
+    fn lite_wallet_update(
+        &self,
+        script_hashes: Vec<String>,
+        from_block_hash: Option<String>,
+    ) -> RpcResult<LiteWalletUpdate> {
+        if script_hashes.is_empty() {
+            return Err(custom_err_msg(
+                "get_lite_wallet_update requires at least one script hash",
+            ));
+        }
+        let watched: HashSet<String> = script_hashes
+            .into_iter()
+            .map(|script_hash| script_hash.to_ascii_lowercase())
+            .collect();
+        for script_hash in &watched {
+            let decoded = hex::decode(script_hash).map_err(custom_err)?;
+            if decoded.len() != 32 {
+                return Err(custom_err_msg(format!(
+                    "script hash {script_hash} must be 32 bytes"
+                )));
+            }
+        }
+        let tip_hash = self
+            .app
+            .node
+            .try_get_tip()
+            .map_err(custom_err)?
+            .map(|hash| hash.to_string());
+        let tip_height =
+            self.app.node.try_get_tip_height().map_err(custom_err)?;
+
+        let mut created_utxos = Vec::new();
+        let mut spent_outpoints = Vec::new();
+        let mut transactions = Vec::new();
+        let mut proof_refs = Vec::new();
+        let all_confirmed_utxos =
+            self.app.node.get_all_utxos().map_err(custom_err)?;
+        let confirmed_watched_utxos: std::collections::HashMap<_, _> =
+            all_confirmed_utxos
+                .iter()
+                .filter(|(_, output)| {
+                    watched.contains(&Self::script_hash(&output.address))
+                })
+                .map(|(outpoint, output)| (*outpoint, output.clone()))
+                .collect();
+        let (utreexo_leaf_count, utreexo_roots, utreexo_proof_map) =
+            self.utreexo_view(&all_confirmed_utxos)?;
+
+        match (from_block_hash, tip_height) {
+            (None, _) => {
+                created_utxos = confirmed_watched_utxos
+                    .iter()
+                    .map(|(outpoint, output)| PointedOutput {
+                        outpoint: *outpoint,
+                        output: output.clone(),
+                    })
+                    .collect();
+                for txid in confirmed_watched_utxos
+                    .keys()
+                    .filter_map(|outpoint| match outpoint {
+                        plain_bitassets::types::OutPoint::Regular {
+                            txid,
+                            vout: _,
+                        } => Some(*txid),
+                        plain_bitassets::types::OutPoint::Coinbase {
+                            ..
+                        }
+                        | plain_bitassets::types::OutPoint::Deposit(_) => None,
+                    })
+                    .collect::<HashSet<_>>()
+                {
+                    if let Some((filled_tx, _)) = self
+                        .app
+                        .node
+                        .try_get_filled_transaction(txid)
+                        .map_err(custom_err)?
+                    {
+                        transactions.push(filled_tx.transaction.transaction);
+                    }
+                    proof_refs.push(self.lite_wallet_proof_ref(txid)?);
+                }
+            }
+            (Some(from_block_hash), Some(tip_height)) => {
+                let from_block_hash: BlockHash =
+                    from_block_hash.parse().map_err(custom_err)?;
+                let from_height = self
+                    .app
+                    .node
+                    .try_get_height(from_block_hash)
+                    .map_err(custom_err)?
+                    .ok_or_else(|| {
+                        custom_err_msg(format!(
+                            "from_block_hash {from_block_hash} is not known"
+                        ))
+                    })?;
+                for height in from_height.saturating_add(1)..=tip_height {
+                    let Some(block_hash) = self
+                        .app
+                        .node
+                        .try_get_block_hash(height)
+                        .map_err(custom_err)?
+                    else {
+                        continue;
+                    };
+                    let body = self
+                        .app
+                        .node
+                        .get_body(block_hash)
+                        .map_err(custom_err)?;
+                    for tx in body.transactions {
+                        let txid = tx.txid();
+                        let filled_tx = self
+                            .app
+                            .node
+                            .try_get_filled_transaction(txid)
+                            .map_err(custom_err)?
+                            .map(|(filled_tx, _)| filled_tx.transaction);
+                        let Some(filled_tx) = filled_tx else {
+                            continue;
+                        };
+
+                        let mut relevant = false;
+                        for (outpoint, spent_output) in filled_tx
+                            .inputs()
+                            .iter()
+                            .zip(filled_tx.spent_utxos.iter())
+                        {
+                            if watched.contains(&Self::script_hash(
+                                &spent_output.address,
+                            )) {
+                                spent_outpoints.push(*outpoint);
+                                relevant = true;
+                            }
+                        }
+                        if let Some(filled_outputs) = filled_tx.filled_outputs()
+                        {
+                            for (vout, output) in
+                                filled_outputs.into_iter().enumerate()
+                            {
+                                if watched.contains(&Self::script_hash(
+                                    &output.address,
+                                )) {
+                                    created_utxos.push(PointedOutput {
+                                        outpoint: plain_bitassets::types::OutPoint::Regular {
+                                            txid,
+                                            vout: vout as u32,
+                                        },
+                                        output,
+                                    });
+                                    relevant = true;
+                                }
+                            }
+                        }
+                        if relevant {
+                            transactions.push(tx);
+                            proof_refs.push(self.lite_wallet_proof_ref(txid)?);
+                        }
+                    }
+                }
+            }
+            (Some(_), None) => (),
+        }
+
+        let mempool_transactions =
+            self.app.node.get_all_transactions().map_err(custom_err)?;
+        let mut mempool_created_utxos = Vec::new();
+        for tx in &mempool_transactions {
+            let txid = tx.transaction.txid();
+            for (vout, output) in tx.transaction.outputs.iter().enumerate() {
+                if watched.contains(&Self::script_hash(&output.address)) {
+                    mempool_created_utxos.push(PointedOutput {
+                        outpoint: OutPoint::Regular {
+                            txid,
+                            vout: vout as u32,
+                        },
+                        output: output.clone(),
+                    });
+                }
+            }
+        }
+
+        let watched_unspent_outpoints: Vec<_> = confirmed_watched_utxos
+            .keys()
+            .chain(mempool_created_utxos.iter().map(|utxo| &utxo.outpoint))
+            .collect();
+        let mempool_spent_outpoints = self
+            .app
+            .node
+            .get_unconfirmed_spent_utxos(watched_unspent_outpoints)
+            .map_err(custom_err)?
+            .into_iter()
+            .map(|(outpoint, _)| outpoint)
+            .collect();
+        let utreexo_proofs = created_utxos
+            .iter()
+            .filter_map(|utxo| {
+                let (leaf_hash, proof) =
+                    utreexo_proof_map.get(&utxo.outpoint)?.clone();
+                Some(LiteWalletUtreexoProof {
+                    outpoint: utxo.outpoint,
+                    leaf_hash,
+                    targets: proof.targets,
+                    hashes: proof
+                        .hashes
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect(),
+                })
+            })
+            .collect();
+
+        Ok(LiteWalletUpdate {
+            tip_hash,
+            tip_height,
+            utreexo_leaf_count,
+            utreexo_roots,
+            created_utxos,
+            spent_outpoints,
+            mempool_created_utxos,
+            mempool_spent_outpoints,
+            transactions,
+            proof_refs,
+            utreexo_proofs,
         })
     }
 }
@@ -795,225 +1047,7 @@ impl RpcServer for RpcServerImpl {
         script_hashes: Vec<String>,
         from_block_hash: Option<String>,
     ) -> RpcResult<LiteWalletUpdate> {
-        if script_hashes.is_empty() {
-            return Err(custom_err_msg(
-                "get_lite_wallet_update requires at least one script hash",
-            ));
-        }
-        let watched: HashSet<String> = script_hashes
-            .into_iter()
-            .map(|script_hash| script_hash.to_ascii_lowercase())
-            .collect();
-        for script_hash in &watched {
-            let decoded = hex::decode(script_hash).map_err(custom_err)?;
-            if decoded.len() != 32 {
-                return Err(custom_err_msg(format!(
-                    "script hash {script_hash} must be 32 bytes"
-                )));
-            }
-        }
-        let tip_hash = self
-            .app
-            .node
-            .try_get_tip()
-            .map_err(custom_err)?
-            .map(|hash| hash.to_string());
-        let tip_height =
-            self.app.node.try_get_tip_height().map_err(custom_err)?;
-
-        let mut created_utxos = Vec::new();
-        let mut spent_outpoints = Vec::new();
-        let mut transactions = Vec::new();
-        let mut proof_refs = Vec::new();
-        let all_confirmed_utxos =
-            self.app.node.get_all_utxos().map_err(custom_err)?;
-        let confirmed_watched_utxos: std::collections::HashMap<_, _> =
-            all_confirmed_utxos
-                .iter()
-                .filter(|(_, output)| {
-                    watched.contains(&Self::script_hash(&output.address))
-                })
-                .map(|(outpoint, output)| (*outpoint, output.clone()))
-                .collect();
-        let (utreexo_leaf_count, utreexo_roots, utreexo_proof_map) =
-            self.utreexo_view(&all_confirmed_utxos)?;
-
-        match (from_block_hash, tip_height) {
-            (None, _) => {
-                created_utxos = confirmed_watched_utxos
-                    .iter()
-                    .map(|(outpoint, output)| PointedOutput {
-                        outpoint: *outpoint,
-                        output: output.clone(),
-                    })
-                    .collect();
-                for txid in confirmed_watched_utxos
-                    .keys()
-                    .filter_map(|outpoint| match outpoint {
-                        plain_bitassets::types::OutPoint::Regular {
-                            txid,
-                            vout: _,
-                        } => Some(*txid),
-                        plain_bitassets::types::OutPoint::Coinbase {
-                            ..
-                        }
-                        | plain_bitassets::types::OutPoint::Deposit(_) => None,
-                    })
-                    .collect::<HashSet<_>>()
-                {
-                    if let Some((filled_tx, _)) = self
-                        .app
-                        .node
-                        .try_get_filled_transaction(txid)
-                        .map_err(custom_err)?
-                    {
-                        transactions.push(filled_tx.transaction.transaction);
-                    }
-                    proof_refs.push(self.lite_wallet_proof_ref(txid)?);
-                }
-            }
-            (Some(from_block_hash), Some(tip_height)) => {
-                let from_block_hash: BlockHash =
-                    from_block_hash.parse().map_err(custom_err)?;
-                let from_height = self
-                    .app
-                    .node
-                    .try_get_height(from_block_hash)
-                    .map_err(custom_err)?
-                    .ok_or_else(|| {
-                        custom_err_msg(format!(
-                            "from_block_hash {from_block_hash} is not known"
-                        ))
-                    })?;
-                for height in from_height.saturating_add(1)..=tip_height {
-                    let Some(block_hash) = self
-                        .app
-                        .node
-                        .try_get_block_hash(height)
-                        .map_err(custom_err)?
-                    else {
-                        continue;
-                    };
-                    let body = self
-                        .app
-                        .node
-                        .get_body(block_hash)
-                        .map_err(custom_err)?;
-                    for tx in body.transactions {
-                        let txid = tx.txid();
-                        let filled_tx = self
-                            .app
-                            .node
-                            .try_get_filled_transaction(txid)
-                            .map_err(custom_err)?
-                            .map(|(filled_tx, _)| filled_tx.transaction);
-                        let Some(filled_tx) = filled_tx else {
-                            continue;
-                        };
-
-                        let mut relevant = false;
-                        for (outpoint, spent_output) in filled_tx
-                            .inputs()
-                            .iter()
-                            .zip(filled_tx.spent_utxos.iter())
-                        {
-                            if watched.contains(&Self::script_hash(
-                                &spent_output.address,
-                            )) {
-                                spent_outpoints.push(*outpoint);
-                                relevant = true;
-                            }
-                        }
-                        if let Some(filled_outputs) = filled_tx.filled_outputs()
-                        {
-                            for (vout, output) in
-                                filled_outputs.into_iter().enumerate()
-                            {
-                                if watched.contains(&Self::script_hash(
-                                    &output.address,
-                                )) {
-                                    created_utxos.push(PointedOutput {
-                                        outpoint: plain_bitassets::types::OutPoint::Regular {
-                                            txid,
-                                            vout: vout as u32,
-                                        },
-                                        output,
-                                    });
-                                    relevant = true;
-                                }
-                            }
-                        }
-                        if relevant {
-                            transactions.push(tx);
-                            proof_refs.push(self.lite_wallet_proof_ref(txid)?);
-                        }
-                    }
-                }
-            }
-            (Some(_), None) => (),
-        }
-
-        let mempool_transactions =
-            self.app.node.get_all_transactions().map_err(custom_err)?;
-        let mut mempool_created_utxos = Vec::new();
-        for tx in &mempool_transactions {
-            let txid = tx.transaction.txid();
-            for (vout, output) in tx.transaction.outputs.iter().enumerate() {
-                if watched.contains(&Self::script_hash(&output.address)) {
-                    mempool_created_utxos.push(PointedOutput {
-                        outpoint: OutPoint::Regular {
-                            txid,
-                            vout: vout as u32,
-                        },
-                        output: output.clone(),
-                    });
-                }
-            }
-        }
-
-        let watched_unspent_outpoints: Vec<_> = confirmed_watched_utxos
-            .keys()
-            .chain(mempool_created_utxos.iter().map(|utxo| &utxo.outpoint))
-            .collect();
-        let mempool_spent_outpoints = self
-            .app
-            .node
-            .get_unconfirmed_spent_utxos(watched_unspent_outpoints)
-            .map_err(custom_err)?
-            .into_iter()
-            .map(|(outpoint, _)| outpoint)
-            .collect();
-        let utreexo_proofs = created_utxos
-            .iter()
-            .filter_map(|utxo| {
-                let (leaf_hash, proof) =
-                    utreexo_proof_map.get(&utxo.outpoint)?.clone();
-                Some(LiteWalletUtreexoProof {
-                    outpoint: utxo.outpoint,
-                    leaf_hash,
-                    targets: proof.targets,
-                    hashes: proof
-                        .hashes
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect(),
-                })
-            })
-            .collect();
-
-        Ok(LiteWalletUpdate {
-            tip_hash,
-            tip_height,
-            utreexo_leaf_count,
-            utreexo_roots,
-            created_utxos,
-            spent_outpoints,
-            mempool_created_utxos,
-            mempool_spent_outpoints,
-            transactions,
-            proof_refs,
-            utreexo_proofs,
-        })
+        self.lite_wallet_update(script_hashes, from_block_hash)
     }
 
     async fn mine(&self, fee: Option<u64>) -> RpcResult<()> {
@@ -1344,4 +1378,140 @@ pub async fn run_server(
     tokio::spawn(handle.stopped());
 
     Ok(addr)
+}
+
+pub async fn run_lite_wallet_quic_server(
+    app: App,
+    bind_addr: SocketAddr,
+) -> anyhow::Result<()> {
+    let (endpoint, _server_cert) = net::make_server_endpoint(bind_addr)?;
+    while let Some(connecting) = endpoint.accept().await {
+        let app = app.clone();
+        tokio::spawn(async move {
+            if let Err(err) =
+                handle_lite_wallet_quic_connection(app, connecting).await
+            {
+                tracing::warn!("lite-wallet QUIC connection failed: {err:#}");
+            }
+        });
+    }
+    Ok(())
+}
+
+async fn handle_lite_wallet_quic_connection(
+    app: App,
+    connecting: quinn::Incoming,
+) -> anyhow::Result<()> {
+    let connection = connecting.await?;
+    let (mut send, mut recv) = connection.accept_bi().await?;
+    let request_bytes =
+        recv.read_to_end(LITE_WALLET_QUIC_MAX_REQUEST_BYTES).await?;
+    let request =
+        match serde_json::from_slice::<LiteWalletQuicRequest>(&request_bytes) {
+            Ok(request) => request,
+            Err(err) => {
+                write_lite_wallet_quic_response(
+                    &mut send,
+                    &LiteWalletQuicResponse::Error {
+                        message: format!("invalid lite-wallet request: {err}"),
+                    },
+                )
+                .await?;
+                send.finish()?;
+                return Ok(());
+            }
+        };
+
+    let LiteWalletQuicRequest::Subscribe {
+        script_hashes,
+        from_block_hash,
+    } = request;
+    let rpc = RpcServerImpl { app: app.clone() };
+    let mut last_tip_hash = from_block_hash;
+    match rpc.lite_wallet_update(script_hashes.clone(), last_tip_hash.clone()) {
+        Ok(update) => {
+            last_tip_hash = update.tip_hash.clone();
+            write_lite_wallet_quic_response(
+                &mut send,
+                &LiteWalletQuicResponse::Snapshot { update },
+            )
+            .await?;
+        }
+        Err(err) => {
+            write_lite_wallet_quic_response(
+                &mut send,
+                &LiteWalletQuicResponse::Error {
+                    message: err.to_string(),
+                },
+            )
+            .await?;
+            send.finish()?;
+            return Ok(());
+        }
+    }
+
+    let mut state_changes = Box::pin(app.node.watch_state());
+    let mut mempool_poll =
+        tokio::time::interval(LITE_WALLET_QUIC_MEMPOOL_POLL_INTERVAL);
+    loop {
+        tokio::select! {
+            Some(()) = state_changes.next() => {
+                match rpc.lite_wallet_update(script_hashes.clone(), last_tip_hash.clone()) {
+                    Ok(update) => {
+                        last_tip_hash = update.tip_hash.clone();
+                        write_lite_wallet_quic_response(
+                            &mut send,
+                            &LiteWalletQuicResponse::Confirmed { update },
+                        )
+                        .await?;
+                    }
+                    Err(err) => {
+                        write_lite_wallet_quic_response(
+                            &mut send,
+                            &LiteWalletQuicResponse::Error {
+                                message: err.to_string(),
+                            },
+                        )
+                        .await?;
+                    }
+                }
+            }
+            _ = mempool_poll.tick() => {
+                match rpc.lite_wallet_update(script_hashes.clone(), last_tip_hash.clone()) {
+                    Ok(update)
+                        if !update.mempool_created_utxos.is_empty()
+                            || !update.mempool_spent_outpoints.is_empty() =>
+                    {
+                        write_lite_wallet_quic_response(
+                            &mut send,
+                            &LiteWalletQuicResponse::Mempool { update },
+                        )
+                        .await?;
+                    }
+                    Ok(_) => {}
+                    Err(err) => {
+                        write_lite_wallet_quic_response(
+                            &mut send,
+                            &LiteWalletQuicResponse::Error {
+                                message: err.to_string(),
+                            },
+                        )
+                        .await?;
+                    }
+                }
+            }
+            else => break,
+        }
+    }
+    Ok(())
+}
+
+async fn write_lite_wallet_quic_response(
+    send: &mut quinn::SendStream,
+    response: &LiteWalletQuicResponse,
+) -> anyhow::Result<()> {
+    let mut bytes = serde_json::to_vec(response)?;
+    bytes.push(b'\n');
+    send.write_all(&bytes).await?;
+    Ok(())
 }

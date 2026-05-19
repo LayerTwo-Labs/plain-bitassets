@@ -37,6 +37,9 @@ const DEFAULT_RPC_HOST: Host = Host::Ipv4(Ipv4Addr::LOCALHOST);
 
 const DEFAULT_RPC_PORT: u16 = 6000 + THIS_SIDECHAIN as u16;
 
+const DEFAULT_LITE_WALLET_QUIC_ADDR: SocketAddr =
+    ipv4_socket_addr([127, 0, 0, 1], 6100 + THIS_SIDECHAIN as u16);
+
 #[cfg(feature = "zmq")]
 const DEFAULT_ZMQ_ADDR: SocketAddr =
     ipv4_socket_addr([127, 0, 0, 1], 28000 + THIS_SIDECHAIN as u16);
@@ -148,6 +151,9 @@ pub(super) struct Cli {
     /// Port for the RPC server
     #[arg(default_value_t = DEFAULT_RPC_PORT, long)]
     rpc_port: u16,
+    /// Socket address for lite-wallet QUIC subscriptions
+    #[arg(default_value_t = DEFAULT_LITE_WALLET_QUIC_ADDR, long)]
+    lite_wallet_quic_addr: SocketAddr,
     /// ZMQ pub/sub address
     #[cfg(feature = "zmq")]
     #[arg(default_value_t = DEFAULT_ZMQ_ADDR, long, short)]
@@ -198,6 +204,7 @@ impl Cli {
             network: self.network,
             rpc_host: self.rpc_host,
             rpc_port: self.rpc_port,
+            lite_wallet_quic_addr: self.lite_wallet_quic_addr,
             #[cfg(feature = "zmq")]
             zmq_addr: self.zmq_addr,
         })
@@ -218,6 +225,7 @@ pub struct Config {
     pub network: Network,
     pub rpc_host: Host,
     pub rpc_port: u16,
+    pub lite_wallet_quic_addr: SocketAddr,
     #[cfg(feature = "zmq")]
     pub zmq_addr: SocketAddr,
 }

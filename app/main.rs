@@ -215,6 +215,24 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         });
+        app.runtime.spawn({
+            let app = app.clone();
+            let lite_wallet_quic_addr = config.lite_wallet_quic_addr;
+            async move {
+                tracing::info!(
+                    %lite_wallet_quic_addr,
+                    "starting lite-wallet QUIC server"
+                );
+                if let Err(err) = rpc_server::run_lite_wallet_quic_server(
+                    app,
+                    lite_wallet_quic_addr,
+                )
+                .await
+                {
+                    tracing::error!("{err:#}");
+                }
+            }
+        });
     });
     if !config.headless {
         let app = match app {
