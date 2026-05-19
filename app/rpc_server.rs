@@ -1,4 +1,4 @@
-use std::{borrow::Cow, cmp::Ordering, net::SocketAddr};
+use std::{borrow::Cow, cmp::Ordering, collections::HashSet, net::SocketAddr};
 
 use bitcoin::Amount;
 use fraction::Fraction;
@@ -20,7 +20,9 @@ use plain_bitassets::{
     },
     wallet::Balance,
 };
-use plain_bitassets_app_rpc_api::{RpcServer, TxInfo, TxProof};
+use plain_bitassets_app_rpc_api::{
+    LiteWalletProofRef, LiteWalletUpdate, RpcServer, TxInfo, TxProof,
+};
 use tower_http::{
     request_id::{
         MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
@@ -44,6 +46,63 @@ where
 
 pub struct RpcServerImpl {
     app: App,
+}
+
+impl RpcServerImpl {
+    fn lite_wallet_proof_ref(
+        &self,
+        txid: Txid,
+    ) -> RpcResult<LiteWalletProofRef> {
+        let Some((_, txin)) = self
+            .app
+            .node
+            .try_get_filled_transaction(txid)
+            .map_err(custom_err)?
+        else {
+            return Ok(LiteWalletProofRef {
+                txid,
+                block_hash: None,
+                sidechain_block_height: None,
+                bmm_inclusions: Vec::new(),
+                best_main_verification: None,
+            });
+        };
+        let Some(txin) = txin else {
+            return Ok(LiteWalletProofRef {
+                txid,
+                block_hash: None,
+                sidechain_block_height: None,
+                bmm_inclusions: Vec::new(),
+                best_main_verification: None,
+            });
+        };
+        let sidechain_block_height = self
+            .app
+            .node
+            .get_height(txin.block_hash)
+            .map_err(custom_err)?;
+        let bmm_inclusions = self
+            .app
+            .node
+            .get_bmm_inclusions(txin.block_hash)
+            .map_err(custom_err)?
+            .into_iter()
+            .map(|block_hash| block_hash.to_string())
+            .collect();
+        let best_main_verification = self
+            .app
+            .node
+            .get_best_main_verification(txin.block_hash)
+            .map_err(custom_err)?
+            .to_string();
+        Ok(LiteWalletProofRef {
+            txid,
+            block_hash: Some(txin.block_hash.to_string()),
+            sidechain_block_height: Some(sidechain_block_height),
+            bmm_inclusions,
+            best_main_verification: Some(best_main_verification),
+        })
+    }
 }
 
 #[async_trait]
@@ -611,6 +670,181 @@ impl RpcServer for RpcServerImpl {
             .map(|(outpoint, output)| PointedOutput { outpoint, output })
             .collect();
         Ok(res)
+    }
+
+    async fn get_lite_wallet_update(
+        &self,
+        addresses: Vec<Address>,
+        from_block_hash: Option<String>,
+    ) -> RpcResult<LiteWalletUpdate> {
+        if addresses.is_empty() {
+            return Err(custom_err_msg(
+                "get_lite_wallet_update requires at least one address",
+            ));
+        }
+        let watched: HashSet<Address> = addresses.into_iter().collect();
+        let tip_hash = self
+            .app
+            .node
+            .try_get_tip()
+            .map_err(custom_err)?
+            .map(|hash| hash.to_string());
+        let tip_height =
+            self.app.node.try_get_tip_height().map_err(custom_err)?;
+
+        let mut created_utxos = Vec::new();
+        let mut spent_outpoints = Vec::new();
+        let mut transactions = Vec::new();
+        let mut proof_refs = Vec::new();
+        let confirmed_watched_utxos = self
+            .app
+            .node
+            .get_utxos_by_addresses(&watched)
+            .map_err(custom_err)?;
+
+        match (from_block_hash, tip_height) {
+            (None, _) => {
+                created_utxos = confirmed_watched_utxos
+                    .iter()
+                    .map(|(outpoint, output)| PointedOutput {
+                        outpoint: *outpoint,
+                        output: output.clone(),
+                    })
+                    .collect();
+                for txid in confirmed_watched_utxos
+                    .keys()
+                    .filter_map(|outpoint| match outpoint {
+                        plain_bitassets::types::OutPoint::Regular {
+                            txid,
+                            vout: _,
+                        } => Some(*txid),
+                        plain_bitassets::types::OutPoint::Coinbase {
+                            ..
+                        }
+                        | plain_bitassets::types::OutPoint::Deposit(_) => None,
+                    })
+                    .collect::<HashSet<_>>()
+                {
+                    if let Some((filled_tx, _)) = self
+                        .app
+                        .node
+                        .try_get_filled_transaction(txid)
+                        .map_err(custom_err)?
+                    {
+                        transactions.push(filled_tx.transaction.transaction);
+                    }
+                    proof_refs.push(self.lite_wallet_proof_ref(txid)?);
+                }
+            }
+            (Some(from_block_hash), Some(tip_height)) => {
+                let from_block_hash: BlockHash =
+                    from_block_hash.parse().map_err(custom_err)?;
+                let from_height = self
+                    .app
+                    .node
+                    .try_get_height(from_block_hash)
+                    .map_err(custom_err)?
+                    .ok_or_else(|| {
+                        custom_err_msg(format!(
+                            "from_block_hash {from_block_hash} is not known"
+                        ))
+                    })?;
+                for height in from_height.saturating_add(1)..=tip_height {
+                    let Some(block_hash) = self
+                        .app
+                        .node
+                        .try_get_block_hash(height)
+                        .map_err(custom_err)?
+                    else {
+                        continue;
+                    };
+                    let body = self
+                        .app
+                        .node
+                        .get_body(block_hash)
+                        .map_err(custom_err)?;
+                    for tx in body.transactions {
+                        let txid = tx.txid();
+                        let filled_tx = self
+                            .app
+                            .node
+                            .try_get_filled_transaction(txid)
+                            .map_err(custom_err)?
+                            .map(|(filled_tx, _)| filled_tx.transaction);
+                        let Some(filled_tx) = filled_tx else {
+                            continue;
+                        };
+
+                        let mut relevant = false;
+                        for (outpoint, spent_output) in filled_tx
+                            .inputs()
+                            .iter()
+                            .zip(filled_tx.spent_utxos.iter())
+                        {
+                            if watched.contains(&spent_output.address) {
+                                spent_outpoints.push(*outpoint);
+                                relevant = true;
+                            }
+                        }
+                        if let Some(filled_outputs) = filled_tx.filled_outputs()
+                        {
+                            for (vout, output) in
+                                filled_outputs.into_iter().enumerate()
+                            {
+                                if watched.contains(&output.address) {
+                                    created_utxos.push(PointedOutput {
+                                        outpoint: plain_bitassets::types::OutPoint::Regular {
+                                            txid,
+                                            vout: vout as u32,
+                                        },
+                                        output,
+                                    });
+                                    relevant = true;
+                                }
+                            }
+                        }
+                        if relevant {
+                            transactions.push(tx);
+                            proof_refs.push(self.lite_wallet_proof_ref(txid)?);
+                        }
+                    }
+                }
+            }
+            (Some(_), None) => (),
+        }
+
+        let mempool_created_utxos: Vec<_> = self
+            .app
+            .node
+            .get_unconfirmed_utxos_by_addresses(&watched)
+            .map_err(custom_err)?
+            .into_iter()
+            .map(|(outpoint, output)| PointedOutput { outpoint, output })
+            .collect();
+
+        let watched_unspent_outpoints: Vec<_> = confirmed_watched_utxos
+            .keys()
+            .chain(mempool_created_utxos.iter().map(|utxo| &utxo.outpoint))
+            .collect();
+        let mempool_spent_outpoints = self
+            .app
+            .node
+            .get_unconfirmed_spent_utxos(watched_unspent_outpoints)
+            .map_err(custom_err)?
+            .into_iter()
+            .map(|(outpoint, _)| outpoint)
+            .collect();
+
+        Ok(LiteWalletUpdate {
+            tip_hash,
+            tip_height,
+            created_utxos,
+            spent_outpoints,
+            mempool_created_utxos,
+            mempool_spent_outpoints,
+            transactions,
+            proof_refs,
+        })
     }
 
     async fn mine(&self, fee: Option<u64>) -> RpcResult<()> {

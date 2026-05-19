@@ -48,6 +48,27 @@ pub struct TxProof {
     pub fee_sats: u64,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+pub struct LiteWalletProofRef {
+    pub txid: Txid,
+    pub block_hash: Option<String>,
+    pub sidechain_block_height: Option<u32>,
+    pub bmm_inclusions: Vec<String>,
+    pub best_main_verification: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+pub struct LiteWalletUpdate {
+    pub tip_hash: Option<String>,
+    pub tip_height: Option<u32>,
+    pub created_utxos: Vec<PointedOutput<FilledOutputContent>>,
+    pub spent_outpoints: Vec<OutPoint>,
+    pub mempool_created_utxos: Vec<PointedOutput>,
+    pub mempool_spent_outpoints: Vec<OutPoint>,
+    pub transactions: Vec<Transaction>,
+    pub proof_refs: Vec<LiteWalletProofRef>,
+}
+
 #[open_api(ref_schemas[
     bitassets_schema::BitcoinAddr, bitassets_schema::BitcoinBlockHash,
     bitassets_schema::BitcoinTransaction, bitassets_schema::BitcoinOutPoint,
@@ -55,8 +76,9 @@ pub struct TxProof {
     BitAssetData, BitAssetDataUpdates, BitAssetId, BitcoinOutputContent, Block,
     BlockHash, Body, DutchAuctionId, DutchAuctionParams, EncryptionPubKey,
     FilledOutputContent, Header, MerkleRoot, OutPoint, Output, OutputContent,
-    PeerConnectionStatus, Signature, Transaction, TxData, Txid, TxIn,
-    TxProof, WithdrawalOutputContent, VerifyingKey,
+    LiteWalletProofRef, LiteWalletUpdate, PeerConnectionStatus, Signature,
+    Transaction, TxData, Txid, TxIn, TxProof, WithdrawalOutputContent,
+    VerifyingKey,
 ])]
 #[rpc(client, server)]
 pub trait Rpc {
@@ -324,6 +346,15 @@ pub trait Rpc {
     async fn list_utxos(
         &self,
     ) -> RpcResult<Vec<PointedOutput<FilledOutputContent>>>;
+
+    /// Get address-scoped lite-wallet state updates.
+    #[open_api_method(output_schema(ToSchema))]
+    #[method(name = "get_lite_wallet_update")]
+    async fn get_lite_wallet_update(
+        &self,
+        addresses: Vec<Address>,
+        from_block_hash: Option<String>,
+    ) -> RpcResult<LiteWalletUpdate>;
 
     /// Attempt to mine a sidechain block
     #[open_api_method(output_schema(ToSchema))]
