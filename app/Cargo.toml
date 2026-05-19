@@ -32,6 +32,7 @@ plain_bitassets = { path = "../lib", features = ["clap"] }
 plain_bitassets_app_cli = { path = "../cli" }
 plain_bitassets_app_rpc_api = { path = "../rpc-api" }
 poll-promise = { workspace = true, features = ["tokio"] }
+rustreexo = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 shlex = { workspace = true }
 strum = {  workspace = true, features = ["derive"] }

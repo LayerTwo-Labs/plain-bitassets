@@ -15,13 +15,21 @@ use plain_bitassets::{
     types::{
         Address, AssetId, Authorization, AuthorizedTransaction, BitAssetData,
         BitAssetId, Block, BlockHash, DutchAuctionId, DutchAuctionParams,
-        EncryptionPubKey, FilledOutputContent, PointedOutput, Transaction,
-        Txid, VerifyingKey, WithdrawalBundle, keys::Ecies,
+        EncryptionPubKey, FilledOutput, FilledOutputContent, OutPoint,
+        PointedOutput, Transaction, Txid, VerifyingKey, WithdrawalBundle,
+        keys::Ecies,
     },
     wallet::Balance,
 };
 use plain_bitassets_app_rpc_api::{
-    LiteWalletProofRef, LiteWalletUpdate, RpcServer, TxInfo, TxProof,
+    LiteWalletProofRef, LiteWalletUpdate, LiteWalletUtreexoProof, RpcServer,
+    TxInfo, TxProof,
+};
+use rustreexo::{
+    node_hash::BitcoinNodeHash,
+    pollard::{Pollard, PollardAddition},
+    proof::Proof,
+    stump::Stump,
 };
 use tower_http::{
     request_id::{
@@ -49,6 +57,116 @@ pub struct RpcServerImpl {
 }
 
 impl RpcServerImpl {
+    fn script_hash(address: &Address) -> String {
+        hex::encode(blake3::hash(&address.0).as_bytes())
+    }
+
+    fn lite_wallet_leaf_hash(
+        outpoint: &OutPoint,
+        output: &FilledOutput,
+        proof_ref: &LiteWalletProofRef,
+    ) -> BitcoinNodeHash {
+        let content = match &output.content {
+            FilledOutputContent::BitAsset(bitasset_id, amount) => {
+                format!("bitasset:{}:{amount}", hex::encode(bitasset_id.0))
+            }
+            FilledOutputContent::BitAssetControl(bitasset_id) => {
+                format!("bitasset-control:{}", hex::encode(bitasset_id.0))
+            }
+            FilledOutputContent::AmmLpToken {
+                asset0,
+                asset1,
+                amount,
+            } => {
+                format!("amm-lp:{asset0}:{asset1}:{amount}")
+            }
+            FilledOutputContent::Bitcoin(value) => {
+                format!("bitcoin:{}", value.0.to_sat())
+            }
+            FilledOutputContent::BitcoinWithdrawal(withdrawal) => {
+                format!("withdrawal:{withdrawal:?}")
+            }
+            FilledOutputContent::BitAssetReservation(txid, commitment) => {
+                format!("reservation:{txid}:{}", hex::encode(commitment))
+            }
+            FilledOutputContent::DutchAuctionReceipt(auction_id) => {
+                format!("dutch-auction:{auction_id}")
+            }
+        };
+        let payload = borsh::to_vec(&(
+            "plain-bitassets:lite-wallet-leaf:v1",
+            outpoint.to_string(),
+            output.address.0,
+            content,
+            output.memo.clone(),
+            proof_ref.sidechain_block_height.unwrap_or_default(),
+            proof_ref.block_hash.clone().unwrap_or_default(),
+        ))
+        .expect("lite-wallet leaf payload is always borsh-serializable");
+        BitcoinNodeHash::from(*blake3::hash(&payload).as_bytes())
+    }
+
+    fn utreexo_view(
+        &self,
+        utxos: &std::collections::HashMap<OutPoint, FilledOutput>,
+    ) -> RpcResult<(
+        u64,
+        Vec<String>,
+        std::collections::HashMap<OutPoint, (String, Proof)>,
+    )> {
+        let mut pollard = Pollard::new();
+        let mut stump = Stump::new();
+        let mut leaves = Vec::new();
+        let mut leaf_by_outpoint = std::collections::HashMap::new();
+        for (outpoint, output) in utxos {
+            let txid = match outpoint {
+                OutPoint::Regular { txid, vout: _ } => Some(*txid),
+                OutPoint::Coinbase { .. } | OutPoint::Deposit(_) => None,
+            };
+            let proof_ref = match txid {
+                Some(txid) => self.lite_wallet_proof_ref(txid)?,
+                None => LiteWalletProofRef {
+                    txid: Txid([0; 32]),
+                    block_hash: None,
+                    sidechain_block_height: None,
+                    bmm_inclusions: Vec::new(),
+                    best_main_verification: None,
+                },
+            };
+            let leaf_hash =
+                Self::lite_wallet_leaf_hash(outpoint, output, &proof_ref);
+            leaves.push(PollardAddition {
+                hash: leaf_hash,
+                remember: true,
+            });
+            leaf_by_outpoint.insert(*outpoint, leaf_hash);
+        }
+        pollard
+            .modify(&leaves, &[], Proof::default())
+            .map_err(|err| {
+                custom_err_msg(format!("utreexo pollard modify: {err:?}"))
+            })?;
+        let add_hashes: Vec<_> = leaves.iter().map(|leaf| leaf.hash).collect();
+        stump = stump
+            .modify(&add_hashes, &[], &Proof::default())
+            .map_err(|err| {
+                custom_err_msg(format!("utreexo stump modify: {err:?}"))
+            })?
+            .0;
+        let mut proofs = std::collections::HashMap::new();
+        for (outpoint, leaf_hash) in leaf_by_outpoint {
+            let proof = pollard.batch_proof(&[leaf_hash]).map_err(|err| {
+                custom_err_msg(format!("utreexo proof: {err:?}"))
+            })?;
+            proofs.insert(outpoint, (leaf_hash.to_string(), proof));
+        }
+        Ok((
+            stump.leaves,
+            stump.roots.iter().map(ToString::to_string).collect(),
+            proofs,
+        ))
+    }
+
     fn lite_wallet_proof_ref(
         &self,
         txid: Txid,
@@ -674,15 +792,26 @@ impl RpcServer for RpcServerImpl {
 
     async fn get_lite_wallet_update(
         &self,
-        addresses: Vec<Address>,
+        script_hashes: Vec<String>,
         from_block_hash: Option<String>,
     ) -> RpcResult<LiteWalletUpdate> {
-        if addresses.is_empty() {
+        if script_hashes.is_empty() {
             return Err(custom_err_msg(
-                "get_lite_wallet_update requires at least one address",
+                "get_lite_wallet_update requires at least one script hash",
             ));
         }
-        let watched: HashSet<Address> = addresses.into_iter().collect();
+        let watched: HashSet<String> = script_hashes
+            .into_iter()
+            .map(|script_hash| script_hash.to_ascii_lowercase())
+            .collect();
+        for script_hash in &watched {
+            let decoded = hex::decode(script_hash).map_err(custom_err)?;
+            if decoded.len() != 32 {
+                return Err(custom_err_msg(format!(
+                    "script hash {script_hash} must be 32 bytes"
+                )));
+            }
+        }
         let tip_hash = self
             .app
             .node
@@ -696,11 +825,18 @@ impl RpcServer for RpcServerImpl {
         let mut spent_outpoints = Vec::new();
         let mut transactions = Vec::new();
         let mut proof_refs = Vec::new();
-        let confirmed_watched_utxos = self
-            .app
-            .node
-            .get_utxos_by_addresses(&watched)
-            .map_err(custom_err)?;
+        let all_confirmed_utxos =
+            self.app.node.get_all_utxos().map_err(custom_err)?;
+        let confirmed_watched_utxos: std::collections::HashMap<_, _> =
+            all_confirmed_utxos
+                .iter()
+                .filter(|(_, output)| {
+                    watched.contains(&Self::script_hash(&output.address))
+                })
+                .map(|(outpoint, output)| (*outpoint, output.clone()))
+                .collect();
+        let (utreexo_leaf_count, utreexo_roots, utreexo_proof_map) =
+            self.utreexo_view(&all_confirmed_utxos)?;
 
         match (from_block_hash, tip_height) {
             (None, _) => {
@@ -781,7 +917,9 @@ impl RpcServer for RpcServerImpl {
                             .iter()
                             .zip(filled_tx.spent_utxos.iter())
                         {
-                            if watched.contains(&spent_output.address) {
+                            if watched.contains(&Self::script_hash(
+                                &spent_output.address,
+                            )) {
                                 spent_outpoints.push(*outpoint);
                                 relevant = true;
                             }
@@ -791,7 +929,9 @@ impl RpcServer for RpcServerImpl {
                             for (vout, output) in
                                 filled_outputs.into_iter().enumerate()
                             {
-                                if watched.contains(&output.address) {
+                                if watched.contains(&Self::script_hash(
+                                    &output.address,
+                                )) {
                                     created_utxos.push(PointedOutput {
                                         outpoint: plain_bitassets::types::OutPoint::Regular {
                                             txid,
@@ -813,14 +953,23 @@ impl RpcServer for RpcServerImpl {
             (Some(_), None) => (),
         }
 
-        let mempool_created_utxos: Vec<_> = self
-            .app
-            .node
-            .get_unconfirmed_utxos_by_addresses(&watched)
-            .map_err(custom_err)?
-            .into_iter()
-            .map(|(outpoint, output)| PointedOutput { outpoint, output })
-            .collect();
+        let mempool_transactions =
+            self.app.node.get_all_transactions().map_err(custom_err)?;
+        let mut mempool_created_utxos = Vec::new();
+        for tx in &mempool_transactions {
+            let txid = tx.transaction.txid();
+            for (vout, output) in tx.transaction.outputs.iter().enumerate() {
+                if watched.contains(&Self::script_hash(&output.address)) {
+                    mempool_created_utxos.push(PointedOutput {
+                        outpoint: OutPoint::Regular {
+                            txid,
+                            vout: vout as u32,
+                        },
+                        output: output.clone(),
+                    });
+                }
+            }
+        }
 
         let watched_unspent_outpoints: Vec<_> = confirmed_watched_utxos
             .keys()
@@ -834,16 +983,36 @@ impl RpcServer for RpcServerImpl {
             .into_iter()
             .map(|(outpoint, _)| outpoint)
             .collect();
+        let utreexo_proofs = created_utxos
+            .iter()
+            .filter_map(|utxo| {
+                let (leaf_hash, proof) =
+                    utreexo_proof_map.get(&utxo.outpoint)?.clone();
+                Some(LiteWalletUtreexoProof {
+                    outpoint: utxo.outpoint,
+                    leaf_hash,
+                    targets: proof.targets,
+                    hashes: proof
+                        .hashes
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect(),
+                })
+            })
+            .collect();
 
         Ok(LiteWalletUpdate {
             tip_hash,
             tip_height,
+            utreexo_leaf_count,
+            utreexo_roots,
             created_utxos,
             spent_outpoints,
             mempool_created_utxos,
             mempool_spent_outpoints,
             transactions,
             proof_refs,
+            utreexo_proofs,
         })
     }
 
