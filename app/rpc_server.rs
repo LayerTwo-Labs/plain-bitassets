@@ -81,6 +81,40 @@ pub enum LiteWalletQuicResponse {
 
 const LITE_WALLET_QUIC_MAX_REQUEST_BYTES: usize = 64 * 1024;
 const LITE_WALLET_QUIC_MEMPOOL_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const LITE_WALLET_MAX_SCRIPT_HASHES: usize = 256;
+
+fn normalize_lite_wallet_script_hashes(
+    script_hashes: Vec<String>,
+) -> RpcResult<HashSet<String>> {
+    if script_hashes.is_empty() {
+        return Err(custom_err_msg(
+            "get_lite_wallet_update requires at least one script hash",
+        ));
+    }
+    if script_hashes.len() > LITE_WALLET_MAX_SCRIPT_HASHES {
+        return Err(custom_err_msg(format!(
+            "get_lite_wallet_update accepts at most {LITE_WALLET_MAX_SCRIPT_HASHES} script hashes"
+        )));
+    }
+
+    let mut watched = HashSet::with_capacity(script_hashes.len());
+    for script_hash in script_hashes {
+        let script_hash = script_hash.to_ascii_lowercase();
+        let decoded = hex::decode(&script_hash).map_err(|err| {
+            custom_err_msg(format!(
+                "script hash {script_hash} is not valid hex: {err}"
+            ))
+        })?;
+        if decoded.len() != 32 {
+            return Err(custom_err_msg(format!(
+                "script hash {script_hash} must be 32 bytes, got {} bytes",
+                decoded.len()
+            )));
+        }
+        watched.insert(script_hash);
+    }
+    Ok(watched)
+}
 
 impl RpcServerImpl {
     fn script_hash(address: &Address) -> String {
@@ -253,23 +287,7 @@ impl RpcServerImpl {
         script_hashes: Vec<String>,
         from_block_hash: Option<String>,
     ) -> RpcResult<LiteWalletUpdate> {
-        if script_hashes.is_empty() {
-            return Err(custom_err_msg(
-                "get_lite_wallet_update requires at least one script hash",
-            ));
-        }
-        let watched: HashSet<String> = script_hashes
-            .into_iter()
-            .map(|script_hash| script_hash.to_ascii_lowercase())
-            .collect();
-        for script_hash in &watched {
-            let decoded = hex::decode(script_hash).map_err(custom_err)?;
-            if decoded.len() != 32 {
-                return Err(custom_err_msg(format!(
-                    "script hash {script_hash} must be 32 bytes"
-                )));
-            }
-        }
+        let watched = normalize_lite_wallet_script_hashes(script_hashes)?;
         let tip_hash = self
             .app
             .node
@@ -1404,8 +1422,25 @@ async fn handle_lite_wallet_quic_connection(
 ) -> anyhow::Result<()> {
     let connection = connecting.await?;
     let (mut send, mut recv) = connection.accept_bi().await?;
-    let request_bytes =
-        recv.read_to_end(LITE_WALLET_QUIC_MAX_REQUEST_BYTES).await?;
+    let request_bytes = match recv
+        .read_to_end(LITE_WALLET_QUIC_MAX_REQUEST_BYTES)
+        .await
+    {
+        Ok(request_bytes) => request_bytes,
+        Err(err) => {
+            write_lite_wallet_quic_response(
+                &mut send,
+                &LiteWalletQuicResponse::Error {
+                    message: format!(
+                        "lite-wallet request exceeds {LITE_WALLET_QUIC_MAX_REQUEST_BYTES} bytes or could not be read: {err}"
+                    ),
+                },
+            )
+            .await?;
+            send.finish()?;
+            return Ok(());
+        }
+    };
     let request =
         match serde_json::from_slice::<LiteWalletQuicRequest>(&request_bytes) {
             Ok(request) => request,
@@ -1510,8 +1545,64 @@ async fn write_lite_wallet_quic_response(
     send: &mut quinn::SendStream,
     response: &LiteWalletQuicResponse,
 ) -> anyhow::Result<()> {
+    // Lite-wallet QUIC currently uses one JSON message per line on a
+    // bidirectional stream. The live smoke expects this newline framing until
+    // the protocol graduates to a compact binary envelope.
     let mut bytes = serde_json::to_vec(response)?;
     bytes.push(b'\n');
     send.write_all(&bytes).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid_script_hash(byte: u8) -> String {
+        hex::encode([byte; 32])
+    }
+
+    #[test]
+    fn lite_wallet_watch_set_rejects_empty() {
+        let err = normalize_lite_wallet_script_hashes(Vec::new())
+            .expect_err("empty watch set must be rejected");
+        assert!(err.to_string().contains("at least one script hash"));
+    }
+
+    #[test]
+    fn lite_wallet_watch_set_rejects_oversized() {
+        let hashes = (0..=LITE_WALLET_MAX_SCRIPT_HASHES)
+            .map(|i| valid_script_hash(i as u8))
+            .collect();
+        let err = normalize_lite_wallet_script_hashes(hashes)
+            .expect_err("oversized watch set must be rejected");
+        assert!(err.to_string().contains("accepts at most"));
+    }
+
+    #[test]
+    fn lite_wallet_watch_set_rejects_malformed_script_hash() {
+        let err =
+            normalize_lite_wallet_script_hashes(vec!["not-hex".to_string()])
+                .expect_err("malformed script hash must be rejected");
+        assert!(err.to_string().contains("not valid hex"));
+    }
+
+    #[test]
+    fn lite_wallet_watch_set_rejects_wrong_length_script_hash() {
+        let err =
+            normalize_lite_wallet_script_hashes(vec![hex::encode([7; 31])])
+                .expect_err("short script hash must be rejected");
+        assert!(err.to_string().contains("must be 32 bytes"));
+    }
+
+    #[test]
+    fn lite_wallet_watch_set_normalizes_and_deduplicates() {
+        let upper = valid_script_hash(0xaa).to_ascii_uppercase();
+        let lower = valid_script_hash(0xaa);
+        let watched =
+            normalize_lite_wallet_script_hashes(vec![upper, lower]).unwrap();
+
+        assert_eq!(watched.len(), 1);
+        assert!(watched.contains(&valid_script_hash(0xaa)));
+    }
 }
