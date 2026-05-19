@@ -1,4 +1,4 @@
-use borsh::BorshSerialize;
+use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeAs, IfIsHumanReadable, SerializeAs, serde_as};
 use utoipa::ToSchema;
@@ -43,26 +43,43 @@ where
     borsh::BorshSerialize::serialize(&bitcoin_amount.to_sat(), writer)
 }
 
+fn borsh_deserialize_bitcoin_amount<R>(
+    reader: &mut R,
+) -> borsh::io::Result<bitcoin::Amount>
+where
+    R: borsh::io::Read,
+{
+    let sats = u64::deserialize_reader(reader)?;
+    Ok(bitcoin::Amount::from_sat(sats))
+}
+
 #[serde_as]
 #[derive(
-    BorshSerialize,
-    Clone,
-    Copy,
-    Debug,
-    Deserialize,
-    Eq,
-    PartialEq,
-    Serialize,
-    ToSchema,
+    Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema,
 )]
 #[repr(transparent)]
 #[schema(value_type = u64)]
 #[serde(transparent)]
 pub struct BitcoinContent(
-    #[borsh(serialize_with = "borsh_serialize_bitcoin_amount")]
-    #[serde_as(as = "IfIsHumanReadable<BitcoinAmountSats>")]
-    pub bitcoin::Amount,
+    #[serde_as(as = "IfIsHumanReadable<BitcoinAmountSats>")] pub bitcoin::Amount,
 );
+
+impl BorshSerialize for BitcoinContent {
+    fn serialize<W: borsh::io::Write>(
+        &self,
+        writer: &mut W,
+    ) -> borsh::io::Result<()> {
+        borsh_serialize_bitcoin_amount(&self.0, writer)
+    }
+}
+
+impl BorshDeserialize for BitcoinContent {
+    fn deserialize_reader<R: borsh::io::Read>(
+        reader: &mut R,
+    ) -> borsh::io::Result<Self> {
+        borsh_deserialize_bitcoin_amount(reader).map(Self)
+    }
+}
 
 fn borsh_serialize_bitcoin_address<V, W>(
     bitcoin_address: &bitcoin::Address<V>,
@@ -77,6 +94,21 @@ where
         .assume_checked_ref()
         .script_pubkey();
     borsh::BorshSerialize::serialize(spk.as_bytes(), writer)
+}
+
+fn borsh_deserialize_bitcoin_address<R>(
+    reader: &mut R,
+) -> borsh::io::Result<bitcoin::Address<bitcoin::address::NetworkUnchecked>>
+where
+    R: borsh::io::Read,
+{
+    let script_bytes = Vec::<u8>::deserialize_reader(reader)?;
+    let script = bitcoin::ScriptBuf::from_bytes(script_bytes);
+    bitcoin::Address::from_script(&script, bitcoin::Network::Signet)
+        .map(|address| address.as_unchecked().clone())
+        .map_err(|err| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, err)
+        })
 }
 
 mod withdrawal_content {
@@ -149,22 +181,45 @@ mod withdrawal_content {
     WithdrawalContent!(
         pub WithdrawalContent,
         attrs: [derive(
-            borsh::BorshSerialize,
             Clone,
             Debug,
             Eq,
             PartialEq
         )],
         value_attrs: [
-            borsh(serialize_with = "super::borsh_serialize_bitcoin_amount"),
         ],
         main_fee_attrs: [
-            borsh(serialize_with = "super::borsh_serialize_bitcoin_amount"),
         ],
         main_address_attrs: [
-            borsh(serialize_with = "super::borsh_serialize_bitcoin_address"),
         ],
     );
+
+    impl borsh::BorshSerialize for WithdrawalContent {
+        fn serialize<W: borsh::io::Write>(
+            &self,
+            writer: &mut W,
+        ) -> borsh::io::Result<()> {
+            super::borsh_serialize_bitcoin_amount(&self.value, writer)?;
+            super::borsh_serialize_bitcoin_amount(&self.main_fee, writer)?;
+            super::borsh_serialize_bitcoin_address(&self.main_address, writer)
+        }
+    }
+
+    impl borsh::BorshDeserialize for WithdrawalContent {
+        fn deserialize_reader<R: borsh::io::Read>(
+            reader: &mut R,
+        ) -> borsh::io::Result<Self> {
+            let value = super::borsh_deserialize_bitcoin_amount(reader)?;
+            let main_fee = super::borsh_deserialize_bitcoin_amount(reader)?;
+            let main_address =
+                super::borsh_deserialize_bitcoin_address(reader)?;
+            Ok(Self {
+                value,
+                main_fee,
+                main_address,
+            })
+        }
+    }
 
     impl From<WithdrawalContent> for DefaultRepr {
         fn from(withdrawal_content: WithdrawalContent) -> Self {
@@ -316,6 +371,7 @@ mod content {
     Content!(
         pub Content,
         attrs: [derive(
+            borsh::BorshDeserialize,
             borsh::BorshSerialize,
             Clone,
             Debug,
@@ -924,6 +980,7 @@ mod filled_content {
 pub use filled_content::FilledContent;
 
 #[derive(
+    BorshDeserialize,
     BorshSerialize,
     Clone,
     Debug,
@@ -1141,6 +1198,7 @@ pub struct SpentOutput<OutputContent = FilledContent> {
 }
 
 #[derive(
+    BorshDeserialize,
     BorshSerialize,
     Clone,
     Debug,

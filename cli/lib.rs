@@ -225,6 +225,10 @@ pub enum Command {
         #[arg(long)]
         msg: String,
     },
+    /// Submit an already authorized transaction encoded as canonical Borsh hex
+    SubmitAuthorizedTransaction {
+        hex_borsh_authorized_tx: String,
+    },
     /// Stop the node
     Stop,
     /// Transfer funds to the specified address
@@ -565,6 +569,14 @@ where
             let authorization =
                 rpc_client.sign_arbitrary_msg_as_addr(address, msg).await?;
             serde_json::to_string_pretty(&authorization)?
+        }
+        Command::SubmitAuthorizedTransaction {
+            hex_borsh_authorized_tx,
+        } => {
+            let txid = rpc_client
+                .submit_authorized_transaction(hex_borsh_authorized_tx)
+                .await?;
+            format!("{txid}")
         }
         Command::Stop => {
             let () = rpc_client.stop().await?;

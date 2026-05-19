@@ -400,6 +400,13 @@ pub trait Rpc {
         msg: String,
     ) -> RpcResult<Authorization>;
 
+    /// Submit an already authorized transaction encoded as canonical Borsh hex
+    #[method(name = "submit_authorized_transaction")]
+    async fn submit_authorized_transaction(
+        &self,
+        hex_borsh_authorized_tx: String,
+    ) -> RpcResult<Txid>;
+
     /// Stop the node
     #[method(name = "stop")]
     async fn stop(&self);

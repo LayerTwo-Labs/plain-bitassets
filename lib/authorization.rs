@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use borsh::BorshSerialize;
+use borsh::{BorshDeserialize, BorshSerialize};
 use hex::FromHex;
 use rayon::iter::{IntoParallelRefIterator as _, ParallelIterator as _};
 use serde::{Deserialize, Serialize};
@@ -24,6 +24,18 @@ impl BorshSerialize for Signature {
         writer: &mut W,
     ) -> std::io::Result<()> {
         self.0.to_bytes().serialize(writer)
+    }
+}
+
+impl BorshDeserialize for Signature {
+    fn deserialize_reader<R: std::io::Read>(
+        reader: &mut R,
+    ) -> std::io::Result<Self> {
+        let bytes =
+            <[u8; ed25519_dalek::Signature::BYTE_SIZE]>::deserialize_reader(
+                reader,
+            )?;
+        Ok(Self(ed25519_dalek::Signature::from_bytes(&bytes)))
     }
 }
 
@@ -108,6 +120,7 @@ pub enum Error {
 }
 
 #[derive(
+    BorshDeserialize,
     BorshSerialize,
     Debug,
     Clone,

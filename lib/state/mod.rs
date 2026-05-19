@@ -453,8 +453,14 @@ impl State {
         let n_bitasset_control_inputs: usize =
             tx.spent_bitasset_controls().count();
         let n_bitasset_outputs: usize = tx.bitasset_outputs().count();
-        let n_unique_bitasset_outputs: usize =
-            tx.unique_spent_bitassets().len();
+        let filled_outputs = tx
+            .filled_outputs()
+            .ok_or_else(|| error::FillTxOutputContents(Box::new(tx.clone())))?;
+        let n_unique_bitasset_outputs: usize = filled_outputs
+            .iter()
+            .filter_map(|output| output.bitasset())
+            .unique()
+            .count();
         let n_bitasset_control_outputs: usize =
             tx.bitasset_control_outputs().count();
         if tx.is_update()
@@ -569,7 +575,11 @@ impl State {
                     n_bitasset_outputs,
                 });
             }
-            if n_unique_bitasset_inputs == 0 && n_bitasset_outputs != 0 {
+            if n_unique_bitasset_inputs == 0
+                && n_bitasset_outputs != 0
+                && !tx.is_amm_burn()
+                && !tx.is_dutch_auction_collect()
+            {
                 return Err(Error::UnbalancedBitAssets {
                     n_unique_bitasset_inputs,
                     n_bitasset_outputs,

@@ -13,10 +13,10 @@ use plain_bitassets::{
     net::Peer,
     state::{self, AmmPair, AmmPoolState, BitAssetSeqId, DutchAuctionState},
     types::{
-        Address, AssetId, Authorization, BitAssetData, BitAssetId, Block,
-        BlockHash, DutchAuctionId, DutchAuctionParams, EncryptionPubKey,
-        FilledOutputContent, PointedOutput, Transaction, Txid, VerifyingKey,
-        WithdrawalBundle, keys::Ecies,
+        Address, AssetId, Authorization, AuthorizedTransaction, BitAssetData,
+        BitAssetId, Block, BlockHash, DutchAuctionId, DutchAuctionParams,
+        EncryptionPubKey, FilledOutputContent, PointedOutput, Transaction,
+        Txid, VerifyingKey, WithdrawalBundle, keys::Ecies,
     },
     wallet::Balance,
 };
@@ -93,8 +93,9 @@ impl RpcServer for RpcServerImpl {
             .map_err(custom_err)?
         {
             Some(amm_pool_state) => {
-                let next_amm_pool_state =
-                    amm_pool_state.mint(amount0, amount1).map_err(custom_err)?;
+                let next_amm_pool_state = amm_pool_state
+                    .mint(amount0, amount1)
+                    .map_err(custom_err)?;
                 next_amm_pool_state.outstanding_lp_tokens
                     - amm_pool_state.outstanding_lp_tokens
             }
@@ -131,13 +132,13 @@ impl RpcServer for RpcServerImpl {
         let amount_receive = (if asset_spend < asset_receive {
             amm_pool_state.swap_asset0_for_asset1(amount_spend).map(
                 |new_amm_pool_state| {
-                    new_amm_pool_state.reserve1 - amm_pool_state.reserve1
+                    amm_pool_state.reserve1 - new_amm_pool_state.reserve1
                 },
             )
         } else {
             amm_pool_state.swap_asset1_for_asset0(amount_spend).map(
                 |new_amm_pool_state| {
-                    new_amm_pool_state.reserve0 - amm_pool_state.reserve0
+                    amm_pool_state.reserve0 - new_amm_pool_state.reserve0
                 },
             )
         })
@@ -736,6 +737,21 @@ impl RpcServer for RpcServerImpl {
             .wallet
             .sign_arbitrary_msg_as_addr(&address, &msg)
             .map_err(custom_err)
+    }
+
+    async fn submit_authorized_transaction(
+        &self,
+        hex_borsh_authorized_tx: String,
+    ) -> RpcResult<Txid> {
+        let bytes = hex::decode(hex_borsh_authorized_tx).map_err(custom_err)?;
+        let authorized_tx: AuthorizedTransaction =
+            borsh::from_slice(&bytes).map_err(custom_err)?;
+        let txid = authorized_tx.transaction.txid();
+        self.app
+            .node
+            .submit_transaction(authorized_tx)
+            .map_err(custom_err)?;
+        Ok(txid)
     }
 
     async fn stop(&self) {
