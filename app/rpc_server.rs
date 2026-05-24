@@ -116,6 +116,25 @@ fn normalize_lite_wallet_script_hashes(
     Ok(watched)
 }
 
+fn ensure_lite_wallet_cursor_on_active_chain(
+    from_block_hash: BlockHash,
+    active_hash_at_height: Option<BlockHash>,
+) -> RpcResult<()> {
+    match active_hash_at_height {
+        Some(active_hash_at_height)
+            if active_hash_at_height == from_block_hash =>
+        {
+            Ok(())
+        }
+        Some(active_hash_at_height) => Err(custom_err_msg(format!(
+            "from_block_hash {from_block_hash} is no longer on the active sidechain at its height; active hash is {active_hash_at_height}; resync from snapshot"
+        ))),
+        None => Err(custom_err_msg(format!(
+            "from_block_hash {from_block_hash} height is no longer available on the active sidechain; resync from snapshot"
+        ))),
+    }
+}
+
 impl RpcServerImpl {
     fn script_hash(address: &Address) -> String {
         hex::encode(blake3::hash(&address.0).as_bytes())
@@ -361,6 +380,15 @@ impl RpcServerImpl {
                             "from_block_hash {from_block_hash} is not known"
                         ))
                     })?;
+                let active_hash_at_from_height = self
+                    .app
+                    .node
+                    .try_get_block_hash(from_height)
+                    .map_err(custom_err)?;
+                ensure_lite_wallet_cursor_on_active_chain(
+                    from_block_hash,
+                    active_hash_at_from_height,
+                )?;
                 for height in from_height.saturating_add(1)..=tip_height {
                     let Some(block_hash) = self
                         .app
@@ -1604,5 +1632,41 @@ mod tests {
 
         assert_eq!(watched.len(), 1);
         assert!(watched.contains(&valid_script_hash(0xaa)));
+    }
+
+    #[test]
+    fn lite_wallet_cursor_accepts_active_chain_hash() {
+        let hash: BlockHash = hex::encode([1; 32]).parse().unwrap();
+
+        ensure_lite_wallet_cursor_on_active_chain(hash, Some(hash)).unwrap();
+    }
+
+    #[test]
+    fn lite_wallet_cursor_rejects_reorged_hash() {
+        let stale_hash: BlockHash = hex::encode([1; 32]).parse().unwrap();
+        let active_hash: BlockHash = hex::encode([2; 32]).parse().unwrap();
+
+        let err = ensure_lite_wallet_cursor_on_active_chain(
+            stale_hash,
+            Some(active_hash),
+        )
+        .expect_err("stale cursor must force snapshot resync");
+
+        assert!(err.to_string().contains("resync from snapshot"));
+        assert!(
+            err.to_string()
+                .contains("no longer on the active sidechain")
+        );
+    }
+
+    #[test]
+    fn lite_wallet_cursor_rejects_unavailable_height() {
+        let stale_hash: BlockHash = hex::encode([1; 32]).parse().unwrap();
+
+        let err = ensure_lite_wallet_cursor_on_active_chain(stale_hash, None)
+            .expect_err("unavailable cursor height must force snapshot resync");
+
+        assert!(err.to_string().contains("resync from snapshot"));
+        assert!(err.to_string().contains("height is no longer available"));
     }
 }
