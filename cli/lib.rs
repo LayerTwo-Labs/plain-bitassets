@@ -1,5 +1,7 @@
 use std::{
+    fs,
     net::{Ipv4Addr, SocketAddr},
+    path::PathBuf,
     time::Duration,
 };
 
@@ -112,6 +114,19 @@ pub enum Command {
     /// Connections to the peer are not terminated.
     ForgetPeer {
         addr: SocketAddr,
+    },
+    /// Export private-signet Floresta-compatible Utreexo peer anchors.
+    #[command(name = "export-private-signet-utreexo-anchors")]
+    ExportPrivateSignetUtreexoAnchors {
+        /// Explicit private-signet Bitcoin P2P Utreexo peer address. Can be repeated.
+        #[arg(long = "peer")]
+        peers: Vec<SocketAddr>,
+        /// Use currently active private-signet BitAssets peers as anchor addresses.
+        #[arg(long)]
+        active: bool,
+        /// Write JSON to this path, for example a Floresta data-dir anchors.json.
+        #[arg(long)]
+        output: Option<PathBuf>,
     },
     /// Format a deposit address
     FormatDepositAddress {
@@ -430,6 +445,35 @@ where
         Command::ForgetPeer { addr } => {
             rpc_client.forget_peer(addr).await?;
             String::default()
+        }
+        Command::ExportPrivateSignetUtreexoAnchors {
+            peers,
+            active,
+            output,
+        } => {
+            if active && !peers.is_empty() {
+                anyhow::bail!(
+                    "use either --active or explicit --peer values, not both"
+                );
+            }
+            if !active && peers.is_empty() {
+                anyhow::bail!(
+                    "provide at least one --peer address or pass --active"
+                );
+            }
+
+            let anchors = if active {
+                rpc_client.private_signet_active_utreexo_anchors().await?
+            } else {
+                rpc_client.private_signet_utreexo_anchors(peers).await?
+            };
+            let json = format!("{}\n", serde_json::to_string_pretty(&anchors)?);
+            if let Some(output) = output {
+                fs::write(output, json)?;
+                String::default()
+            } else {
+                json
+            }
         }
         Command::FormatDepositAddress { address } => {
             rpc_client.format_deposit_address(address).await?

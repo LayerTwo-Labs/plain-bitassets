@@ -1,6 +1,6 @@
 //! RPC API
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use fraction::Fraction;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
@@ -80,16 +80,67 @@ pub struct LiteWalletUpdate {
     pub utreexo_proofs: Vec<LiteWalletUtreexoProof>,
 }
 
+/// Private-signet Floresta-compatible service flags for peers that can serve
+/// Utreexo proofs.
+///
+/// This is `NODE_NETWORK_LIMITED | NODE_WITNESS | UTREEXO`.
+pub const FLORESTA_UTREEXO_ANCHOR_SERVICES: u64 = 1024 | 8 | (1 << 12);
+
+/// Floresta's `anchors.json` serializes peer IPs as externally tagged enum
+/// variants, for example `{ "V4": "127.0.0.1" }`.
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+pub enum FlorestaAnchorAddress {
+    V4(String),
+    V6(String),
+}
+
+/// Floresta treats anchors as tried peers keyed by the Unix timestamp of the
+/// last successful connection.
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+pub enum FlorestaAnchorState {
+    Tried(u64),
+}
+
+/// A Floresta-compatible private-signet Utreexo peer anchor entry.
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+pub struct FlorestaUtreexoAnchor {
+    pub address: FlorestaAnchorAddress,
+    pub last_connected: u64,
+    pub state: FlorestaAnchorState,
+    pub services: u64,
+    pub port: u16,
+    pub id: Option<usize>,
+}
+
+impl FlorestaUtreexoAnchor {
+    pub fn from_socket_addr(addr: SocketAddr, last_connected: u64) -> Self {
+        let address = match addr.ip() {
+            IpAddr::V4(ip) => FlorestaAnchorAddress::V4(ip.to_string()),
+            IpAddr::V6(ip) => FlorestaAnchorAddress::V6(ip.to_string()),
+        };
+
+        Self {
+            address,
+            last_connected,
+            state: FlorestaAnchorState::Tried(last_connected),
+            services: FLORESTA_UTREEXO_ANCHOR_SERVICES,
+            port: addr.port(),
+            id: None,
+        }
+    }
+}
+
 #[open_api(ref_schemas[
     bitassets_schema::BitcoinAddr, bitassets_schema::BitcoinBlockHash,
     bitassets_schema::BitcoinTransaction, bitassets_schema::BitcoinOutPoint,
     bitassets_schema::SocketAddr, Address, AssetId, Authorization,
     BitAssetData, BitAssetDataUpdates, BitAssetId, BitcoinOutputContent, Block,
     BlockHash, Body, DutchAuctionId, DutchAuctionParams, EncryptionPubKey,
-    FilledOutputContent, Header, MerkleRoot, OutPoint, Output, OutputContent,
-    LiteWalletProofRef, LiteWalletUpdate, LiteWalletUtreexoProof,
-    PeerConnectionStatus, Signature, Transaction, TxData, Txid, TxIn, TxProof,
-    WithdrawalOutputContent, VerifyingKey,
+    FilledOutputContent, FlorestaAnchorAddress, FlorestaAnchorState, Header,
+    MerkleRoot, OutPoint, Output, OutputContent, PointedOutput,
+    PointedOutput<FilledOutputContent>, LiteWalletProofRef, LiteWalletUpdate,
+    LiteWalletUtreexoProof, PeerConnectionStatus, Signature, Transaction,
+    TxData, Txid, TxIn, TxProof, WithdrawalOutputContent, VerifyingKey,
 ])]
 #[rpc(client, server)]
 pub trait Rpc {
@@ -234,6 +285,35 @@ pub trait Rpc {
         &self,
         address: Address,
     ) -> RpcResult<String>;
+
+    /// Convert explicit private-signet Bitcoin P2P peer addresses to
+    /// Floresta-compatible Utreexo anchor entries.
+    #[open_api_method(output_schema(
+        PartialSchema = "schema::Array<FlorestaUtreexoAnchor>"
+    ))]
+    #[method(name = "private_signet_utreexo_anchors")]
+    async fn private_signet_utreexo_anchors(
+        &self,
+        #[open_api_method_arg(schema(
+            PartialSchema = "schema::Array<bitassets_schema::SocketAddr>"
+        ))]
+        peers: Vec<SocketAddr>,
+    ) -> RpcResult<Vec<FlorestaUtreexoAnchor>>;
+
+    /// Export active private-signet BitAssets peers as Floresta-compatible
+    /// Utreexo anchors.
+    ///
+    /// This is useful for Luke's private signet when a local Utreexo test node
+    /// deliberately reuses the same peer address for BitAssets and Bitcoin P2P. Prefer
+    /// `private_signet_utreexo_anchors` when the Bitcoin Utreexo peer addresses are
+    /// known explicitly.
+    #[open_api_method(output_schema(
+        PartialSchema = "schema::Array<FlorestaUtreexoAnchor>"
+    ))]
+    #[method(name = "private_signet_active_utreexo_anchors")]
+    async fn private_signet_active_utreexo_anchors(
+        &self,
+    ) -> RpcResult<Vec<FlorestaUtreexoAnchor>>;
 
     /// Generate a mnemonic seed phrase
     #[method(name = "generate_mnemonic")]

@@ -1,6 +1,9 @@
 use std::{
-    borrow::Cow, cmp::Ordering, collections::HashSet, net::SocketAddr,
-    time::Duration,
+    borrow::Cow,
+    cmp::Ordering,
+    collections::HashSet,
+    net::SocketAddr,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use bitcoin::Amount;
@@ -20,15 +23,15 @@ use plain_bitassets::{
     types::{
         Address, AssetId, Authorization, AuthorizedTransaction, BitAssetData,
         BitAssetId, Block, BlockHash, DutchAuctionId, DutchAuctionParams,
-        EncryptionPubKey, FilledOutput, FilledOutputContent, OutPoint,
+        EncryptionPubKey, FilledOutput, FilledOutputContent, Network, OutPoint,
         PointedOutput, Transaction, Txid, VerifyingKey, WithdrawalBundle,
         keys::Ecies,
     },
     wallet::Balance,
 };
 use plain_bitassets_app_rpc_api::{
-    LiteWalletProofRef, LiteWalletUpdate, LiteWalletUtreexoProof, RpcServer,
-    TxInfo, TxProof,
+    FlorestaUtreexoAnchor, LiteWalletProofRef, LiteWalletUpdate,
+    LiteWalletUtreexoProof, RpcServer, TxInfo, TxProof,
 };
 use rustreexo::{
     node_hash::BitcoinNodeHash,
@@ -55,6 +58,23 @@ where
 {
     let error = anyhow::Error::from(error);
     custom_err_msg(format!("{error:#}"))
+}
+
+fn unix_time_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn ensure_private_signet(network: Network) -> RpcResult<()> {
+    if network == Network::Signet {
+        Ok(())
+    } else {
+        Err(custom_err_msg(format!(
+            "private signet Utreexo anchors are only available on signet; node is running {network:?}"
+        )))
+    }
 }
 
 pub struct RpcServerImpl {
@@ -1075,6 +1095,35 @@ impl RpcServer for RpcServerImpl {
     async fn list_peers(&self) -> RpcResult<Vec<Peer>> {
         let peers = self.app.node.get_active_peers();
         Ok(peers)
+    }
+
+    async fn private_signet_utreexo_anchors(
+        &self,
+        peers: Vec<SocketAddr>,
+    ) -> RpcResult<Vec<FlorestaUtreexoAnchor>> {
+        ensure_private_signet(self.app.node.network())?;
+        let now = unix_time_secs();
+        Ok(peers
+            .into_iter()
+            .map(|peer| FlorestaUtreexoAnchor::from_socket_addr(peer, now))
+            .collect())
+    }
+
+    async fn private_signet_active_utreexo_anchors(
+        &self,
+    ) -> RpcResult<Vec<FlorestaUtreexoAnchor>> {
+        ensure_private_signet(self.app.node.network())?;
+        let now = unix_time_secs();
+        let anchors = self
+            .app
+            .node
+            .get_active_peers()
+            .into_iter()
+            .map(|peer| {
+                FlorestaUtreexoAnchor::from_socket_addr(peer.address, now)
+            })
+            .collect();
+        Ok(anchors)
     }
 
     async fn list_utxos(

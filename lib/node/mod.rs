@@ -821,6 +821,10 @@ where
         Ok(())
     }
 
+    pub fn network(&self) -> Network {
+        self.net.network()
+    }
+
     pub fn connect_peer(&self, addr: SocketAddr) -> Result<(), Error> {
         self.net
             .connect_peer(self.env.clone(), addr)

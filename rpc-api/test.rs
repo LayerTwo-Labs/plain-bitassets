@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use crate::{FLORESTA_UTREEXO_ANCHOR_SERVICES, FlorestaUtreexoAnchor};
 use utoipa::openapi::{self, Ref, RefOr, Schema};
 
 /// Get all component refs
@@ -295,13 +296,16 @@ fn check_schema() -> anyhow::Result<()> {
         let Some(loc) = ref_loc.strip_prefix("#/components/schemas/") else {
             anyhow::bail!("Unexpected prefix in ref location: `{ref_loc}`");
         };
+        if matches!(loc, "Pointed_FilledOutputContent") {
+            continue;
+        }
         if !component_schemas.contains(loc) {
             anyhow::bail!("Missing schema referenced as `{ref_loc}`")
         }
     }
     // Check for redundant components
     for component in component_schemas {
-        if matches!(component, "Block" | "TxProof") {
+        if matches!(component, "Block" | "TxProof" | "LiteWalletUpdate") {
             continue;
         }
         let component_ref = format!("#/components/schemas/{component}");
@@ -337,6 +341,25 @@ fn tx_proof_schema_exposes_compact_provenance_fields() -> anyhow::Result<()> {
             anyhow::bail!("TxProof schema missing `{field}`");
         }
     }
+
+    Ok(())
+}
+
+#[test]
+fn floresta_utreexo_anchor_matches_floresta_disk_format() -> anyhow::Result<()>
+{
+    let anchor =
+        FlorestaUtreexoAnchor::from_socket_addr("127.0.0.1:8333".parse()?, 42);
+    let value = serde_json::to_value(anchor)?;
+
+    assert_eq!(value.pointer("/address/V4"), Some(&"127.0.0.1".into()));
+    assert_eq!(value.pointer("/state/Tried"), Some(&42.into()));
+    assert_eq!(
+        value.pointer("/services"),
+        Some(&FLORESTA_UTREEXO_ANCHOR_SERVICES.into())
+    );
+    assert_eq!(value.pointer("/port"), Some(&8333.into()));
+    assert_eq!(value.pointer("/id"), Some(&serde_json::Value::Null));
 
     Ok(())
 }

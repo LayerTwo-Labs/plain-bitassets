@@ -194,6 +194,10 @@ pub struct Net {
 impl Net {
     pub const NUM_DBS: u32 = 2;
 
+    pub fn network(&self) -> Network {
+        self.network
+    }
+
     fn add_active_peer(
         &self,
         addr: SocketAddr,
