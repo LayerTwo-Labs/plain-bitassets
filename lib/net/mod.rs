@@ -35,6 +35,8 @@ pub use peer::{
     message as peer_message,
 };
 
+const BITASSETS_QUIC_ALPN: &[u8] = b"plain-bitassets-quic-v1";
+
 /// Dummy certificate verifier that treats any certificate as valid.
 /// NOTE, such verification is vulnerable to MITM attacks, but convenient for testing.
 #[derive(Debug)]
@@ -93,10 +95,11 @@ impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
 }
 fn configure_client()
 -> Result<ClientConfig, quinn::crypto::rustls::NoInitialCipherSuite> {
-    let crypto = rustls::ClientConfig::builder()
+    let mut crypto = rustls::ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(SkipServerVerification::new())
         .with_no_client_auth();
+    crypto.alpn_protocols = vec![BITASSETS_QUIC_ALPN.to_vec()];
     let client_config =
         quinn::crypto::rustls::QuicClientConfig::try_from(crypto)?;
     Ok(ClientConfig::new(Arc::new(client_config)))
@@ -109,8 +112,13 @@ fn configure_server() -> Result<(ServerConfig, Vec<u8>), Error> {
     let priv_key = rustls::pki_types::PrivateKeyDer::Pkcs8(keypair_der.into());
     let cert_der = cert_key.cert.der().to_vec();
     let cert_chain = vec![cert_key.cert.into()];
-    let mut server_config =
-        ServerConfig::with_single_cert(cert_chain, priv_key)?;
+    let mut crypto = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(cert_chain, priv_key)?;
+    crypto.alpn_protocols = vec![BITASSETS_QUIC_ALPN.to_vec()];
+    let mut server_config = ServerConfig::with_crypto(Arc::new(
+        quinn::crypto::rustls::QuicServerConfig::try_from(crypto)?,
+    ));
     let transport_config = Arc::get_mut(&mut server_config.transport).unwrap();
     transport_config.max_concurrent_uni_streams(1_u8.into());
     Ok((server_config, cert_der))
