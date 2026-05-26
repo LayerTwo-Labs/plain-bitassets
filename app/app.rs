@@ -105,6 +105,10 @@ pub struct App {
     pub utxos: Arc<RwLock<HashMap<OutPoint, FilledOutput>>>,
     pub unconfirmed_utxos: Arc<RwLock<HashMap<OutPoint, Output>>>,
     pub runtime: Arc<tokio::runtime::Runtime>,
+    pub network: types::Network,
+    pub rpc_url: url::Url,
+    pub lite_wallet_quic_addr: std::net::SocketAddr,
+    pub net_addr: std::net::SocketAddr,
     task: Arc<JoinHandle<()>>,
     pub local_pool: LocalPoolHandle,
 }
@@ -290,6 +294,10 @@ impl App {
             unconfirmed_utxos,
             utxos,
             runtime: Arc::new(runtime),
+            network: config.network,
+            rpc_url: config.rpc_url(),
+            lite_wallet_quic_addr: config.lite_wallet_quic_addr,
+            net_addr: config.net_addr,
             task: Arc::new(task),
             local_pool,
         })

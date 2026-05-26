@@ -2,7 +2,7 @@ use std::{
     borrow::Cow,
     cmp::Ordering,
     collections::HashSet,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -30,7 +30,8 @@ use plain_bitassets::{
     wallet::Balance,
 };
 use plain_bitassets_app_rpc_api::{
-    FlorestaUtreexoAnchor, LiteWalletProofRef, LiteWalletUpdate,
+    FLORESTA_UTREEXO_ANCHOR_SERVICES, FlorestaUtreexoAnchor,
+    FlorestaUtreexoPeerSource, LiteWalletProofRef, LiteWalletUpdate,
     LiteWalletUtreexoProof, RpcServer, TxInfo, TxProof,
 };
 use rustreexo::{
@@ -152,6 +153,14 @@ fn ensure_lite_wallet_cursor_on_active_chain(
         None => Err(custom_err_msg(format!(
             "from_block_hash {from_block_hash} height is no longer available on the active sidechain; resync from snapshot"
         ))),
+    }
+}
+
+fn advertised_addr(bind_addr: SocketAddr, fallback_ip: IpAddr) -> SocketAddr {
+    if bind_addr.ip().is_unspecified() {
+        SocketAddr::new(fallback_ip, bind_addr.port())
+    } else {
+        bind_addr
     }
 }
 
@@ -1124,6 +1133,49 @@ impl RpcServer for RpcServerImpl {
             })
             .collect();
         Ok(anchors)
+    }
+
+    async fn private_signet_utreexo_peer_source(
+        &self,
+        peer: SocketAddr,
+    ) -> RpcResult<FlorestaUtreexoPeerSource> {
+        ensure_private_signet(self.app.network)?;
+        if peer.ip().is_unspecified() {
+            return Err(custom_err_msg(format!(
+                "private signet Utreexo peer address must be externally reachable; got {peer}"
+            )));
+        }
+        let advertised_rpc_addr = advertised_addr(
+            SocketAddr::new(
+                self.app
+                    .rpc_url
+                    .host_str()
+                    .and_then(|host| host.parse().ok())
+                    .unwrap_or(peer.ip()),
+                self.app.rpc_url.port_or_known_default().unwrap_or(80),
+            ),
+            peer.ip(),
+        );
+        let advertised_bitassets_p2p_addr =
+            advertised_addr(self.app.net_addr, peer.ip());
+        let advertised_lite_wallet_quic_addr =
+            advertised_addr(self.app.lite_wallet_quic_addr, peer.ip());
+        Ok(FlorestaUtreexoPeerSource {
+            network: "signet".to_string(),
+            anchor: FlorestaUtreexoAnchor::from_socket_addr(
+                peer,
+                unix_time_secs(),
+            ),
+            services: FLORESTA_UTREEXO_ANCHOR_SERVICES,
+            service_names: vec![
+                "NODE_NETWORK_LIMITED".to_string(),
+                "NODE_WITNESS".to_string(),
+                "UTREEXO".to_string(),
+            ],
+            bitassets_rpc_url: format!("http://{advertised_rpc_addr}/"),
+            bitassets_p2p_addr: advertised_bitassets_p2p_addr.to_string(),
+            lite_wallet_quic_addr: advertised_lite_wallet_quic_addr.to_string(),
+        })
     }
 
     async fn list_utxos(

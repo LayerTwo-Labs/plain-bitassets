@@ -363,3 +363,34 @@ fn floresta_utreexo_anchor_matches_floresta_disk_format() -> anyhow::Result<()>
 
     Ok(())
 }
+
+#[test]
+fn floresta_utreexo_peer_source_schema_is_exported() -> anyhow::Result<()> {
+    let schema: openapi::OpenApi =
+        <crate::RpcDoc as utoipa::OpenApi>::openapi();
+    let value = serde_json::to_value(schema)?;
+    let source_schema = value
+        .pointer("/components/schemas/FlorestaUtreexoPeerSource/properties")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "FlorestaUtreexoPeerSource schema properties missing"
+            )
+        })?;
+
+    for field in [
+        "network",
+        "anchor",
+        "services",
+        "service_names",
+        "bitassets_rpc_url",
+        "bitassets_p2p_addr",
+        "lite_wallet_quic_addr",
+    ] {
+        if !source_schema.contains_key(field) {
+            anyhow::bail!("FlorestaUtreexoPeerSource schema missing `{field}`");
+        }
+    }
+
+    Ok(())
+}

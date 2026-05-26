@@ -128,6 +128,16 @@ pub enum Command {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+    /// Advertise this BitAssets node as a private-signet Floresta Utreexo peer source.
+    #[command(name = "private-signet-utreexo-peer-source")]
+    PrivateSignetUtreexoPeerSource {
+        /// Externally reachable Bitcoin P2P Utreexo peer address Floresta should anchor.
+        #[arg(long)]
+        peer: SocketAddr,
+        /// Write JSON to this path.
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
     /// Format a deposit address
     FormatDepositAddress {
         address: Address,
@@ -468,6 +478,17 @@ where
                 rpc_client.private_signet_utreexo_anchors(peers).await?
             };
             let json = format!("{}\n", serde_json::to_string_pretty(&anchors)?);
+            if let Some(output) = output {
+                fs::write(output, json)?;
+                String::default()
+            } else {
+                json
+            }
+        }
+        Command::PrivateSignetUtreexoPeerSource { peer, output } => {
+            let source =
+                rpc_client.private_signet_utreexo_peer_source(peer).await?;
+            let json = format!("{}\n", serde_json::to_string_pretty(&source)?);
             if let Some(output) = output {
                 fs::write(output, json)?;
                 String::default()
