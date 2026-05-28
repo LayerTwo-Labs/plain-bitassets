@@ -7,25 +7,23 @@ use strum::{EnumIter, IntoEnumIterator};
 use crate::{app::App, line_buffer::LineBuffer, util::PromiseStream};
 
 mod activity;
-mod bitassets;
 mod coins;
 mod console_logs;
 mod fonts;
-mod messaging;
 mod miner;
 mod parent_chain;
 mod seed;
+mod simplicity;
 mod util;
 
 use activity::Activity;
-use bitassets::BitAssets;
 use coins::Coins;
 use console_logs::ConsoleLogs;
 use fonts::FONT_DEFINITIONS;
-use messaging::Messaging;
 use miner::Miner;
 use parent_chain::ParentChain;
 use seed::SetSeed;
+use simplicity::Simplicity;
 use util::{BITCOIN_LOGO_FA, BITCOIN_ORANGE, UiExt, show_btc_amount};
 
 /// Bottom panel, if initialized
@@ -157,14 +155,13 @@ impl BottomPanel {
 pub struct EguiApp {
     activity: Activity,
     app: Option<App>,
-    bitassets: BitAssets,
     bottom_panel: BottomPanel,
     coins: Coins,
     console_logs: ConsoleLogs,
-    messaging: Messaging,
     miner: Miner,
     parent_chain: ParentChain,
     set_seed: SetSeed,
+    simplicity: Simplicity,
     tab: Tab,
 }
 
@@ -175,10 +172,10 @@ enum Tab {
     ParentChain,
     #[strum(to_string = "Coins")]
     Coins,
-    #[strum(to_string = "BitAssets")]
-    BitAssets,
-    #[strum(to_string = "Messaging")]
-    Messaging,
+    #[strum(to_string = "BMM")]
+    Bmm,
+    #[strum(to_string = "Simplicity")]
+    Simplicity,
     #[strum(to_string = "Activity")]
     Activity,
     #[strum(to_string = "Console / Logs")]
@@ -222,14 +219,13 @@ impl EguiApp {
         Self {
             activity,
             app,
-            bitassets: BitAssets::default(),
             bottom_panel,
             coins,
             console_logs,
-            messaging: Messaging::new(),
             miner: Miner::default(),
             parent_chain,
             set_seed: SetSeed::default(),
+            simplicity: Simplicity::default(),
             tab: Tab::default(),
         }
     }
@@ -268,11 +264,11 @@ impl eframe::App for EguiApp {
                 Tab::Coins => {
                     let () = self.coins.show(self.app.as_ref(), ui).unwrap();
                 }
-                Tab::BitAssets => {
-                    self.bitassets.show(self.app.as_ref(), ui);
+                Tab::Bmm => {
+                    self.miner.show(self.app.as_ref(), ui);
                 }
-                Tab::Messaging => {
-                    self.messaging.show(self.app.as_ref(), ui);
+                Tab::Simplicity => {
+                    self.simplicity.show(self.app.as_ref(), ui);
                 }
                 Tab::Activity => {
                     self.activity.show(self.app.as_ref(), ui);
