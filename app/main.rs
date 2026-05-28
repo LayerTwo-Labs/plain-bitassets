@@ -233,6 +233,17 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         });
+        // BitWindow / CUSF SidechainService gRPC (proxies to elementsd)
+        app.runtime.spawn({
+            let app = app.clone();
+            let addr = config.sidechain_grpc_addr;
+            async move {
+                tracing::info!(%addr, "starting SidechainService gRPC (for BitWindow)");
+                if let Err(err) = rpc_server::run_sidechain_grpc_server(app, addr).await {
+                    tracing::error!("sidechain gRPC server error: {err:#}");
+                }
+            }
+        });
     });
     if !config.headless {
         let app = match app {

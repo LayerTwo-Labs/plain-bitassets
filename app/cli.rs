@@ -40,6 +40,8 @@ const DEFAULT_RPC_PORT: u16 = 6000 + THIS_SIDECHAIN as u16;
 const DEFAULT_LITE_WALLET_QUIC_ADDR: SocketAddr =
     ipv4_socket_addr([127, 0, 0, 1], 6100 + THIS_SIDECHAIN as u16);
 
+const DEFAULT_SIDECHAIN_GRPC_PORT: u16 = 50052;
+
 #[cfg(feature = "zmq")]
 const DEFAULT_ZMQ_ADDR: SocketAddr =
     ipv4_socket_addr([127, 0, 0, 1], 28000 + THIS_SIDECHAIN as u16);
@@ -158,6 +160,9 @@ pub(super) struct Cli {
     #[cfg(feature = "zmq")]
     #[arg(default_value_t = DEFAULT_ZMQ_ADDR, long, short)]
     pub zmq_addr: SocketAddr,
+    /// Host:port for the cusf.sidechain.v1.SidechainService gRPC (for BitWindow)
+    #[arg(default_value_t = DEFAULT_SIDECHAIN_GRPC_PORT, long)]
+    sidechain_grpc_port: u16,
 }
 
 impl Cli {
@@ -207,6 +212,7 @@ impl Cli {
             lite_wallet_quic_addr: self.lite_wallet_quic_addr,
             #[cfg(feature = "zmq")]
             zmq_addr: self.zmq_addr,
+            sidechain_grpc_addr: ipv4_socket_addr([127, 0, 0, 1], self.sidechain_grpc_port),
         })
     }
 }
@@ -228,6 +234,7 @@ pub struct Config {
     pub lite_wallet_quic_addr: SocketAddr,
     #[cfg(feature = "zmq")]
     pub zmq_addr: SocketAddr,
+    pub sidechain_grpc_addr: SocketAddr,
 }
 
 impl Config {
