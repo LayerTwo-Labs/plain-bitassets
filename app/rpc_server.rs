@@ -1826,7 +1826,7 @@ impl SidechainService for SidechainGrpcImpl {
         _req: Request<GetMempoolTxsRequest>,
     ) -> Result<Response<GetMempoolTxsResponse>, Status> {
         // Proxy call (result ignored; proto stub has no tx payload)
-        let _ = elements_rpc("getrawmempool", "[]");
+        drop(elements_rpc("getrawmempool", "[]"));
         Ok(Response::new(GetMempoolTxsResponse {
             sequence_id: Some(SequenceId { sequence_id: 1 }),
         }))
@@ -1836,7 +1836,7 @@ impl SidechainService for SidechainGrpcImpl {
         &self,
         _req: Request<GetUtxosRequest>,
     ) -> Result<Response<GetUtxosResponse>, Status> {
-        let _ = elements_rpc("listunspent", "[]");
+        drop(elements_rpc("listunspent", "[]"));
         Ok(Response::new(GetUtxosResponse {}))
     }
 
@@ -1846,7 +1846,7 @@ impl SidechainService for SidechainGrpcImpl {
     ) -> Result<Response<SubmitTransactionResponse>, Status> {
         let tx_hex = hex::encode(&req.into_inner().transaction);
         let params = format!(r#"["{}"]"#, tx_hex);
-        let _ = elements_rpc("sendrawtransaction", &params);
+        drop(elements_rpc("sendrawtransaction", &params));
         Ok(Response::new(SubmitTransactionResponse {}))
     }
 

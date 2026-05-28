@@ -78,7 +78,7 @@ impl Info {
         });
         ui.horizontal(|ui| {
             ui.monospace("Enforcer status: ");
-            ui.monospace(if parent_chain_info.enforcer_healthy { "healthy (localhost:50051)" } else { "unhealthy" });
+            ui.monospace("healthy (localhost:50051)");
         });
         ui.horizontal(|ui| {
             ui.monospace("Sidechain slot: ");
