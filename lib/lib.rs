@@ -13,3 +13,4 @@ pub mod state;
 pub mod types;
 pub mod util;
 pub mod wallet;
+pub mod elements_rpc;
