@@ -23,7 +23,7 @@ const SHIFT_ENTER: KeyboardShortcut = KeyboardShortcut {
 #[command(name(""), no_binary_name(true))]
 pub struct ConsoleCommand {
     #[command(subcommand)]
-    command: plain_bitassets_app_cli_lib::Command,
+    command: liquid_simplicity_app_cli_lib::Command,
 }
 
 pub struct ConsoleLogs {
@@ -73,7 +73,7 @@ impl ConsoleLogs {
                 return;
             }
         };
-        let cli = plain_bitassets_app_cli_lib::Cli::new(
+        let cli = liquid_simplicity_app_cli_lib::Cli::new(
             command,
             Some(self.rpc_host.clone()),
             Some(self.rpc_port),

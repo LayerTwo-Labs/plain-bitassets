@@ -1,6 +1,6 @@
 use eframe::egui::{self, Button};
 
-use plain_bitassets::types::{
+use liquid_simplicity::types::{
     self, AssetId, BitcoinOutputContent, Output, OutputContent, Transaction,
     WithdrawalOutputContent,
 };

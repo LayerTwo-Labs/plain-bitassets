@@ -16,7 +16,7 @@ use jsonrpsee::{
 };
 use serde::{Deserialize, Serialize};
 
-use plain_bitassets::{
+use liquid_simplicity::{
     authorization::{self, Dst, Signature},
     net::{self, Peer},
     state::{self, AmmPair, AmmPoolState, BitAssetSeqId, DutchAuctionState},
@@ -29,7 +29,7 @@ use plain_bitassets::{
     },
     wallet::Balance,
 };
-use plain_bitassets_app_rpc_api::{
+use liquid_simplicity_app_rpc_api::{
     FLORESTA_UTREEXO_ANCHOR_SERVICES, FlorestaUtreexoAnchor,
     FlorestaUtreexoPeerSource, LiteWalletProofRef, LiteWalletUpdate,
     LiteWalletUtreexoProof, RpcServer, TxInfo, TxProof,
@@ -374,14 +374,14 @@ impl RpcServerImpl {
                 for txid in confirmed_watched_utxos
                     .keys()
                     .filter_map(|outpoint| match outpoint {
-                        plain_bitassets::types::OutPoint::Regular {
+                        liquid_simplicity::types::OutPoint::Regular {
                             txid,
                             vout: _,
                         } => Some(*txid),
-                        plain_bitassets::types::OutPoint::Coinbase {
+                        liquid_simplicity::types::OutPoint::Coinbase {
                             ..
                         }
-                        | plain_bitassets::types::OutPoint::Deposit(_) => None,
+                        | liquid_simplicity::types::OutPoint::Deposit(_) => None,
                     })
                     .collect::<HashSet<_>>()
                 {
@@ -466,7 +466,7 @@ impl RpcServerImpl {
                                     &output.address,
                                 )) {
                                     created_utxos.push(PointedOutput {
-                                        outpoint: plain_bitassets::types::OutPoint::Regular {
+                                        outpoint: liquid_simplicity::types::OutPoint::Regular {
                                             txid,
                                             vout: vout as u32,
                                         },
@@ -914,7 +914,7 @@ impl RpcServer for RpcServerImpl {
 
     async fn get_bmm_inclusions(
         &self,
-        block_hash: plain_bitassets::types::BlockHash,
+        block_hash: liquid_simplicity::types::BlockHash,
     ) -> RpcResult<Vec<bitcoin::BlockHash>> {
         self.app
             .node
@@ -1238,7 +1238,7 @@ impl RpcServer for RpcServerImpl {
 
     async fn openapi_schema(&self) -> RpcResult<utoipa::openapi::OpenApi> {
         let res =
-            <plain_bitassets_app_rpc_api::RpcDoc as utoipa::OpenApi>::openapi();
+            <liquid_simplicity_app_rpc_api::RpcDoc as utoipa::OpenApi>::openapi();
         Ok(res)
     }
 

@@ -6,7 +6,7 @@ use std::{
 };
 
 use clap::{Arg, Parser};
-use plain_bitassets::types::{Network, THIS_SIDECHAIN};
+use liquid_simplicity::types::{Network, THIS_SIDECHAIN};
 use url::{Host, Url};
 
 use crate::util::saturating_pred_level;
@@ -23,7 +23,7 @@ static DEFAULT_DATA_DIR: LazyLock<Option<PathBuf>> =
             tracing::warn!("Failed to resolve default data dir");
             None
         }
-        Some(data_dir) => Some(data_dir.join("plain_bitassets")),
+        Some(data_dir) => Some(data_dir.join("liquid_simplicity")),
     });
 
 const DEFAULT_MAIN_HOST: Host = Host::Ipv4(Ipv4Addr::LOCALHOST);

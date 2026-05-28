@@ -1,7 +1,7 @@
 use eframe::egui;
 use itertools::{Either, Itertools};
 
-use plain_bitassets::types::{BitAssetId, FilledOutput, Hash, Txid};
+use liquid_simplicity::types::{BitAssetId, FilledOutput, Hash, Txid};
 
 use crate::{app::App, gui::util::UiExt};
 

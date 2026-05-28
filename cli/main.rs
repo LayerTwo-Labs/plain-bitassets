@@ -1,5 +1,5 @@
 use clap::Parser;
-use plain_bitassets_app_cli_lib::Cli;
+use liquid_simplicity_app_cli_lib::Cli;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

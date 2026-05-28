@@ -71,7 +71,7 @@ impl Coins {
                     });
                     ui.horizontal(|ui| {
                         ui.monospace("Receive:");
-                        ui.monospace_selectable_singleline(true, &recv_addr);
+                        ui.monospace_selectable_singleline(true, recv_addr.as_str());
                         if ui.button("Copy").clicked() {
                             ui.output_mut(|o| o.copied_text = recv_addr.clone());
                         }

@@ -16,11 +16,11 @@ use bip300301_enforcer_integration_tests::{
 use futures::{
     FutureExt as _, StreamExt as _, channel::mpsc, future::BoxFuture,
 };
-use plain_bitassets::{
+use liquid_simplicity::{
     authorization::{Dst, Signature},
     types::{Address, BitAssetData, BitAssetId, GetAddress as _, Txid},
 };
-use plain_bitassets_app_rpc_api::RpcClient as _;
+use liquid_simplicity_app_rpc_api::RpcClient as _;
 use tokio::time::sleep;
 use tracing::Instrument as _;
 

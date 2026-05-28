@@ -33,7 +33,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     const VALIDATOR_PROTO: &str =
         "../proto/proto/cusf/mainchain/v1/validator.proto";
     const WALLET_PROTO: &str = "../proto/proto/cusf/mainchain/v1/wallet.proto";
-    const ALL_PROTOS: &[&str] = &[COMMON_PROTO, VALIDATOR_PROTO, WALLET_PROTO];
+    const SIDECHAIN_PROTO: &str = "../proto/proto/cusf/sidechain/v1/sidechain.proto";
+    const ALL_PROTOS: &[&str] =
+        &[COMMON_PROTO, VALIDATOR_PROTO, WALLET_PROTO, SIDECHAIN_PROTO];
     const INCLUDES: &[&str] = &["../proto/proto"];
     let file_descriptors = protox::compile(ALL_PROTOS, INCLUDES)?;
     let file_descriptor_path = PathBuf::from(
@@ -57,6 +59,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .extern_path(".cusf.common.v1", "crate::types::proto::common");
             Ok(())
         },
+    )?;
+    let () = compile_protos_with_config(
+        &file_descriptor_path,
+        &[SIDECHAIN_PROTO],
+        INCLUDES,
+        |_| Ok(()),
     )?;
     Ok(())
 }

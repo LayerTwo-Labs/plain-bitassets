@@ -8,7 +8,7 @@ use std::{
 use clap::{Parser, Subcommand};
 use http::HeaderMap;
 use jsonrpsee::{core::client::ClientT, http_client::HttpClientBuilder};
-use plain_bitassets::{
+use liquid_simplicity::{
     authorization::{Dst, Signature},
     types::{
         Address, AssetId, BitAssetData, BitAssetId, BlockHash, DutchAuctionId,
@@ -16,7 +16,7 @@ use plain_bitassets::{
         VerifyingKey,
     },
 };
-use plain_bitassets_app_rpc_api::RpcClient;
+use liquid_simplicity_app_rpc_api::RpcClient;
 use tracing_subscriber::layer::SubscriberExt as _;
 use url::{Host, Url};
 
@@ -170,7 +170,7 @@ pub enum Command {
     GetBlockcount,
     /// Get mainchain blocks that commit to a specified block hash
     GetBmmInclusions {
-        block_hash: plain_bitassets::types::BlockHash,
+        block_hash: liquid_simplicity::types::BlockHash,
     },
     /// Get a new address
     GetNewAddress,
@@ -588,7 +588,7 @@ where
         }
         Command::OpenApiSchema => {
             let openapi =
-                <plain_bitassets_app_rpc_api::RpcDoc as utoipa::OpenApi>::openapi();
+                <liquid_simplicity_app_rpc_api::RpcDoc as utoipa::OpenApi>::openapi();
             openapi.to_pretty_json()?
         }
         Command::PendingWithdrawalBundle => {

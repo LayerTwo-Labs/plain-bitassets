@@ -1,4 +1,4 @@
-use std::borrow::Borrow;
+
 
 use borsh::BorshDeserialize;
 use eframe::egui::{self, Color32, InnerResponse, Response, Ui};
@@ -35,11 +35,11 @@ pub trait UiExt {
         text: Text,
     ) -> Response
     where
-        Text: Borrow<str>;
+        Text: AsRef<str>;
 
     fn monospace_selectable_multiline<Text>(&mut self, text: Text) -> Response
     where
-        Text: Borrow<str>;
+        Text: AsRef<str>;
 }
 
 impl InnerResponseExt for InnerResponse<Response> {
@@ -64,10 +64,10 @@ impl UiExt for Ui {
         text: Text,
     ) -> Response
     where
-        Text: Borrow<str>,
+        Text: AsRef<str>,
     {
         use egui::{TextEdit, TextStyle, Widget};
-        let mut text: &str = text.borrow();
+        let mut text: &str = text.as_ref();
         TextEdit::singleline(&mut text)
             .font(TextStyle::Monospace)
             .clip_text(clip_text)
@@ -76,10 +76,10 @@ impl UiExt for Ui {
 
     fn monospace_selectable_multiline<Text>(&mut self, text: Text) -> Response
     where
-        Text: Borrow<str>,
+        Text: AsRef<str>,
     {
         use egui::{TextEdit, TextStyle, Widget};
-        let mut text: &str = text.borrow();
+        let mut text: &str = text.as_ref();
         TextEdit::multiline(&mut text)
             .font(TextStyle::Monospace)
             .ui(self)

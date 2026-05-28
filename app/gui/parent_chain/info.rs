@@ -1,6 +1,6 @@
 use eframe::egui::{self, Button};
 use futures::FutureExt;
-use plain_bitassets::types::proto::mainchain;
+use liquid_simplicity::types::proto::mainchain;
 
 use crate::{app::App, gui::util::UiExt};
 

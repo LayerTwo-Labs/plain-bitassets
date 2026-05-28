@@ -4084,6 +4084,183 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df1d3c3b53da64cf5760482273a98e575c651a67eec7f77df96b5b642de8f039"
 
 [[package]]
+name = "liquid_simplicity"
+version = "0.1.0"
+dependencies = [
+ "addr",
+ "anyhow",
+ "async-lock",
+ "bech32",
+ "bincode",
+ "bitcoin",
+ "blake3",
+ "borsh",
+ "byteorder",
+ "bytes",
+ "clap",
+ "dirs",
+ "ed25519-dalek",
+ "educe",
+ "error-fatality",
+ "fallible-iterator",
+ "fraction",
+ "futures",
+ "governor",
+ "hashlink 0.10.0",
+ "heed 0.21.0",
+ "hex 0.4.3",
+ "hex-literal",
+ "itertools 0.14.0",
+ "jsonrpsee 0.25.1",
+ "libes",
+ "nonempty 0.11.0",
+ "num",
+ "parking_lot",
+ "prost",
+ "prost-build",
+ "prost-types",
+ "protox",
+ "quinn",
+ "rayon",
+ "rcgen",
+ "reqwest 0.12.28",
+ "rustls",
+ "semver",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "smallvec",
+ "sneed 0.0.19",
+ "strum 0.27.2",
+ "thiserror 2.0.18",
+ "tiny-bip39",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tracing",
+ "transitive",
+ "utoipa",
+ "x25519-dalek",
+ "zeromq",
+]
+
+[[package]]
+name = "liquid_simplicity_app"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "bitcoin",
+ "blake3",
+ "borsh",
+ "clap",
+ "dirs",
+ "eframe",
+ "either",
+ "fallible-iterator",
+ "fraction",
+ "futures",
+ "hex 0.4.3",
+ "http",
+ "human-size",
+ "include_path",
+ "itertools 0.14.0",
+ "jsonrpsee 0.25.1",
+ "libes",
+ "liquid_simplicity",
+ "liquid_simplicity_app_cli",
+ "liquid_simplicity_app_rpc_api",
+ "mimalloc",
+ "num",
+ "parking_lot",
+ "poll-promise",
+ "quinn",
+ "rustreexo",
+ "serde",
+ "serde_json",
+ "shlex",
+ "strum 0.27.2",
+ "thiserror 2.0.18",
+ "tiny-bip39",
+ "tokio",
+ "tokio-util",
+ "tonic",
+ "tonic-health",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "url",
+ "utoipa",
+ "uuid",
+]
+
+[[package]]
+name = "liquid_simplicity_app_cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitcoin",
+ "clap",
+ "hex 0.4.3",
+ "http",
+ "jsonrpsee 0.25.1",
+ "liquid_simplicity",
+ "liquid_simplicity_app_rpc_api",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "utoipa",
+ "uuid",
+]
+
+[[package]]
+name = "liquid_simplicity_app_rpc_api"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitcoin",
+ "fraction",
+ "jsonrpsee 0.25.1",
+ "l2l-openapi",
+ "liquid_simplicity",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "utoipa",
+]
+
+[[package]]
+name = "liquid_simplicity_integration_tests"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bip300301_enforcer_integration_tests",
+ "bip300301_enforcer_lib",
+ "bitcoin",
+ "blake3",
+ "clap",
+ "dotenvy",
+ "futures",
+ "jsonrpsee 0.25.1",
+ "libtest-mimic",
+ "liquid_simplicity",
+ "liquid_simplicity_app_rpc_api",
+ "reserve-port",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-indicatif",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "litemap"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5236,181 +5413,6 @@ name = "pkg-config"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
-
-[[package]]
-name = "plain_bitassets"
-version = "0.14.1"
-dependencies = [
- "addr",
- "anyhow",
- "async-lock",
- "bech32",
- "bincode",
- "bitcoin",
- "blake3",
- "borsh",
- "byteorder",
- "bytes",
- "clap",
- "ed25519-dalek",
- "educe",
- "error-fatality",
- "fallible-iterator",
- "fraction",
- "futures",
- "governor",
- "hashlink 0.10.0",
- "heed 0.21.0",
- "hex 0.4.3",
- "hex-literal",
- "itertools 0.14.0",
- "jsonrpsee 0.25.1",
- "libes",
- "nonempty 0.11.0",
- "num",
- "parking_lot",
- "prost",
- "prost-build",
- "prost-types",
- "protox",
- "quinn",
- "rayon",
- "rcgen",
- "rustls",
- "semver",
- "serde",
- "serde_json",
- "serde_with",
- "smallvec",
- "sneed 0.0.19",
- "strum 0.27.2",
- "thiserror 2.0.18",
- "tiny-bip39",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tonic",
- "tonic-prost",
- "tonic-prost-build",
- "tracing",
- "transitive",
- "utoipa",
- "x25519-dalek",
- "zeromq",
-]
-
-[[package]]
-name = "plain_bitassets_app"
-version = "0.14.1"
-dependencies = [
- "anyhow",
- "bincode",
- "bitcoin",
- "blake3",
- "borsh",
- "clap",
- "dirs",
- "eframe",
- "either",
- "fallible-iterator",
- "fraction",
- "futures",
- "hex 0.4.3",
- "http",
- "human-size",
- "include_path",
- "itertools 0.14.0",
- "jsonrpsee 0.25.1",
- "libes",
- "mimalloc",
- "num",
- "parking_lot",
- "plain_bitassets",
- "plain_bitassets_app_cli",
- "plain_bitassets_app_rpc_api",
- "poll-promise",
- "quinn",
- "rustreexo",
- "serde",
- "serde_json",
- "shlex",
- "strum 0.27.2",
- "thiserror 2.0.18",
- "tiny-bip39",
- "tokio",
- "tokio-util",
- "tonic",
- "tonic-health",
- "tower",
- "tower-http",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "url",
- "utoipa",
- "uuid",
-]
-
-[[package]]
-name = "plain_bitassets_app_cli"
-version = "0.14.1"
-dependencies = [
- "anyhow",
- "bitcoin",
- "clap",
- "hex 0.4.3",
- "http",
- "jsonrpsee 0.25.1",
- "plain_bitassets",
- "plain_bitassets_app_rpc_api",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "url",
- "utoipa",
- "uuid",
-]
-
-[[package]]
-name = "plain_bitassets_app_rpc_api"
-version = "0.14.1"
-dependencies = [
- "anyhow",
- "bitcoin",
- "fraction",
- "jsonrpsee 0.25.1",
- "l2l-openapi",
- "plain_bitassets",
- "serde",
- "serde_json",
- "serde_with",
- "utoipa",
-]
-
-[[package]]
-name = "plain_bitassets_integration_tests"
-version = "0.14.1"
-dependencies = [
- "anyhow",
- "bip300301_enforcer_integration_tests",
- "bip300301_enforcer_lib",
- "bitcoin",
- "blake3",
- "clap",
- "dotenvy",
- "futures",
- "jsonrpsee 0.25.1",
- "libtest-mimic",
- "plain_bitassets",
- "plain_bitassets_app_rpc_api",
- "reserve-port",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-indicatif",
- "tracing-subscriber",
-]
 
 [[package]]
 name = "png"

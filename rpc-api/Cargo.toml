@@ -1,6 +1,7 @@
 [package]
-name = "plain_bitassets_app_rpc_api"
+name = "liquid_simplicity_app_rpc_api"
 authors.workspace = true
+description.workspace = true
 edition.workspace = true
 license-file.workspace = true
 publish.workspace = true
@@ -11,7 +12,7 @@ bitcoin = { workspace = true, features = ["serde"] }
 fraction = { workspace = true, features = ["with-serde-support"] }
 jsonrpsee = { workspace = true, features = ["client", "macros", "server"] }
 l2l-openapi = { workspace = true }
-plain_bitassets = { path = "../lib" }
+liquid_simplicity = { path = "../lib" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_with = { workspace = true, features = ["hex", "macros"] }
@@ -24,5 +25,5 @@ anyhow = { workspace = true }
 workspace = true
 
 [lib]
-name = "plain_bitassets_app_rpc_api"
+name = "liquid_simplicity_app_rpc_api"
 path = "lib.rs"
