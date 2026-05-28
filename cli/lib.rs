@@ -16,7 +16,7 @@ use liquid_simplicity::{
         VerifyingKey,
     },
 };
-use liquid_simplicity_app_rpc_api::RpcClient;
+use liquid_simplicity_app_rpc_api::RpcClient as _;
 use tracing_subscriber::layer::SubscriberExt as _;
 use url::{Host, Url};
 
