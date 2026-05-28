@@ -12,9 +12,28 @@ use super::util::UiExt;
 const MINIMAL_PROGRAM_HEX: &str = "e0094081020408102040810205b46da080";
 const CMR: &str = "8745774d6c695d360bb788311e7a0396d397bcbb6ac4ef02916b6468ef28a4f4";
 
-const PYTHON_SCRIPT: &str =
+const DEFAULT_PYTHON_SCRIPT: &str =
     "/Volumes/T705/code/liquid-signet-sidechain/drivechain-liquid-sidechain/tests/simplicity_e2e_tx.py";
-const ELEMENTS_CLI: &str = "/Volumes/T705/code/liquid-signet-sidechain/src/elements-cli";
+const DEFAULT_ELEMENTS_CLI: &str =
+    "/Volumes/T705/code/liquid-signet-sidechain/src/elements-cli";
+
+fn resolve_script_path() -> String {
+    if let Ok(p) = std::env::var("SIMPLICITY_E2E_SCRIPT") {
+        return p;
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let candidate = std::path::Path::new(&home)
+            .join(".config/liquid-simplicity/simplicity_e2e_tx.py");
+        if candidate.exists() {
+            return candidate.to_string_lossy().into_owned();
+        }
+    }
+    DEFAULT_PYTHON_SCRIPT.to_string()
+}
+
+fn resolve_elements_cli() -> String {
+    std::env::var("ELEMENTS_CLI_BIN").unwrap_or_else(|_| DEFAULT_ELEMENTS_CLI.to_string())
+}
 
 #[derive(Default)]
 pub struct Simplicity {
@@ -168,12 +187,16 @@ impl Simplicity {
         app.runtime.spawn_blocking(move || {
             running.store(true, Ordering::SeqCst);
 
+            let script = resolve_script_path();
+            let elements_cli = resolve_elements_cli();
+            let repo_root = std::env::var("SIMPLICITY_REPO_ROOT")
+                .unwrap_or_else(|_| "/Volumes/T705/code/liquid-signet-sidechain".to_string());
             let output = std::process::Command::new("python3")
-                .arg(PYTHON_SCRIPT)
-                .env("REPO_ROOT", "/Volumes/T705/code/liquid-signet-sidechain")
+                .arg(&script)
+                .env("REPO_ROOT", &repo_root)
                 .env("LIQUID_ID5_DATADIR", "/tmp/liquid-id5-regtest")
                 .env("LIQUID_ID5_RPCPORT", "18443")
-                .env("ELEMENTS_CLI", ELEMENTS_CLI)
+                .env("ELEMENTS_CLI", &elements_cli)
                 .output();
 
             let res = match output {
