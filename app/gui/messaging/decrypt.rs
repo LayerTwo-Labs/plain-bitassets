@@ -1,6 +1,6 @@
 use eframe::egui;
 
-use plain_bitassets::types::EncryptionPubKey;
+use liquid_simplicity::types::EncryptionPubKey;
 
 use crate::{
     app::App,

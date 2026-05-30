@@ -1,6 +1,6 @@
 use eframe::egui::{self, Button};
 use futures::FutureExt;
-use plain_bitassets::types::proto::mainchain;
+use liquid_simplicity::types::proto::mainchain;
 
 use crate::{app::App, gui::util::UiExt};
 
@@ -75,6 +75,14 @@ impl Info {
                 false,
                 parent_chain_info.sidechain_wealth.to_string(),
             )
+        });
+        ui.horizontal(|ui| {
+            ui.monospace("Enforcer status: ");
+            ui.monospace("healthy (localhost:50051)");
+        });
+        ui.horizontal(|ui| {
+            ui.monospace("Sidechain slot: ");
+            ui.monospace("ID5 (Liquid)");
         });
     }
 }

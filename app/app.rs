@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use fallible_iterator::FallibleIterator as _;
 use futures::{StreamExt as _, TryFutureExt as _};
 use parking_lot::RwLock;
-use plain_bitassets::{
+use liquid_simplicity::{
     miner::{self, Miner},
     node::{self, Node},
     types::{
@@ -15,6 +15,7 @@ use plain_bitassets::{
         },
     },
     wallet::{self, Wallet},
+    elements_rpc::ElementsRpc,
 };
 use tokio::{spawn, sync::RwLock as TokioRwLock, task::JoinHandle};
 use tokio_util::task::LocalPoolHandle;
@@ -30,7 +31,7 @@ pub enum Error {
     #[error(transparent)]
     AmountOverflow(#[from] AmountOverflowError),
     #[error("CUSF mainchain proto error")]
-    CusfMainchain(#[from] plain_bitassets::types::proto::Error),
+    CusfMainchain(#[from] liquid_simplicity::types::proto::Error),
     #[error("io error")]
     Io(#[from] std::io::Error),
     #[error("miner error: {0}")]
@@ -105,8 +106,14 @@ pub struct App {
     pub utxos: Arc<RwLock<HashMap<OutPoint, FilledOutput>>>,
     pub unconfirmed_utxos: Arc<RwLock<HashMap<OutPoint, Output>>>,
     pub runtime: Arc<tokio::runtime::Runtime>,
+    pub network: types::Network,
+    pub rpc_url: url::Url,
+    pub lite_wallet_quic_addr: std::net::SocketAddr,
+    pub net_addr: std::net::SocketAddr,
     task: Arc<JoinHandle<()>>,
     pub local_pool: LocalPoolHandle,
+    /// Connection to elementsd for L-BTC wallet data (getbalance, listunspent, etc.)
+    pub elements_rpc: Option<ElementsRpc>,
 }
 
 impl App {
@@ -283,6 +290,22 @@ impl App {
             wallet.clone(),
         );
         drop(rt_guard);
+
+        // Wire up Elements JSON-RPC for L-BTC wallet display (elementsd)
+        let elements_rpc = {
+            let cookie_dir = Some(std::path::PathBuf::from("/tmp/liquid-id5-regtest"));
+            match ElementsRpc::new("http://127.0.0.1:18443", cookie_dir.as_deref()) {
+                Ok(rpc) => {
+                    tracing::info!("Connected to elementsd RPC for L-BTC wallet data");
+                    Some(rpc)
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to init elementsd RPC client: {e:#}; L-BTC panels will be empty");
+                    None
+                }
+            }
+        };
+
         Ok(Self {
             node,
             wallet,
@@ -290,8 +313,13 @@ impl App {
             unconfirmed_utxos,
             utxos,
             runtime: Arc::new(runtime),
+            network: config.network,
+            rpc_url: config.rpc_url(),
+            lite_wallet_quic_addr: config.lite_wallet_quic_addr,
+            net_addr: config.net_addr,
             task: Arc::new(task),
             local_pool,
+            elements_rpc,
         })
     }
 
@@ -473,7 +501,7 @@ impl App {
             miner_write.confirm_bmm().await.inspect_err(|err| {
                 tracing::error!(
                     "{:#}",
-                    plain_bitassets::util::ErrorChain::new(err)
+                    liquid_simplicity::util::ErrorChain::new(err)
                 )
             })?
         {
@@ -489,7 +517,7 @@ impl App {
                 .inspect_err(|err| {
                     tracing::error!(
                         "{:#}",
-                        plain_bitassets::util::ErrorChain::new(err)
+                        liquid_simplicity::util::ErrorChain::new(err)
                     )
                 })? {
                 true => {

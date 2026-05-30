@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use eframe::egui;
 
-use plain_bitassets::types::{
+use liquid_simplicity::types::{
     AssetId, AssetOutputContent, BitAssetId, BitcoinOutputContent,
     GetBitcoinValue, Transaction, WithdrawalOutputContent,
 };

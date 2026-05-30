@@ -1250,8 +1250,8 @@ impl Wallet {
         tx.inputs.extend(quote_utxos.keys());
         tx.inputs.rotate_right(quote_utxos.len());
 
-        tx.outputs.push(base_output);
         tx.outputs.extend(change_output);
+        tx.outputs.push(base_output);
         tx.data = Some(TxData::DutchAuctionBid {
             auction_id,
             receive_asset: base_asset,

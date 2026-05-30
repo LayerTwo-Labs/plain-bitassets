@@ -1,7 +1,7 @@
 use eframe::egui;
 use strum::{EnumIter, IntoEnumIterator};
 
-use crate::app::App;
+use crate::{app::App, gui::util::UiExt};
 
 mod my_bitassets;
 mod transfer_receive;
@@ -47,6 +47,65 @@ impl Coins {
         app: Option<&App>,
         ui: &mut egui::Ui,
     ) -> anyhow::Result<()> {
+        // L-BTC Wallet header wired to elementsd JSON-RPC (real data)
+        egui::TopBottomPanel::top("lbtc_header").show(ui.ctx(), |ui| {
+            ui.heading("L-BTC Wallet (elementsd)");
+            if let Some(app) = app {
+                if let Some(rpc) = &app.elements_rpc {
+                    // Fetch live (local RPC is fast; block_on is acceptable here)
+                    let balance = app
+                        .runtime
+                        .block_on(rpc.getbalance())
+                        .map(|a| format!("{:.8}", a.to_btc()))
+                        .unwrap_or_else(|e| format!("error: {e}"));
+                    let recv_addr = app
+                        .runtime
+                        .block_on(rpc.getnewaddress())
+                        .unwrap_or_else(|e| format!("error: {e}"));
+
+                    ui.horizontal(|ui| {
+                        ui.monospace(format!("Balance: {} L-BTC", balance));
+                        if ui.button("Refresh").clicked() {
+                            // next frame will refetch
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.monospace("Receive:");
+                        ui.monospace_selectable_singleline(true, recv_addr.as_str());
+                        if ui.button("Copy").clicked() {
+                            ui.output_mut(|o| o.copied_text = recv_addr.clone());
+                        }
+                    });
+
+                    // UTXOs
+                    if let Ok(utxos) = app.runtime.block_on(rpc.listunspent()) {
+                        ui.collapsing("UTXOs (listunspent)", |ui| {
+                            egui::ScrollArea::vertical()
+                                .max_height(120.0)
+                                .show(ui, |ui| {
+                                    for u in utxos.iter().take(10) {
+                                        ui.monospace(format!(
+                                            "{}:{}  {} L-BTC  confs:{}",
+                                            u.txid,
+                                            u.vout,
+                                            u.amount.to_btc(),
+                                            u.confirmations
+                                        ));
+                                    }
+                                    if utxos.len() > 10 {
+                                        ui.monospace(format!("... and {} more", utxos.len() - 10));
+                                    }
+                                });
+                        });
+                    }
+                } else {
+                    ui.monospace("elementsd RPC not connected (no cookie or elementsd down)");
+                }
+            } else {
+                ui.monospace("App not initialized");
+            }
+        });
+
         egui::TopBottomPanel::top("coins_tabs").show(ui.ctx(), |ui| {
             ui.horizontal(|ui| {
                 Tab::iter().for_each(|tab_variant| {

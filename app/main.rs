@@ -121,8 +121,8 @@ fn set_tracing_subscriber(
                 "h2::codec::framed_write",
                 saturating_pred_level(saturating_pred_level(log_level)),
             ),
-            ("plain_bitassets", log_level),
-            ("plain_bitassets_app", log_level),
+            ("liquid_simplicity", log_level),
+            ("liquid_simplicity_app", log_level),
             (
                 "tower::buffer::worker",
                 saturating_pred_level(saturating_pred_level(log_level)),
@@ -212,6 +212,35 @@ fn main() -> anyhow::Result<()> {
                 tracing::info!("starting RPC server at `{rpc_url}`");
                 if let Err(err) = rpc_server::run_server(app, rpc_url).await {
                     app_tx.send(err).expect("failed to send error to app");
+                }
+            }
+        });
+        app.runtime.spawn({
+            let app = app.clone();
+            let lite_wallet_quic_addr = config.lite_wallet_quic_addr;
+            async move {
+                tracing::info!(
+                    %lite_wallet_quic_addr,
+                    "starting lite-wallet QUIC server"
+                );
+                if let Err(err) = rpc_server::run_lite_wallet_quic_server(
+                    app,
+                    lite_wallet_quic_addr,
+                )
+                .await
+                {
+                    tracing::error!("{err:#}");
+                }
+            }
+        });
+        // BitWindow / CUSF SidechainService gRPC (proxies to elementsd)
+        app.runtime.spawn({
+            let app = app.clone();
+            let addr = config.sidechain_grpc_addr;
+            async move {
+                tracing::info!(%addr, "starting SidechainService gRPC (for BitWindow)");
+                if let Err(err) = rpc_server::run_sidechain_grpc_server(app, addr).await {
+                    tracing::error!("sidechain gRPC server error: {err:#}");
                 }
             }
         });

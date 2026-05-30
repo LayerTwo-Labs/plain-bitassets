@@ -190,6 +190,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "250f629c0161ad8107cf89319e990051fae62832fd343083bea452d93e2205fd"
 
 [[package]]
+name = "allocator-api2"
+version = "0.2.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
+
+[[package]]
 name = "android-activity"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -635,8 +641,8 @@ version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2c8d66485a3a2ea485c1913c4572ce0256067a5377ac8c75c4960e1cda98605f"
 dependencies = [
- "bitcoin-internals",
- "bitcoin_hashes",
+ "bitcoin-internals 0.3.0",
+ "bitcoin_hashes 0.14.1",
 ]
 
 [[package]]
@@ -843,7 +849,7 @@ version = "2.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90dbd31c98227229239363921e60fcf5e558e43ec69094d46fc4996f08d1d5bc"
 dependencies = [
- "bitcoin_hashes",
+ "bitcoin_hashes 0.14.1",
  "serde",
  "unicode-normalization",
 ]
@@ -872,14 +878,32 @@ dependencies = [
  "base58ck",
  "base64 0.21.7",
  "bech32",
- "bitcoin-internals",
- "bitcoin-io",
+ "bitcoin-internals 0.3.0",
+ "bitcoin-io 0.1.4",
  "bitcoin-units",
- "bitcoin_hashes",
- "hex-conservative",
+ "bitcoin_hashes 0.14.1",
+ "hex-conservative 0.2.2",
  "hex_lit",
  "secp256k1",
  "serde",
+]
+
+[[package]]
+name = "bitcoin-consensus-encoding"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8d7ca3dc8ff835693ad73bf1596240c06f974a31eeb3f611aaedf855f1f2725"
+dependencies = [
+ "bitcoin-internals 0.5.0",
+]
+
+[[package]]
+name = "bitcoin-consensus-encoding"
+version = "1.0.0-rc.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cd69023e5db2f3f7241672de6be29408373ba0ff407e7fda71d70d728bec05a"
+dependencies = [
+ "bitcoin-internals 0.5.0",
 ]
 
 [[package]]
@@ -892,10 +916,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "bitcoin-internals"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a90bbbfa552b49101a230fb2668f3f9ef968c81e6f83cf577e1d4b80f689e1aa"
+dependencies = [
+ "hex-conservative 0.3.2",
+]
+
+[[package]]
+name = "bitcoin-internals"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a30a22d1f112dde8e16be7b45c63645dc165cef254f835b3e1e9553e485cfa64"
+dependencies = [
+ "hex-conservative 0.3.2",
+]
+
+[[package]]
 name = "bitcoin-io"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2dee39a0ee5b4095224a0cfc6bf4cc1baf0f9624b96b367e53b66d974e51d953"
+
+[[package]]
+name = "bitcoin-io"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd1a5e0e2112a702941a5c82fe0a31954c2900686053c33f59af64feab61d981"
+dependencies = [
+ "bitcoin-consensus-encoding 1.0.0-rc.3",
+ "bitcoin-internals 0.4.2",
+ "bitcoin_hashes 0.18.0",
+]
 
 [[package]]
 name = "bitcoin-jsonrpsee"
@@ -936,7 +989,7 @@ version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5285c8bcaa25876d07f37e3d30c303f2609179716e11d688f51e8f1fe70063e2"
 dependencies = [
- "bitcoin-internals",
+ "bitcoin-internals 0.3.0",
  "serde",
 ]
 
@@ -946,9 +999,31 @@ version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "26ec84b80c482df901772e931a9a681e26a1b9ee2302edeff23cb30328745c8b"
 dependencies = [
- "bitcoin-io",
- "hex-conservative",
+ "bitcoin-io 0.1.4",
+ "hex-conservative 0.2.2",
  "serde",
+]
+
+[[package]]
+name = "bitcoin_hashes"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0cb7fdb8e07d365e9cd16993fb3c4e04f734c66e334b9cb3c0479fa5437b0ed5"
+dependencies = [
+ "bitcoin-consensus-encoding 1.0.0-rc.3",
+ "bitcoin-internals 0.4.2",
+ "hex-conservative 0.3.2",
+]
+
+[[package]]
+name = "bitcoin_hashes"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a8a45c2b41c457a9a9e4670422fcbdf109afb3b22bc920b4045e8bdfd788a3d"
+dependencies = [
+ "bitcoin-consensus-encoding 0.1.0",
+ "bitcoin-internals 0.5.0",
+ "hex-conservative 0.3.2",
 ]
 
 [[package]]
@@ -2103,7 +2178,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f19e3ea99dbfbef0c1ec26d83e69de0c579f6aa6aaac4f44597805fcc27e97af"
 dependencies = [
  "bitcoin",
- "hex-conservative",
+ "hex-conservative 0.2.2",
  "log",
  "reqwest 0.12.28",
  "serde",
@@ -2811,6 +2886,8 @@ version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
 dependencies = [
+ "allocator-api2",
+ "equivalent",
  "foldhash 0.2.0",
 ]
 
@@ -2953,6 +3030,24 @@ name = "hex-conservative"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fda06d18ac606267c40c04e41b9947729bf8b9efe74bd4e82b61a5f26a510b9f"
+dependencies = [
+ "arrayvec",
+]
+
+[[package]]
+name = "hex-conservative"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "830e599c2904b08f0834ee6337d8fe8f0ed4a63b5d9e7a7f49c0ffa06d08d360"
+dependencies = [
+ "arrayvec",
+]
+
+[[package]]
+name = "hex-conservative"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7289f6b628ce69fb1a371d0fdcf8ff38cd93ec00e3010eb055d1e044998c8d1"
 dependencies = [
  "arrayvec",
 ]
@@ -3987,6 +4082,183 @@ name = "linux-raw-sys"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df1d3c3b53da64cf5760482273a98e575c651a67eec7f77df96b5b642de8f039"
+
+[[package]]
+name = "liquid_simplicity"
+version = "0.1.0"
+dependencies = [
+ "addr",
+ "anyhow",
+ "async-lock",
+ "bech32",
+ "bincode",
+ "bitcoin",
+ "blake3",
+ "borsh",
+ "byteorder",
+ "bytes",
+ "clap",
+ "dirs",
+ "ed25519-dalek",
+ "educe",
+ "error-fatality",
+ "fallible-iterator",
+ "fraction",
+ "futures",
+ "governor",
+ "hashlink 0.10.0",
+ "heed 0.21.0",
+ "hex 0.4.3",
+ "hex-literal",
+ "itertools 0.14.0",
+ "jsonrpsee 0.25.1",
+ "libes",
+ "nonempty 0.11.0",
+ "num",
+ "parking_lot",
+ "prost",
+ "prost-build",
+ "prost-types",
+ "protox",
+ "quinn",
+ "rayon",
+ "rcgen",
+ "reqwest 0.12.28",
+ "rustls",
+ "semver",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "smallvec",
+ "sneed 0.0.19",
+ "strum 0.27.2",
+ "thiserror 2.0.18",
+ "tiny-bip39",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tracing",
+ "transitive",
+ "utoipa",
+ "x25519-dalek",
+ "zeromq",
+]
+
+[[package]]
+name = "liquid_simplicity_app"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "bitcoin",
+ "blake3",
+ "borsh",
+ "clap",
+ "dirs",
+ "eframe",
+ "either",
+ "fallible-iterator",
+ "fraction",
+ "futures",
+ "hex 0.4.3",
+ "http",
+ "human-size",
+ "include_path",
+ "itertools 0.14.0",
+ "jsonrpsee 0.25.1",
+ "libes",
+ "liquid_simplicity",
+ "liquid_simplicity_app_cli",
+ "liquid_simplicity_app_rpc_api",
+ "mimalloc",
+ "num",
+ "parking_lot",
+ "poll-promise",
+ "quinn",
+ "rustreexo",
+ "serde",
+ "serde_json",
+ "shlex",
+ "strum 0.27.2",
+ "thiserror 2.0.18",
+ "tiny-bip39",
+ "tokio",
+ "tokio-util",
+ "tonic",
+ "tonic-health",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "url",
+ "utoipa",
+ "uuid",
+]
+
+[[package]]
+name = "liquid_simplicity_app_cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitcoin",
+ "clap",
+ "hex 0.4.3",
+ "http",
+ "jsonrpsee 0.25.1",
+ "liquid_simplicity",
+ "liquid_simplicity_app_rpc_api",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "utoipa",
+ "uuid",
+]
+
+[[package]]
+name = "liquid_simplicity_app_rpc_api"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitcoin",
+ "fraction",
+ "jsonrpsee 0.25.1",
+ "l2l-openapi",
+ "liquid_simplicity",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "utoipa",
+]
+
+[[package]]
+name = "liquid_simplicity_integration_tests"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bip300301_enforcer_integration_tests",
+ "bip300301_enforcer_lib",
+ "bitcoin",
+ "blake3",
+ "clap",
+ "dotenvy",
+ "futures",
+ "jsonrpsee 0.25.1",
+ "libtest-mimic",
+ "liquid_simplicity",
+ "liquid_simplicity_app_rpc_api",
+ "reserve-port",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-indicatif",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "litemap"
@@ -5143,177 +5415,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
 
 [[package]]
-name = "plain_bitassets"
-version = "0.14.1"
-dependencies = [
- "addr",
- "anyhow",
- "async-lock",
- "bech32",
- "bincode",
- "bitcoin",
- "blake3",
- "borsh",
- "byteorder",
- "bytes",
- "clap",
- "ed25519-dalek",
- "educe",
- "error-fatality",
- "fallible-iterator",
- "fraction",
- "futures",
- "governor",
- "hashlink 0.10.0",
- "heed 0.21.0",
- "hex 0.4.3",
- "hex-literal",
- "itertools 0.14.0",
- "jsonrpsee 0.25.1",
- "libes",
- "nonempty 0.11.0",
- "num",
- "parking_lot",
- "prost",
- "prost-build",
- "prost-types",
- "protox",
- "quinn",
- "rayon",
- "rcgen",
- "rustls",
- "semver",
- "serde",
- "serde_json",
- "serde_with",
- "smallvec",
- "sneed 0.0.19",
- "strum 0.27.2",
- "thiserror 2.0.18",
- "tiny-bip39",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tonic",
- "tonic-prost",
- "tonic-prost-build",
- "tracing",
- "transitive",
- "utoipa",
- "x25519-dalek",
- "zeromq",
-]
-
-[[package]]
-name = "plain_bitassets_app"
-version = "0.14.1"
-dependencies = [
- "anyhow",
- "bincode",
- "bitcoin",
- "blake3",
- "borsh",
- "clap",
- "dirs",
- "eframe",
- "either",
- "fallible-iterator",
- "fraction",
- "futures",
- "hex 0.4.3",
- "http",
- "human-size",
- "include_path",
- "itertools 0.14.0",
- "jsonrpsee 0.25.1",
- "libes",
- "mimalloc",
- "parking_lot",
- "plain_bitassets",
- "plain_bitassets_app_cli",
- "plain_bitassets_app_rpc_api",
- "poll-promise",
- "serde",
- "shlex",
- "strum 0.27.2",
- "thiserror 2.0.18",
- "tiny-bip39",
- "tokio",
- "tokio-util",
- "tonic",
- "tonic-health",
- "tower",
- "tower-http",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "url",
- "utoipa",
- "uuid",
-]
-
-[[package]]
-name = "plain_bitassets_app_cli"
-version = "0.14.1"
-dependencies = [
- "anyhow",
- "bitcoin",
- "clap",
- "hex 0.4.3",
- "http",
- "jsonrpsee 0.25.1",
- "plain_bitassets",
- "plain_bitassets_app_rpc_api",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "url",
- "utoipa",
- "uuid",
-]
-
-[[package]]
-name = "plain_bitassets_app_rpc_api"
-version = "0.14.1"
-dependencies = [
- "anyhow",
- "bitcoin",
- "fraction",
- "jsonrpsee 0.25.1",
- "l2l-openapi",
- "plain_bitassets",
- "serde",
- "serde_json",
- "serde_with",
- "utoipa",
-]
-
-[[package]]
-name = "plain_bitassets_integration_tests"
-version = "0.14.1"
-dependencies = [
- "anyhow",
- "bip300301_enforcer_integration_tests",
- "bip300301_enforcer_lib",
- "bitcoin",
- "blake3",
- "clap",
- "dotenvy",
- "futures",
- "jsonrpsee 0.25.1",
- "libtest-mimic",
- "plain_bitassets",
- "plain_bitassets_app_rpc_api",
- "reserve-port",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-indicatif",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "png"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6205,6 +6306,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustreexo"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8353cd48bea30340eced2a11770e47bb6b83f0e7e679742301f3332e6ec1f6ab"
+dependencies = [
+ "bitcoin-io 0.3.0",
+ "bitcoin_hashes 0.20.0",
+ "hashbrown 0.16.1",
+ "hex-conservative 1.1.0",
+]
+
+[[package]]
 name = "rustversion"
 version = "1.0.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6314,7 +6427,7 @@ version = "0.29.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9465315bc9d4566e1724f0fffcbcc446268cb522e60f9a27bcded6b19c108113"
 dependencies = [
- "bitcoin_hashes",
+ "bitcoin_hashes 0.14.1",
  "rand 0.8.6",
  "secp256k1-sys",
  "serde",

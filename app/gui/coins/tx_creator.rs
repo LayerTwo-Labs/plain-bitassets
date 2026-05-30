@@ -8,7 +8,7 @@ use std::{
 use eframe::egui::{self, InnerResponse, Response, TextBuffer};
 use hex::FromHex;
 
-use plain_bitassets::{
+use liquid_simplicity::{
     state::AmmPair,
     types::{
         AssetId, BitAssetData, DutchAuctionId, EncryptionPubKey, Hash,
@@ -418,7 +418,7 @@ impl TxCreator {
             u64::from_str(&auction_params.final_price).map_err(|err| {
                 anyhow::anyhow!("Failed to parse final price: {err}")
             })?;
-        let dutch_auction_params = plain_bitassets::types::DutchAuctionParams {
+        let dutch_auction_params = liquid_simplicity::types::DutchAuctionParams {
             start_block,
             duration,
             base_asset,

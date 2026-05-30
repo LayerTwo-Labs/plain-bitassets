@@ -1,6 +1,6 @@
 use std::net::{SocketAddrV4, SocketAddrV6};
 
-use borsh::BorshSerialize;
+use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 use utoipa::{
     PartialSchema, ToSchema,
@@ -11,6 +11,7 @@ use crate::types::{EncryptionPubKey, Hash, VerifyingKey};
 
 #[derive(
     BorshSerialize,
+    BorshDeserialize,
     Clone,
     Debug,
     Default,
@@ -48,7 +49,9 @@ pub struct BitAssetData {
 }
 
 /// Delete, retain, or set a value
-#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize)]
+#[derive(
+    BorshDeserialize, BorshSerialize, Clone, Debug, Deserialize, Serialize,
+)]
 pub enum Update<T> {
     Delete,
     Retain,
@@ -150,7 +153,15 @@ impl ToSchema for Update<u64> {
 }
 
 /// Updates to the data associated with a BitAsset
-#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize, ToSchema)]
+#[derive(
+    BorshDeserialize,
+    BorshSerialize,
+    Clone,
+    Debug,
+    Deserialize,
+    Serialize,
+    ToSchema,
+)]
 pub struct BitAssetDataUpdates {
     /// Commitment to arbitrary data
     #[schema(schema_with = <Update<Hash> as PartialSchema>::schema)]

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use eframe::egui;
 use hex::FromHex;
-use plain_bitassets::{
+use liquid_simplicity::{
     state::BitAssetSeqId,
     types::{BitAssetData, hashes::BitAssetId},
 };

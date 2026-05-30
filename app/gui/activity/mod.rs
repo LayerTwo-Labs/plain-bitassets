@@ -39,6 +39,34 @@ impl Activity {
     }
 
     pub fn show(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
+        // L-BTC Activity wired to elementsd listtransactions (real data)
+        egui::TopBottomPanel::top("lbtc_activity").show(ui.ctx(), |ui| {
+            ui.heading("L-BTC Activity (from elementsd listtransactions)");
+            if let Some(app) = app {
+                if let Some(rpc) = &app.elements_rpc {
+                    if let Ok(txs) = app.runtime.block_on(rpc.listtransactions(8)) {
+                        egui::ScrollArea::vertical()
+                            .max_height(140.0)
+                            .show(ui, |ui| {
+                                for tx in txs {
+                                    ui.monospace(format!(
+                                        "{}  amt:{:.8}  confs:{}  cat:{}",
+                                        tx.txid, tx.amount, tx.confirmations, tx.category
+                                    ));
+                                }
+                            });
+                    } else {
+                        ui.monospace("Failed to fetch listtransactions");
+                    }
+                    if ui.button("Refresh L-BTC txs").clicked() {
+                        // live on next draw
+                    }
+                } else {
+                    ui.monospace("elementsd RPC not available");
+                }
+            }
+        });
+
         egui::TopBottomPanel::top("activity_tabs").show(ui.ctx(), |ui| {
             ui.horizontal(|ui| {
                 Tab::iter().for_each(|tab_variant| {

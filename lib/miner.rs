@@ -46,9 +46,14 @@ where
         height: u32,
         header: Header,
         body: Body,
-    ) -> Result<bitcoin::Txid, Error> {
+    ) -> Result<(), Error> {
         let critical_hash = header.hash().0;
-        let txid = self
+        assert_eq!(
+            header.merkle_root,
+            Body::compute_merkle_root(&body.coinbase, &body.transactions),
+        );
+        self.block = Some((header.clone(), body));
+        let txid = match self
             .cusf_mainchain_wallet
             .create_bmm_critical_data_tx(
                 amount,
@@ -56,14 +61,23 @@ where
                 critical_hash,
                 header.prev_main_hash,
             )
-            .await?;
+            .await
+        {
+            Ok(txid) => txid,
+            Err(err) => {
+                let err_msg = err.to_string();
+                if err_msg.contains("broadcast deposit transaction failed") {
+                    tracing::warn!(
+                        error = %err_msg,
+                        "BMM request broadcast returned an error after insertion; waiting for mined BMM accept"
+                    );
+                    return Ok(());
+                }
+                return Err(err.into());
+            }
+        };
         tracing::info!(%txid, "created BMM tx");
-        assert_eq!(
-            header.merkle_root,
-            Body::compute_merkle_root(&body.coinbase, &body.transactions),
-        );
-        self.block = Some((header, body));
-        Ok(txid)
+        Ok(())
     }
 
     // Wait for a block to be connected that contains our BMM request.

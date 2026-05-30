@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use eframe::egui;
-use plain_bitassets::types::BitAssetData;
+use liquid_simplicity::types::BitAssetData;
 
 use crate::{
     app::App,

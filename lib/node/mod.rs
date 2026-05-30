@@ -159,7 +159,7 @@ where
         let env = {
             let mut env_open_opts = heed::EnvOpenOptions::new();
             env_open_opts
-                .map_size(128 * 1024 * 1024 * 1024) // 128 GB
+                .map_size(2 * 1024 * 1024 * 1024) // 2 GB (128 GB mmap fails in Docker Desktop / low-RAM hosts)
                 .max_dbs(
                     State::NUM_DBS
                         + Archive::NUM_DBS
@@ -819,6 +819,10 @@ where
         let () = self.mempool.delete(&mut rwtxn, txid)?;
         rwtxn.commit().map_err(RwTxnError::from)?;
         Ok(())
+    }
+
+    pub fn network(&self) -> Network {
+        self.net.network()
     }
 
     pub fn connect_peer(&self, addr: SocketAddr) -> Result<(), Error> {

@@ -767,7 +767,7 @@ impl ConnectionTask {
             }
             InternalMessage::BmmVerification { res, peer_state_id } => {
                 if let Err(block_not_found) = res {
-                    tracing::warn!("{block_not_found}");
+                    tracing::warn!("{:?}", block_not_found);
                     return Ok(());
                 }
                 let Some(peer_state) = peer_states.get(&peer_state_id).copied()

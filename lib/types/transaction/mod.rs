@@ -226,8 +226,16 @@ impl<'a> BytesDecode<'a> for OutPointKey {
 
 #[cfg(test)]
 mod tests {
-    use super::{OUTPOINT_KEY_SIZE, OutPoint, OutPointKey};
+    use std::str::FromStr;
+
+    use super::{
+        FilledOutput, FilledOutputContent, FilledTransaction,
+        OUTPOINT_KEY_SIZE, OutPoint, OutPointKey, Output, OutputContent,
+        Transaction, TransactionData,
+    };
     use bitcoin::hashes::Hash as _;
+
+    use crate::types::{Address, AssetId, BitAssetId, DutchAuctionId};
 
     #[test]
     fn check_outpoint_key_size() -> anyhow::Result<()> {
@@ -260,6 +268,241 @@ mod tests {
         }
         Ok(())
     }
+
+    #[test]
+    fn amm_swap_fills_change_then_receive_outputs() -> anyhow::Result<()> {
+        let asset_spend = BitAssetId::from_str(
+            "7db583b56d212114bd6233e6e815bc4dd48ce5737191d6747ca28df46048ab30",
+        )?;
+        let asset_receive = BitAssetId::from_str(
+            "8fd48dc47936436ad0340843422a00b82ad2f9d3bdd9846983739187720ec641",
+        )?;
+
+        let filled_tx = FilledTransaction {
+            spent_utxos: vec![FilledOutput {
+                address: Address::ALL_ZEROS,
+                content: FilledOutputContent::BitAsset(asset_spend, 9000),
+                memo: Vec::new(),
+            }],
+            transaction: Transaction {
+                inputs: vec![OutPoint::Regular {
+                    txid: Default::default(),
+                    vout: 0,
+                }],
+                outputs: vec![
+                    Output {
+                        address: Address::ALL_ZEROS,
+                        content: OutputContent::BitAsset(8990),
+                        memo: Vec::new(),
+                    },
+                    Output {
+                        address: Address::ALL_ZEROS,
+                        content: OutputContent::BitAsset(7),
+                        memo: Vec::new(),
+                    },
+                ],
+                memo: Vec::new(),
+                data: Some(TransactionData::AmmSwap {
+                    amount_spent: 10,
+                    amount_receive: 7,
+                    pair_asset: AssetId::BitAsset(asset_receive),
+                }),
+            },
+        };
+
+        let filled_outputs = filled_tx
+            .filled_outputs()
+            .ok_or_else(|| anyhow::anyhow!("AMM swap outputs did not fill"))?;
+        assert_eq!(
+            filled_outputs[0].content,
+            FilledOutputContent::BitAsset(asset_spend, 8990)
+        );
+        assert_eq!(
+            filled_outputs[1].content,
+            FilledOutputContent::BitAsset(asset_receive, 7)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn amm_burn_fills_lp_change_and_asset_payouts() -> anyhow::Result<()> {
+        let asset0 = BitAssetId::from_str(
+            "7db583b56d212114bd6233e6e815bc4dd48ce5737191d6747ca28df46048ab30",
+        )?;
+        let asset1 = BitAssetId::from_str(
+            "8fd48dc47936436ad0340843422a00b82ad2f9d3bdd9846983739187720ec641",
+        )?;
+
+        let filled_tx = FilledTransaction {
+            spent_utxos: vec![FilledOutput {
+                address: Address::ALL_ZEROS,
+                content: FilledOutputContent::AmmLpToken {
+                    asset0: AssetId::BitAsset(asset0),
+                    asset1: AssetId::BitAsset(asset1),
+                    amount: 1000,
+                },
+                memo: Vec::new(),
+            }],
+            transaction: Transaction {
+                inputs: vec![OutPoint::Regular {
+                    txid: Default::default(),
+                    vout: 0,
+                }],
+                outputs: vec![
+                    Output {
+                        address: Address::ALL_ZEROS,
+                        content: OutputContent::AmmLpToken(990),
+                        memo: Vec::new(),
+                    },
+                    Output {
+                        address: Address::ALL_ZEROS,
+                        content: OutputContent::BitAsset(9),
+                        memo: Vec::new(),
+                    },
+                    Output {
+                        address: Address::ALL_ZEROS,
+                        content: OutputContent::BitAsset(10),
+                        memo: Vec::new(),
+                    },
+                ],
+                memo: Vec::new(),
+                data: Some(TransactionData::AmmBurn {
+                    amount0: 9,
+                    amount1: 10,
+                    lp_token_burn: 10,
+                }),
+            },
+        };
+
+        let filled_outputs = filled_tx
+            .filled_outputs()
+            .ok_or_else(|| anyhow::anyhow!("AMM burn outputs did not fill"))?;
+        assert_eq!(
+            filled_outputs[0].content,
+            FilledOutputContent::AmmLpToken {
+                asset0: AssetId::BitAsset(asset0),
+                asset1: AssetId::BitAsset(asset1),
+                amount: 990,
+            }
+        );
+        assert_eq!(
+            filled_outputs[1].content,
+            FilledOutputContent::BitAsset(asset0, 9)
+        );
+        assert_eq!(
+            filled_outputs[2].content,
+            FilledOutputContent::BitAsset(asset1, 10)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn dutch_auction_bid_fills_quote_change_then_base_receive()
+    -> anyhow::Result<()> {
+        let quote_asset = BitAssetId::from_str(
+            "7db583b56d212114bd6233e6e815bc4dd48ce5737191d6747ca28df46048ab30",
+        )?;
+        let base_asset = BitAssetId::from_str(
+            "8fd48dc47936436ad0340843422a00b82ad2f9d3bdd9846983739187720ec641",
+        )?;
+
+        let filled_tx = FilledTransaction {
+            spent_utxos: vec![FilledOutput {
+                address: Address::ALL_ZEROS,
+                content: FilledOutputContent::BitAsset(quote_asset, 10000),
+                memo: Vec::new(),
+            }],
+            transaction: Transaction {
+                inputs: vec![OutPoint::Regular {
+                    txid: Default::default(),
+                    vout: 0,
+                }],
+                outputs: vec![
+                    Output {
+                        address: Address::ALL_ZEROS,
+                        content: OutputContent::BitAsset(9900),
+                        memo: Vec::new(),
+                    },
+                    Output {
+                        address: Address::ALL_ZEROS,
+                        content: OutputContent::BitAsset(100),
+                        memo: Vec::new(),
+                    },
+                ],
+                memo: Vec::new(),
+                data: Some(TransactionData::DutchAuctionBid {
+                    auction_id: DutchAuctionId(Default::default()),
+                    receive_asset: AssetId::BitAsset(base_asset),
+                    quantity: 100,
+                    bid_size: 100,
+                }),
+            },
+        };
+
+        let filled_outputs = filled_tx.filled_outputs().ok_or_else(|| {
+            anyhow::anyhow!("Dutch auction bid outputs did not fill")
+        })?;
+        assert_eq!(
+            filled_outputs[0].content,
+            FilledOutputContent::BitAsset(quote_asset, 9900)
+        );
+        assert_eq!(
+            filled_outputs[1].content,
+            FilledOutputContent::BitAsset(base_asset, 100)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn sold_out_dutch_auction_collect_fills_quote_only() -> anyhow::Result<()> {
+        let base_asset = BitAssetId::from_str(
+            "7db583b56d212114bd6233e6e815bc4dd48ce5737191d6747ca28df46048ab30",
+        )?;
+        let quote_asset = BitAssetId::from_str(
+            "8fd48dc47936436ad0340843422a00b82ad2f9d3bdd9846983739187720ec641",
+        )?;
+
+        let filled_tx = FilledTransaction {
+            spent_utxos: vec![FilledOutput {
+                address: Address::ALL_ZEROS,
+                content: FilledOutputContent::DutchAuctionReceipt(
+                    DutchAuctionId(Default::default()),
+                ),
+                memo: Vec::new(),
+            }],
+            transaction: Transaction {
+                inputs: vec![OutPoint::Regular {
+                    txid: Default::default(),
+                    vout: 0,
+                }],
+                outputs: vec![Output {
+                    address: Address::ALL_ZEROS,
+                    content: OutputContent::BitAsset(100),
+                    memo: Vec::new(),
+                }],
+                memo: Vec::new(),
+                data: Some(TransactionData::DutchAuctionCollect {
+                    asset_offered: AssetId::BitAsset(base_asset),
+                    asset_receive: AssetId::BitAsset(quote_asset),
+                    amount_offered_remaining: 0,
+                    amount_received: 100,
+                }),
+            },
+        };
+
+        let filled_outputs = filled_tx.filled_outputs().ok_or_else(|| {
+            anyhow::anyhow!("Dutch auction collect outputs did not fill")
+        })?;
+        assert_eq!(
+            filled_outputs[0].content,
+            FilledOutputContent::BitAsset(quote_asset, 100)
+        );
+
+        Ok(())
+    }
 }
 
 /// Reference to a tx input.
@@ -283,7 +526,14 @@ pub type TxOutputs = Vec<Output>;
 
 /// Parameters of a Dutch Auction
 #[derive(
-    BorshSerialize, Clone, Copy, Debug, Deserialize, Serialize, ToSchema,
+    BorshDeserialize,
+    BorshSerialize,
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Serialize,
+    ToSchema,
 )]
 #[cfg_attr(feature = "clap", derive(clap::Parser))]
 pub struct DutchAuctionParams {
@@ -311,7 +561,15 @@ pub struct DutchAuctionParams {
 }
 
 #[allow(clippy::enum_variant_names)]
-#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize, ToSchema)]
+#[derive(
+    BorshDeserialize,
+    BorshSerialize,
+    Clone,
+    Debug,
+    Deserialize,
+    Serialize,
+    ToSchema,
+)]
 #[schema(as = TxData)]
 pub enum TransactionData {
     /// Burn an AMM position
@@ -497,7 +755,14 @@ pub struct DutchAuctionCollect {
 }
 
 #[derive(
-    BorshSerialize, Clone, Debug, Default, Deserialize, Serialize, ToSchema,
+    BorshDeserialize,
+    BorshSerialize,
+    Clone,
+    Debug,
+    Default,
+    Deserialize,
+    Serialize,
+    ToSchema,
 )]
 pub struct Transaction {
     #[schema(schema_with = TxInputs::schema)]
@@ -1175,9 +1440,10 @@ impl FilledTransaction {
                 ),
                 None => (None, None),
             };
-        self.unique_spent_assets()
+        let spent_asset_values = self
+            .unique_spent_assets()
             .into_iter()
-            .map(move |(asset, total_value)| {
+            .map(|(asset, total_value)| {
                 let total_value = if let Some((mint_bitasset, mint_amount)) =
                     bitasset_mint
                     && AssetId::BitAsset(mint_bitasset) == asset
@@ -1251,6 +1517,10 @@ impl FilledTransaction {
                 (asset, total_value)
             })
             .filter(|(_, amount)| *amount != Some(0))
+            .collect::<Vec<_>>();
+
+        spent_asset_values
+            .into_iter()
             .chain(amm_burn0.map(|(burn_asset, burn_amount)| {
                 (burn_asset, Some(burn_amount))
             }))
@@ -1301,6 +1571,7 @@ impl FilledTransaction {
             .chain(new_bitasset_value.map(|(bitasset, _)| {
                 (AssetId::BitAssetControl(bitasset), Some(1))
             }))
+            .filter(|(_, amount)| *amount != Some(0))
     }
 
     /** Returns an iterator over total value for each BitAsset that must
@@ -1347,9 +1618,10 @@ impl FilledTransaction {
         and token amount of the output corresponding to the newly created
         AMM LP position. */
         let mut amm_mint: Option<AmmMint> = self.amm_mint();
-        self.unique_spent_lp_tokens()
+        let spent_lp_token_amounts = self
+            .unique_spent_lp_tokens()
             .into_iter()
-            .map(move |(asset0, asset1, total_amount)| {
+            .map(|(asset0, asset1, total_amount)| {
                 let total_value = if let Some(AmmBurn {
                     asset0: burn_asset0,
                     asset1: burn_asset1,
@@ -1377,6 +1649,10 @@ impl FilledTransaction {
                 };
                 (asset0, asset1, total_value)
             })
+            .collect::<Vec<_>>();
+
+        spent_lp_token_amounts
+            .into_iter()
             .chain(amm_burn.map(|amm_burn| {
                 /* If the LP tokens are not already accounted for,
                  * indicate an underflow */
@@ -1569,7 +1845,9 @@ impl FilledTransaction {
     }
 }
 
-#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize)]
+#[derive(
+    BorshDeserialize, BorshSerialize, Clone, Debug, Deserialize, Serialize,
+)]
 pub struct Authorized<T> {
     pub transaction: T,
     /// Authorizations are called witnesses in Bitcoin.

@@ -1,4 +1,4 @@
-use borsh::BorshSerialize;
+use borsh::{BorshDeserialize, BorshSerialize};
 use libes::{auth::HmacSha256, enc::Aes256Gcm, key::X25519};
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeAs, DisplayFromStr, FromInto, SerializeAs};
@@ -47,6 +47,15 @@ pub struct EncryptionPubKey(
     #[borsh(serialize_with = "borsh_serialize_x25519_pubkey")]
     pub  x25519_dalek::PublicKey,
 );
+
+impl BorshDeserialize for EncryptionPubKey {
+    fn deserialize_reader<R: borsh::io::Read>(
+        reader: &mut R,
+    ) -> borsh::io::Result<Self> {
+        let bytes = <[u8; 32]>::deserialize_reader(reader)?;
+        Ok(Self(bytes.into()))
+    }
+}
 
 impl EncryptionPubKey {
     /// HRP for Bech32m encoding
@@ -127,24 +136,36 @@ impl Serialize for EncryptionPubKey {
     }
 }
 
-fn borsh_serialize_ed25519_vk<W>(
-    vk: &ed25519_dalek::VerifyingKey,
-    writer: &mut W,
-) -> borsh::io::Result<()>
-where
-    W: borsh::io::Write,
-{
-    borsh::BorshSerialize::serialize(vk.as_bytes(), writer)
-}
-
 /// Wrapper around x25519 pubkeys
-#[derive(BorshSerialize, Clone, Copy, Debug, Eq, Hash, PartialEq, ToSchema)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, ToSchema)]
 #[repr(transparent)]
 #[schema(value_type = String)]
-pub struct VerifyingKey(
-    #[borsh(serialize_with = "borsh_serialize_ed25519_vk")]
-    pub  ed25519_dalek::VerifyingKey,
-);
+pub struct VerifyingKey(pub ed25519_dalek::VerifyingKey);
+
+impl BorshSerialize for VerifyingKey {
+    fn serialize<W: borsh::io::Write>(
+        &self,
+        writer: &mut W,
+    ) -> borsh::io::Result<()> {
+        BorshSerialize::serialize(&self.0.to_bytes(), writer)
+    }
+}
+
+impl BorshDeserialize for VerifyingKey {
+    fn deserialize_reader<R: borsh::io::Read>(
+        reader: &mut R,
+    ) -> borsh::io::Result<Self> {
+        let bytes =
+            <[u8; ed25519_dalek::PUBLIC_KEY_LENGTH]>::deserialize_reader(
+                reader,
+            )?;
+        ed25519_dalek::VerifyingKey::from_bytes(&bytes)
+            .map(Self)
+            .map_err(|err| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, err)
+            })
+    }
+}
 
 impl VerifyingKey {
     /// HRP for Bech32m encoding

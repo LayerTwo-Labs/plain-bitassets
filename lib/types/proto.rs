@@ -1,6 +1,6 @@
 //! Protobuf types
 
-use thiserror::Error;
+use thiserror::Error as ThisError;
 
 /// Convenience alias to avoid writing out a lengthy trait bound
 pub trait Transport = where
@@ -11,7 +11,7 @@ pub trait Transport = where
     <Self::ResponseBody as tonic::codegen::Body>::Error:
         Into<tonic::codegen::StdError> + Send;
 
-#[derive(Debug, Error)]
+#[derive(Debug, ThisError)]
 pub enum Error {
     #[error(transparent)]
     Grpc(Box<tonic::Status>),
@@ -118,11 +118,22 @@ pub mod common {
 
     pub use generated::{ConsensusHex, Hex, ReverseHex};
 
-    impl ConsensusHex {
+    pub mod v1 {
+        pub use super::generated::{ConsensusHex, Hex, ReverseHex};
+    }
+}
+
+pub mod sidechain {
+    pub mod generated {
+        tonic::include_proto!("cusf.sidechain.v1");
+    }
+}
+
+impl common::ConsensusHex {
         pub fn decode<Message, T>(
             &self,
             field_name: &str,
-        ) -> Result<T, super::Error>
+        ) -> Result<T, Error>
         where
             Message: prost::Name,
             T: bitcoin::consensus::Decodable,
@@ -130,9 +141,9 @@ pub mod common {
             let Self { hex } = self;
             let hex = hex
                 .as_ref()
-                .ok_or_else(|| super::Error::missing_field::<Self>("hex"))?;
+                .ok_or_else(|| Error::missing_field::<Self>("hex"))?;
             bitcoin::consensus::encode::deserialize_hex(hex).map_err(|_err| {
-                super::Error::invalid_field_value::<Message>(field_name, hex)
+                Error::invalid_field_value::<Message>(field_name, hex)
             })
         }
 
@@ -159,38 +170,38 @@ pub mod common {
         }
     }
 
-    impl Hex {
+impl common::Hex {
         pub fn decode_bytes<Message>(
             self,
             field_name: &str,
-        ) -> Result<Vec<u8>, super::Error>
+        ) -> Result<Vec<u8>, Error>
         where
             Message: prost::Name,
         {
             let Self { hex } = self;
             let hex =
-                hex.ok_or_else(|| super::Error::missing_field::<Self>("hex"))?;
+                hex.ok_or_else(|| Error::missing_field::<Self>("hex"))?;
             hex::decode(&hex).map_err(|_err| {
-                super::Error::invalid_field_value::<Message>(field_name, &hex)
+                Error::invalid_field_value::<Message>(field_name, &hex)
             })
         }
 
         pub fn decode<Message, T>(
             self,
             field_name: &str,
-        ) -> Result<T, super::Error>
+        ) -> Result<T, Error>
         where
             Message: prost::Name,
             T: borsh::BorshDeserialize,
         {
             let Self { hex } = self;
             let hex =
-                hex.ok_or_else(|| super::Error::missing_field::<Self>("hex"))?;
+                hex.ok_or_else(|| Error::missing_field::<Self>("hex"))?;
             let bytes = hex::decode(&hex).map_err(|_err| {
-                super::Error::invalid_field_value::<Message>(field_name, &hex)
+                Error::invalid_field_value::<Message>(field_name, &hex)
             })?;
             T::try_from_slice(&bytes).map_err(|_err| {
-                super::Error::invalid_field_value::<Message>(field_name, &hex)
+                Error::invalid_field_value::<Message>(field_name, &hex)
             })
         }
 
@@ -203,11 +214,11 @@ pub mod common {
         }
     }
 
-    impl ReverseHex {
+impl common::ReverseHex {
         pub fn decode<Message, T>(
             &self,
             field_name: &str,
-        ) -> Result<T, super::Error>
+        ) -> Result<T, Error>
         where
             Message: prost::Name,
             T: bitcoin::consensus::Decodable,
@@ -215,13 +226,13 @@ pub mod common {
             let Self { hex } = self;
             let hex = hex
                 .as_ref()
-                .ok_or_else(|| super::Error::missing_field::<Self>("hex"))?;
+                .ok_or_else(|| Error::missing_field::<Self>("hex"))?;
             let mut bytes = hex::decode(hex).map_err(|_| {
-                super::Error::invalid_field_value::<Message>(field_name, hex)
+                Error::invalid_field_value::<Message>(field_name, hex)
             })?;
             bytes.reverse();
             bitcoin::consensus::deserialize(&bytes).map_err(|_err| {
-                super::Error::invalid_field_value::<Message>(field_name, hex)
+                Error::invalid_field_value::<Message>(field_name, hex)
             })
         }
 
@@ -250,7 +261,6 @@ pub mod common {
             }
         }
     }
-}
 
 pub mod mainchain {
     use bitcoin::{
@@ -261,8 +271,9 @@ pub mod mainchain {
     use hashlink::LinkedHashMap;
     use nonempty::NonEmpty;
     use serde::{Deserialize, Serialize};
-    use thiserror::Error;
+    use thiserror::Error as ThisError;
 
+    use super::Error;
     use super::common::{ConsensusHex, ReverseHex};
     use crate::types::{
         BitcoinOutputContent, FilledOutput, FilledOutputContent, M6id,
@@ -277,19 +288,19 @@ pub mod mainchain {
         fn decode<Message>(
             self,
             field_name: &str,
-        ) -> Result<bitcoin::Network, super::Error>
+        ) -> Result<bitcoin::Network, Error>
         where
             Message: prost::Name,
         {
             match self {
                 unknown @ Self::Unknown => {
-                    Err(super::Error::invalid_enum_variant::<Message>(
+                    Err(Error::invalid_enum_variant::<Message>(
                         field_name,
                         unknown.as_str_name(),
                     ))
                 }
                 unspecified @ Self::Unspecified => {
-                    Err(super::Error::invalid_enum_variant::<Message>(
+                    Err(Error::invalid_enum_variant::<Message>(
                         field_name,
                         unspecified.as_str_name(),
                     ))
@@ -303,7 +314,7 @@ pub mod mainchain {
     }
 
     #[derive(
-        Copy, Clone, Debug, Eq, Error, Hash, Ord, PartialEq, PartialOrd,
+        Copy, Clone, Debug, Eq, ThisError, Hash, Ord, PartialEq, PartialOrd,
     )]
     #[error("Block not found: {0}")]
     pub struct BlockNotFoundError(pub BlockHash);
@@ -313,14 +324,14 @@ pub mod mainchain {
             generated::get_bmm_h_star_commitment_response::BlockNotFoundError,
         > for BlockNotFoundError
     {
-        type Error = super::Error;
+        type Error = Error;
         fn try_from(
             err: generated::get_bmm_h_star_commitment_response::BlockNotFoundError,
         ) -> Result<Self, Self::Error> {
             let generated::get_bmm_h_star_commitment_response::BlockNotFoundError { block_hash }
                 = err;
             block_hash.ok_or_else(||
-                super::Error::missing_field::<generated::get_bmm_h_star_commitment_response::BlockNotFoundError>("block_hash")
+                Error::missing_field::<generated::get_bmm_h_star_commitment_response::BlockNotFoundError>("block_hash")
             )?
             .decode::<generated::get_bmm_h_star_commitment_response::BlockNotFoundError, _>("block_hash")
             .map(Self)
@@ -332,7 +343,7 @@ pub mod mainchain {
             generated::get_bmm_h_star_commitment_response::OptionalCommitment,
         > for Option<crate::types::BlockHash>
     {
-        type Error = super::Error;
+        type Error = Error;
 
         fn try_from(
             commitment: generated::get_bmm_h_star_commitment_response::OptionalCommitment,
@@ -351,7 +362,7 @@ pub mod mainchain {
     impl TryFrom<generated::get_bmm_h_star_commitment_response::Commitment>
         for nonempty::NonEmpty<Option<crate::types::BlockHash>>
     {
-        type Error = super::Error;
+        type Error = Error;
 
         fn try_from(
             commitment: generated::get_bmm_h_star_commitment_response::Commitment,
@@ -381,7 +392,7 @@ pub mod mainchain {
             BlockNotFoundError,
         >
     {
-        type Error = super::Error;
+        type Error = Error;
 
         fn try_from(
             res: generated::get_bmm_h_star_commitment_response::Result,
@@ -397,7 +408,7 @@ pub mod mainchain {
     }
 
     impl TryFrom<generated::OutPoint> for OutPoint {
-        type Error = super::Error;
+        type Error = Error;
 
         fn try_from(
             outpoint: generated::OutPoint,
@@ -405,18 +416,18 @@ pub mod mainchain {
             let generated::OutPoint { txid, vout } = outpoint;
             let txid = txid
                 .ok_or_else(|| {
-                    super::Error::missing_field::<generated::OutPoint>("txid")
+                    Error::missing_field::<generated::OutPoint>("txid")
                 })?
                 .decode::<generated::OutPoint, _>("txid")?;
             let vout = vout.ok_or_else(|| {
-                super::Error::missing_field::<generated::OutPoint>("vout")
+                Error::missing_field::<generated::OutPoint>("vout")
             })?;
             Ok(Self { txid, vout })
         }
     }
 
     impl TryFrom<generated::deposit::Output> for FilledOutput {
-        type Error = super::Error;
+        type Error = Error;
 
         fn try_from(
             output: generated::deposit::Output,
@@ -433,7 +444,7 @@ pub mod mainchain {
                 let address_bytes: Vec<u8> =
                     address
                         .ok_or_else(|| {
-                            super::Error::missing_field::<
+                            Error::missing_field::<
                                 generated::deposit::Output,
                             >("address")
                         })?
@@ -464,7 +475,7 @@ pub mod mainchain {
             };
             let value = value_sats
                 .ok_or_else(|| {
-                    super::Error::missing_field::<generated::deposit::Output>(
+                    Error::missing_field::<generated::deposit::Output>(
                         "value_sats",
                     )
                 })
@@ -501,7 +512,7 @@ pub mod mainchain {
     }
 
     impl TryFrom<generated::Deposit> for Deposit {
-        type Error = super::Error;
+        type Error = Error;
 
         fn try_from(deposit: generated::Deposit) -> Result<Self, Self::Error> {
             let generated::Deposit {
@@ -510,17 +521,17 @@ pub mod mainchain {
                 output,
             } = deposit;
             let sequence_number = sequence_number.ok_or_else(|| {
-                super::Error::missing_field::<generated::Deposit>(
+                Error::missing_field::<generated::Deposit>(
                     "sequence_number",
                 )
             })?;
             let Some(outpoint) = outpoint else {
-                return Err(super::Error::missing_field::<generated::Deposit>(
+                return Err(Error::missing_field::<generated::Deposit>(
                     "outpoint",
                 ));
             };
             let Some(output) = output else {
-                return Err(super::Error::missing_field::<generated::Deposit>(
+                return Err(Error::missing_field::<generated::Deposit>(
                     "output",
                 ));
             };
@@ -555,7 +566,7 @@ pub mod mainchain {
     impl TryFrom<generated::withdrawal_bundle_event::Event>
         for crate::types::WithdrawalBundleEventStatus
     {
-        type Error = super::Error;
+        type Error = Error;
 
         fn try_from(
             event: generated::withdrawal_bundle_event::Event,
@@ -571,7 +582,7 @@ pub mod mainchain {
     impl TryFrom<generated::WithdrawalBundleEvent>
         for crate::types::WithdrawalBundleEvent
     {
-        type Error = super::Error;
+        type Error = Error;
 
         fn try_from(
             event: generated::WithdrawalBundleEvent,
@@ -612,7 +623,7 @@ pub mod mainchain {
     }
 
     impl TryFrom<generated::block_info::event::Event> for BlockEvent {
-        type Error = super::Error;
+        type Error = Error;
 
         fn try_from(
             event: generated::block_info::event::Event,
@@ -630,7 +641,7 @@ pub mod mainchain {
     }
 
     impl TryFrom<generated::block_info::Event> for BlockEvent {
-        type Error = super::Error;
+        type Error = Error;
 
         fn try_from(
             event: generated::block_info::Event,
@@ -678,7 +689,7 @@ pub mod mainchain {
     }
 
     impl TryFrom<generated::BlockInfo> for BlockInfo {
-        type Error = super::Error;
+        type Error = Error;
 
         fn try_from(
             block_info: generated::BlockInfo,
@@ -708,7 +719,7 @@ pub mod mainchain {
     impl TryFrom<generated::get_block_info_response::Info>
         for (BlockHeaderInfo, BlockInfo)
     {
-        type Error = super::Error;
+        type Error = Error;
 
         fn try_from(
             info: generated::get_block_info_response::Info,
@@ -799,7 +810,7 @@ pub mod mainchain {
     }
 
     impl TryFrom<generated::GetTwoWayPegDataResponse> for TwoWayPegData {
-        type Error = super::Error;
+        type Error = Error;
 
         fn try_from(
             two_way_peg_data: generated::GetTwoWayPegDataResponse,
@@ -814,12 +825,12 @@ pub mod mainchain {
                     block_info
                 } = item;
                     let Some(block_header_info) = block_header_info else {
-                        return Err(super::Error::missing_field::<generated::get_two_way_peg_data_response::ResponseItem>("block_header_info"));
+                        return Err(Error::missing_field::<generated::get_two_way_peg_data_response::ResponseItem>("block_header_info"));
                     };
                     let BlockHeaderInfo { block_hash, .. } =
                         (&block_header_info).try_into()?;
                     let Some(block_info) = block_info else {
-                        return Err(super::Error::missing_field::<generated::get_two_way_peg_data_response::ResponseItem>("block_info"));
+                        return Err(Error::missing_field::<generated::get_two_way_peg_data_response::ResponseItem>("block_info"));
                     };
                     Ok((block_hash, block_info.try_into()?))
                 })
@@ -829,7 +840,7 @@ pub mod mainchain {
     }
 
     impl TryFrom<&generated::BlockHeaderInfo> for BlockHeaderInfo {
-        type Error = super::Error;
+        type Error = Error;
 
         fn try_from(
             header_info: &generated::BlockHeaderInfo,
@@ -843,7 +854,7 @@ pub mod mainchain {
             let block_hash = block_hash
                 .as_ref()
                 .ok_or_else(|| {
-                    super::Error::missing_field::<generated::BlockHeaderInfo>(
+                    Error::missing_field::<generated::BlockHeaderInfo>(
                         "block_hash",
                     )
                 })?
@@ -851,7 +862,7 @@ pub mod mainchain {
             let prev_block_hash = prev_block_hash
                 .as_ref()
                 .ok_or_else(|| {
-                    super::Error::missing_field::<generated::BlockHeaderInfo>(
+                    Error::missing_field::<generated::BlockHeaderInfo>(
                         "prev_block_hash",
                     )
                 })?
@@ -859,7 +870,7 @@ pub mod mainchain {
             let work = work
                 .as_ref()
                 .ok_or_else(|| {
-                    super::Error::missing_field::<generated::BlockHeaderInfo>(
+                    Error::missing_field::<generated::BlockHeaderInfo>(
                         "work",
                     )
                 })?
@@ -886,7 +897,7 @@ pub mod mainchain {
     }
 
     impl TryFrom<generated::subscribe_events_response::event::Event> for Event {
-        type Error = super::Error;
+        type Error = Error;
 
         fn try_from(
             event: generated::subscribe_events_response::event::Event,
@@ -899,12 +910,12 @@ pub mod mainchain {
                         block_info,
                     } = connect_block;
                     let Some(header_info) = header_info else {
-                        return Err(super::Error::missing_field::<
+                        return Err(Error::missing_field::<
                             event::ConnectBlock,
                         >("header_info"));
                     };
                     let Some(block_info) = block_info else {
-                        return Err(super::Error::missing_field::<
+                        return Err(Error::missing_field::<
                             event::ConnectBlock,
                         >("block_info"));
                     };
@@ -919,7 +930,7 @@ pub mod mainchain {
                     let block_hash =
                         block_hash
                             .ok_or_else(|| {
-                                super::Error::missing_field::<
+                                Error::missing_field::<
                                     event::DisconnectBlock,
                                 >(
                                     "disconnect_block"
@@ -936,14 +947,14 @@ pub mod mainchain {
     }
 
     impl TryFrom<generated::subscribe_events_response::Event> for Event {
-        type Error = super::Error;
+        type Error = Error;
 
         fn try_from(
             event: generated::subscribe_events_response::Event,
         ) -> Result<Self, Self::Error> {
             let generated::subscribe_events_response::Event { event } = event;
             let Some(event) = event else {
-                return Err(super::Error::missing_field::<
+                return Err(Error::missing_field::<
                     generated::subscribe_events_response::Event,
                 >("event"));
             };
@@ -952,14 +963,14 @@ pub mod mainchain {
     }
 
     impl TryFrom<generated::SubscribeEventsResponse> for Event {
-        type Error = super::Error;
+        type Error = Error;
 
         fn try_from(
             event: generated::SubscribeEventsResponse,
         ) -> Result<Self, Self::Error> {
             let generated::SubscribeEventsResponse { event } = event;
             let Some(event) = event else {
-                return Err(super::Error::missing_field::<
+                return Err(Error::missing_field::<
                     generated::SubscribeEventsResponse,
                 >("event"));
             };
@@ -991,7 +1002,7 @@ pub mod mainchain {
         pub async fn get_block_header_info(
             &mut self,
             block_hash: BlockHash,
-        ) -> Result<Option<BlockHeaderInfo>, super::Error> {
+        ) -> Result<Option<BlockHeaderInfo>, Error> {
             let request = generated::GetBlockHeaderInfoRequest {
                 block_hash: Some(ReverseHex::encode(&block_hash)),
                 max_ancestors: Some(0),
@@ -1009,7 +1020,7 @@ pub mod mainchain {
             &mut self,
             block_hash: BlockHash,
             max_ancestors: u32,
-        ) -> Result<Option<NonEmpty<BlockHeaderInfo>>, super::Error> {
+        ) -> Result<Option<NonEmpty<BlockHeaderInfo>>, Error> {
             let request = generated::GetBlockHeaderInfoRequest {
                 block_hash: Some(ReverseHex::encode(&block_hash)),
                 max_ancestors: Some(max_ancestors),
@@ -1027,7 +1038,7 @@ pub mod mainchain {
                 if header_info.block_hash == expected_block_hash {
                     expected_block_hash = header_info.prev_block_hash;
                 } else {
-                    return Err(super::Error::invalid_repeated_value::<
+                    return Err(Error::invalid_repeated_value::<
                         generated::GetBlockHeaderInfoResponse,
                     >(
                         "header_infos",
@@ -1042,7 +1053,7 @@ pub mod mainchain {
             &mut self,
             block_hash: BlockHash,
             max_ancestors: u32,
-        ) -> Result<Option<NonEmpty<(BlockHeaderInfo, BlockInfo)>>, super::Error>
+        ) -> Result<Option<NonEmpty<(BlockHeaderInfo, BlockInfo)>>, Error>
         {
             let request = generated::GetBlockInfoRequest {
                 block_hash: Some(ReverseHex::encode(&block_hash)),
@@ -1062,7 +1073,7 @@ pub mod mainchain {
                 if header_info.block_hash == expected_block_hash {
                     expected_block_hash = header_info.prev_block_hash;
                 } else {
-                    return Err(super::Error::invalid_repeated_value::<
+                    return Err(Error::invalid_repeated_value::<
                         generated::GetBlockInfoResponse,
                     >(
                         "infos",
@@ -1083,7 +1094,7 @@ pub mod mainchain {
                 nonempty::NonEmpty<Option<crate::types::BlockHash>>,
                 BlockNotFoundError,
             >,
-            super::Error,
+            Error,
         > {
             let request = generated::GetBmmHStarCommitmentRequest {
                 block_hash: Some(ReverseHex::encode(&block_hash)),
@@ -1096,7 +1107,7 @@ pub mod mainchain {
                 .await?
                 .into_inner();
             let Some(result) = result else {
-                return Err(super::Error::missing_field::<
+                return Err(Error::missing_field::<
                     generated::GetBmmHStarCommitmentResponse,
                 >("result"));
             };
@@ -1105,12 +1116,12 @@ pub mod mainchain {
 
         pub async fn get_chain_info(
             &mut self,
-        ) -> Result<ChainInfo, super::Error> {
+        ) -> Result<ChainInfo, Error> {
             let request = generated::GetChainInfoRequest {};
             let generated::GetChainInfoResponse { network } =
                 self.0.get_chain_info(request).await?.into_inner();
             let network = generated::Network::try_from(network)
-                .map_err(|_| super::Error::UnknownEnumTag {
+                .map_err(|_| Error::UnknownEnumTag {
                     field_name: "network".to_owned(),
                     message_name:
                         <generated::GetChainInfoResponse as prost::Name>::NAME
@@ -1123,12 +1134,12 @@ pub mod mainchain {
 
         pub async fn get_chain_tip(
             &mut self,
-        ) -> Result<BlockHeaderInfo, super::Error> {
+        ) -> Result<BlockHeaderInfo, Error> {
             let request = generated::GetChainTipRequest {};
             let generated::GetChainTipResponse { block_header_info } =
                 self.0.get_chain_tip(request).await?.into_inner();
             let Some(block_header_info) = block_header_info else {
-                return Err(super::Error::missing_field::<
+                return Err(Error::missing_field::<
                     generated::GetChainTipResponse,
                 >("block_header_info"));
             };
@@ -1139,7 +1150,7 @@ pub mod mainchain {
             &mut self,
             start_block_hash: Option<BlockHash>,
             end_block_hash: BlockHash,
-        ) -> Result<TwoWayPegData, super::Error> {
+        ) -> Result<TwoWayPegData, Error> {
             let request = generated::GetTwoWayPegDataRequest {
                 sidechain_id: Some(THIS_SIDECHAIN as u32),
                 start_block_hash: start_block_hash.map(|start_block_hash| {
@@ -1156,7 +1167,7 @@ pub mod mainchain {
 
         pub async fn subscribe_events(
             &mut self,
-        ) -> Result<BoxStream<'_, Result<Event, super::Error>>, super::Error>
+        ) -> Result<BoxStream<'_, Result<Event, Error>>, Error>
         {
             let request = generated::SubscribeEventsRequest {
                 sidechain_id: Some(THIS_SIDECHAIN as u32),
@@ -1194,7 +1205,7 @@ pub mod mainchain {
         pub async fn broadcast_withdrawal_bundle(
             &mut self,
             transaction: &Transaction,
-        ) -> Result<(), super::Error> {
+        ) -> Result<(), Error> {
             let request = generated::BroadcastWithdrawalBundleRequest {
                 sidechain_id: Some(THIS_SIDECHAIN as u32),
                 transaction: Some(bitcoin::consensus::serialize(transaction)),
@@ -1213,7 +1224,7 @@ pub mod mainchain {
             height: u32,
             critical_hash: [u8; 32],
             prev_bytes: BlockHash,
-        ) -> Result<Txid, super::Error> {
+        ) -> Result<Txid, Error> {
             let request = generated::CreateBmmCriticalDataTransactionRequest {
                 sidechain_id: Some(THIS_SIDECHAIN as u32),
                 value_sats: Some(value_sats),
@@ -1227,7 +1238,7 @@ pub mod mainchain {
                     .await?
                     .into_inner();
             let txid = txid.ok_or_else(||
-                super::Error::missing_field::<generated::CreateBmmCriticalDataTransactionResponse>("txid"))?
+                Error::missing_field::<generated::CreateBmmCriticalDataTransactionResponse>("txid"))?
                 .decode::<generated::CreateBmmCriticalDataTransactionResponse, _>("txid")?;
             Ok(txid)
         }
@@ -1237,7 +1248,7 @@ pub mod mainchain {
             address: crate::types::Address,
             value_sats: u64,
             fee_sats: u64,
-        ) -> Result<Txid, super::Error> {
+        ) -> Result<Txid, Error> {
             let request = generated::CreateDepositTransactionRequest {
                 sidechain_id: Some(THIS_SIDECHAIN as u32),
                 address: Some(address.to_string()),
@@ -1251,7 +1262,7 @@ pub mod mainchain {
                 .into_inner();
             let txid = txid
                 .ok_or_else(|| {
-                    super::Error::missing_field::<
+                    Error::missing_field::<
                         generated::CreateDepositTransactionResponse,
                     >("txid")
                 })?
@@ -1265,13 +1276,13 @@ pub mod mainchain {
             &mut self,
         ) -> Result<
             bitcoin::Address<bitcoin::address::NetworkUnchecked>,
-            super::Error,
+            Error,
         > {
             let request = generated::CreateNewAddressRequest {};
             let generated::CreateNewAddressResponse { address } =
                 self.0.create_new_address(request).await?.into_inner();
             let address = address.parse().map_err(|_| {
-                super::Error::invalid_field_value::<
+                Error::invalid_field_value::<
                     generated::CreateNewAddressResponse,
                 >("address", &address)
             })?;
@@ -1281,7 +1292,7 @@ pub mod mainchain {
         pub async fn generate_blocks(
             &mut self,
             blocks: u32,
-        ) -> Result<(), super::Error> {
+        ) -> Result<(), Error> {
             let request = generated::GenerateBlocksRequest {
                 blocks: Some(blocks),
                 ack_all_proposals: true,
