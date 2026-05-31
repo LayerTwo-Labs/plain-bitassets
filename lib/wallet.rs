@@ -1549,14 +1549,17 @@ impl Wallet {
         })
     }
 
-    pub fn get_last_address(&self) -> Result<Option<Address>, Error> {
+    /// Gets the latest generated address
+    pub fn try_get_last_address(&self) -> Result<Option<Address>, Error> {
         let rotxn = self.env.read_txn()?;
         let last = self.index_to_address.last(&rotxn)?;
         Ok(last.map(|(_, address)| address))
     }
 
-    pub fn get_address_or_new(&self) -> Result<Address, Error> {
-        if let Some(address) = self.get_last_address()? {
+    /// Gets the latest generated address, or generates a new one if no
+    /// addresses have already been generated
+    pub fn get_or_generate_last_address(&self) -> Result<Address, Error> {
+        if let Some(address) = self.try_get_last_address()? {
             Ok(address)
         } else {
             self.get_new_address()
@@ -1650,17 +1653,15 @@ impl Watchable<()> for Wallet {
 
 #[cfg(test)]
 mod test {
-    use crate::wallet::{Error, Wallet};
+    use crate::wallet::Wallet;
 
     #[test]
-    fn test_get_address_or_new() -> Result<(), Error> {
-        let test_dir = std::env::temp_dir().join(format!(
-            "bitassets_test_wallet_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+    fn test_get_or_generate_last_address() -> anyhow::Result<()> {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        let test_dir =
+            std::env::temp_dir().join(format!("bitassets_test_wallet_{nanos}"));
 
         // Ensure clean state
         if test_dir.exists() {
@@ -1676,30 +1677,25 @@ mod test {
         assert!(wallet.has_seed()?);
 
         // Get last address when none have been generated
-        let last = wallet.get_last_address()?;
+        let last = wallet.try_get_last_address()?;
         assert!(last.is_none());
 
-        // Get address or new should generate the first address
-        let addr1 = wallet.get_address_or_new()?;
+        // The first call should generate the first address.
+        let addr1 = wallet.get_or_generate_last_address()?;
 
-        // Now last address should be addr1
-        let last = wallet.get_last_address()?;
+        let last = wallet.try_get_last_address()?;
         assert_eq!(last, Some(addr1));
 
-        // Subsequent get_address_or_new calls should return the same addr1
-        let addr2 = wallet.get_address_or_new()?;
+        let addr2 = wallet.get_or_generate_last_address()?;
         assert_eq!(addr1, addr2);
 
-        // Generating a new address explicitly should give a new one
         let addr3 = wallet.get_new_address()?;
         assert_ne!(addr1, addr3);
 
-        // Now last address should be addr3
-        let last = wallet.get_last_address()?;
+        let last = wallet.try_get_last_address()?;
         assert_eq!(last, Some(addr3));
 
-        // And get_address_or_new should return addr3
-        let addr4 = wallet.get_address_or_new()?;
+        let addr4 = wallet.get_or_generate_last_address()?;
         assert_eq!(addr3, addr4);
 
         // Clean up
