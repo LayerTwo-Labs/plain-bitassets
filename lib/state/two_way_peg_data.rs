@@ -281,10 +281,26 @@ fn connect_withdrawal_bundle_confirmed(
     event_block_hash: &bitcoin::BlockHash,
     m6id: M6id,
 ) -> Result<(), Error> {
-    let (mut bundle, mut bundle_status) = state
-        .withdrawal_bundles
-        .try_get(rwtxn, &m6id)?
-        .ok_or(Error::UnknownWithdrawalBundle { m6id })?;
+    let (mut bundle, mut bundle_status) = if let Some((bundle, bundle_status)) =
+        state.withdrawal_bundles.try_get(rwtxn, &m6id)?
+    {
+        (bundle, bundle_status)
+    } else {
+        tracing::warn!(
+            %event_block_hash,
+            %m6id,
+            "Unknown withdrawal bundle confirmed without prior submission"
+        );
+        (
+            WithdrawalBundleInfo::UnknownConfirmed {
+                spend_utxos: BTreeMap::new(),
+            },
+            RollBack::<HeightStamped<_>>::new(
+                WithdrawalBundleStatus::SubmittedUnexpected,
+                block_height,
+            ),
+        )
+    };
     if bundle_status.latest().value == WithdrawalBundleStatus::Confirmed {
         // Already applied
         return Ok(());
@@ -302,44 +318,17 @@ fn connect_withdrawal_bundle_confirmed(
             });
         }
         WithdrawalBundleInfo::Unknown => {
-            // If an unknown bundle is confirmed, all UTXOs older than the
-            // bundle submission are potentially spent.
-            // This is only accepted in the case that block height is 0,
-            // and so no UTXOs could possibly have been double-spent yet.
-            // In this case, ALL UTXOs are considered spent.
-            if block_height == 0 {
-                tracing::warn!(
-                    %event_block_hash,
-                    %m6id,
-                    "Unknown withdrawal bundle confirmed, marking all UTXOs as spent"
-                );
-                let utxos: BTreeMap<OutPoint, _> = state
-                    .utxos
-                    .iter(rwtxn)
-                    .map_err(Error::from)?
-                    .map(|(key, output)| Ok((key.into(), output)))
-                    .collect()?;
-                for (outpoint, output) in &utxos {
-                    let spent_output = SpentOutput {
-                        output: output.clone(),
-                        inpoint: InPoint::Withdrawal { m6id },
-                    };
-                    state.stxos.put(
-                        rwtxn,
-                        &OutPointKey::from(outpoint),
-                        &spent_output,
-                    )?;
-                }
-                state.utxos.clear(rwtxn)?;
-                bundle = WithdrawalBundleInfo::UnknownConfirmed {
-                    spend_utxos: utxos,
-                };
-            } else {
-                return Err(Error::UnknownWithdrawalBundleConfirmed {
-                    event_block_hash: *event_block_hash,
-                    m6id,
-                });
-            }
+            // During archive recovery we may see historical bundle
+            // confirmations without the original locally-created bundle.
+            // Preserve wallet UTXOs rather than making resync fatal.
+            tracing::warn!(
+                %event_block_hash,
+                %m6id,
+                "Unknown withdrawal bundle confirmed; preserving local UTXOs during resync"
+            );
+            bundle = WithdrawalBundleInfo::UnknownConfirmed {
+                spend_utxos: BTreeMap::new(),
+            };
         }
         WithdrawalBundleInfo::Known(bundle) => {
             if matches!(
