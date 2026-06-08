@@ -776,7 +776,7 @@ fn disconnect_withdrawal_bundle_failed(
                     inpoint: InPoint::Withdrawal { m6id },
                 };
                 state.stxos.put(rwtxn, &outpoint_key, &spent_output)?;
-                if state.utxos.delete(rwtxn, &outpoint_key)? {
+                if !state.utxos.delete(rwtxn, &outpoint_key)? {
                     return Err(error::NoUtxo {
                         outpoint: *outpoint,
                     }
