@@ -87,9 +87,7 @@ pub fn validate(
             return Err(Error::WrongPubKeyForAddress);
         }
     }
-    if Authorization::verify_body(body).is_err() {
-        return Err(Error::AuthorizationError);
-    }
+    let () = Authorization::verify_body(body).map_err(Error::Authorization)?;
     Ok(total_fees)
 }
 
@@ -169,9 +167,7 @@ pub fn prevalidate(
         }
     }
 
-    if Authorization::verify_body(body).is_err() {
-        return Err(Error::AuthorizationError);
-    }
+    let () = Authorization::verify_body(body).map_err(Error::Authorization)?;
 
     let height = state.try_get_height(rotxn)?.map_or(0, |height| height + 1);
 

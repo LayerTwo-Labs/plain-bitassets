@@ -606,9 +606,8 @@ impl State {
                 return Err(Error::WrongPubKeyForAddress);
             }
         }
-        if Authorization::verify_transaction(transaction).is_err() {
-            return Err(Error::AuthorizationError);
-        }
+        let () = Authorization::verify_transaction(transaction)
+            .map_err(Error::Authorization)?;
         let fee =
             self.validate_filled_transaction(rotxn, &filled_transaction)?;
         Ok(fee)
@@ -759,5 +758,112 @@ impl Watchable<()> for State {
     /// Get a signal that notifies whenever the tip changes
     fn watch(&self) -> Self::WatchStream {
         tokio_stream::wrappers::WatchStream::new(self.tip.watch().clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ed25519_dalek::SigningKey;
+
+    use super::{Error, State};
+    use crate::{
+        authorization,
+        types::{
+            Address, AuthorizedTransaction, BitcoinOutputContent, FilledOutput,
+            FilledOutputContent, OutPoint, OutPointKey, Output, OutputContent,
+            Transaction, VerifyingKey,
+        },
+    };
+
+    /// Open a fresh state in a unique temporary directory.
+    fn new_state() -> (sneed::Env, State) {
+        let path = std::env::temp_dir()
+            .join(format!("bitassets_auth_count_{}", std::process::id()));
+        let _remove_result = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        let env = {
+            let mut opts = heed::EnvOpenOptions::new();
+            opts.map_size(10 * 1024 * 1024).max_dbs(State::NUM_DBS);
+            unsafe { sneed::Env::open(&opts, &path) }.unwrap()
+        };
+        let state = State::new(&env).unwrap();
+        (env, state)
+    }
+
+    /// Fund `address` with a single bitcoin UTXO of `value` sats, returning its
+    /// outpoint.
+    fn fund(
+        env: &sneed::Env,
+        state: &State,
+        address: Address,
+        value: u64,
+    ) -> OutPoint {
+        let outpoint = OutPoint::Regular {
+            txid: Default::default(),
+            vout: 0,
+        };
+        let output = FilledOutput::new(
+            address,
+            FilledOutputContent::Bitcoin(BitcoinOutputContent(
+                bitcoin::Amount::from_sat(value),
+            )),
+        );
+        let mut rwtxn = env.write_txn().unwrap();
+        state
+            .utxos
+            .put(&mut rwtxn, &OutPointKey::from(&outpoint), &output)
+            .unwrap();
+        rwtxn.commit().unwrap();
+        outpoint
+    }
+
+    /// A transaction that spends an input without supplying an authorization
+    /// for it must be rejected. Otherwise the `zip` of authorizations and
+    /// spent UTXOs silently skips the unauthorized input, allowing any UTXO to
+    /// be spent without a signature.
+    #[test]
+    fn validate_transaction_rejects_missing_authorization() {
+        let (env, state) = new_state();
+        let signing_key = SigningKey::from_bytes(&[1u8; 32]);
+        let verifying_key: VerifyingKey = signing_key.verifying_key().into();
+        let address = authorization::get_address(&verifying_key);
+        let outpoint = fund(&env, &state, address, 1000);
+
+        let transaction = Transaction::new(
+            vec![outpoint],
+            vec![Output::new(
+                address,
+                OutputContent::Bitcoin(BitcoinOutputContent(
+                    bitcoin::Amount::from_sat(900),
+                )),
+            )],
+        );
+
+        // The attack: spend the input while providing no authorization for it.
+        let unauthorized = AuthorizedTransaction {
+            transaction: transaction.clone(),
+            authorizations: Vec::new(),
+        };
+        let rotxn = env.read_txn().unwrap();
+        let err = state
+            .validate_transaction(&rotxn, &unauthorized)
+            .expect_err("tx with no authorizations must be rejected");
+        assert!(
+            matches!(
+                err,
+                Error::Authorization(
+                    crate::authorization::Error::NotEnoughAuthorizations
+                )
+            ),
+            "unexpected error: {err:?}"
+        );
+
+        // The same transaction with a valid authorization is accepted.
+        let authorized =
+            authorization::authorize(&[(address, &signing_key)], transaction)
+                .unwrap();
+        state
+            .validate_transaction(&rotxn, &authorized)
+            .expect("correctly authorized tx should validate");
     }
 }

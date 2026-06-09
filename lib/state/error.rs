@@ -336,7 +336,7 @@ pub enum Error {
     #[error(transparent)]
     AmountUnderflow(#[from] AmountUnderflowError),
     #[error("failed to verify authorization")]
-    AuthorizationError,
+    Authorization(#[source] crate::authorization::Error),
     #[error("bad coinbase output content")]
     BadCoinbaseOutputContent,
     #[error(transparent)]
