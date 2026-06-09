@@ -461,7 +461,7 @@ impl State {
             && (n_bitasset_control_inputs < 1 || n_bitasset_control_outputs < 1)
         {
             return Err(error::BitAsset::NoBitAssetsToUpdate.into());
-        };
+        }
         if tx.is_amm_burn()
             && (n_unique_bitasset_outputs < 2
                 || n_unique_bitasset_inputs > n_unique_bitasset_outputs
@@ -507,6 +507,7 @@ impl State {
         };
         if let Some(TxData::BitAssetRegistration {
             name_hash,
+            revealed_nonce,
             initial_supply,
             ..
         }) = tx.data()
@@ -546,9 +547,30 @@ impl State {
                     return Err(Error::SecondLastOutputNotBitAsset);
                 }
             }
+            let bitasset_id = BitAssetId(*name_hash);
+            // A registration must burn the reservation that commits to it,
+            // i.e. a spent reservation whose commitment equals
+            // keyed_hash(revealed_nonce, name_hash). Without this check,
+            // `apply_registration` would later fail to find the reservation
+            // to burn.
+            {
+                let implied_commitment =
+                    blake3::keyed_hash(revealed_nonce, name_hash).into();
+                let burns_matching_reservation =
+                    tx.spent_reservations().any(|(_, filled_output)| {
+                        filled_output.reservation_commitment()
+                            == Some(&implied_commitment)
+                    });
+                if !burns_matching_reservation {
+                    return Err(error::BitAsset::NoReservationForRegistration {
+                        bitasset: bitasset_id,
+                    }
+                    .into());
+                }
+            }
             if self
                 .bitassets
-                .try_get_bitasset(rotxn, &BitAssetId(*name_hash))?
+                .try_get_bitasset(rotxn, &bitasset_id)?
                 .is_some()
             {
                 return Err(Error::BitAssetAlreadyRegistered {
