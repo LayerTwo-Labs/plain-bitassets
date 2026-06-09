@@ -96,7 +96,11 @@ pub enum Error {
     #[error("borsh serialization error")]
     BorshSerialize(#[from] borsh::io::Error),
     #[error("ed25519_dalek error")]
-    DalekError(#[from] SignatureError),
+    Dalek(#[from] SignatureError),
+    #[error("not enough authorizations")]
+    NotEnoughAuthorizations,
+    #[error("too many authorizations")]
+    TooManyAuthorizations,
     #[error(
         "wrong key for address: address = {address},
              hash(verifying_key) = {hash_verifying_key}"
@@ -168,6 +172,14 @@ fn tx_msg_canonical(tx: &Transaction) -> borsh::io::Result<Vec<u8>> {
 pub fn verify_authorized_transaction(
     transaction: &AuthorizedTransaction,
 ) -> Result<(), Error> {
+    let verifications_required = &transaction.transaction.inputs.len();
+    match transaction.authorizations.len().cmp(verifications_required) {
+        std::cmp::Ordering::Less => return Err(Error::NotEnoughAuthorizations),
+        std::cmp::Ordering::Equal => (),
+        std::cmp::Ordering::Greater => {
+            return Err(Error::TooManyAuthorizations);
+        }
+    }
     let tx_msg_canonical = tx_msg_canonical(&transaction.transaction)?;
     let messages: Vec<_> = std::iter::repeat_n(
         tx_msg_canonical.as_slice(),
@@ -192,22 +204,30 @@ pub fn verify_authorized_transaction(
 }
 
 pub fn verify_authorizations(body: &Body) -> Result<(), Error> {
-    let input_numbers = body
-        .transactions
-        .iter()
-        .map(|transaction| transaction.inputs.len());
-    let serialized_transactions: Vec<Vec<u8>> = body
+    let verifications_required =
+        body.transactions.par_iter().map(|tx| tx.inputs.len()).sum();
+    match body.authorizations.len().cmp(&verifications_required) {
+        std::cmp::Ordering::Less => return Err(Error::NotEnoughAuthorizations),
+        std::cmp::Ordering::Equal => (),
+        std::cmp::Ordering::Greater => {
+            return Err(Error::TooManyAuthorizations);
+        }
+    }
+    if verifications_required == 0 {
+        return Ok(());
+    }
+    // pairs of serialized txs, and the number of inputs
+    let serialized_transactions_inputs: Vec<(Vec<u8>, usize)> = body
         .transactions
         .par_iter()
-        .map(tx_msg_canonical)
-        .collect::<Result<_, _>>()?;
-    let serialized_transactions =
-        serialized_transactions.iter().map(Vec::as_slice);
-    let messages = input_numbers.zip(serialized_transactions).flat_map(
-        |(input_number, serialized_transaction)| {
-            std::iter::repeat_n(serialized_transaction, input_number)
-        },
-    );
+        .map(|tx| Ok((tx_msg_canonical(tx)?, tx.inputs.len())))
+        .collect::<Result<_, Error>>()?;
+    let messages =
+        serialized_transactions_inputs
+            .iter()
+            .flat_map(|(tx, n_inputs)| {
+                std::iter::repeat_n(tx.as_slice(), *n_inputs)
+            });
 
     let pairs = body.authorizations.iter().zip(messages).collect::<Vec<_>>();
 
