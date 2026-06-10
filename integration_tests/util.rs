@@ -8,7 +8,7 @@ use bip300301_enforcer_integration_tests::util::{
     AbortOnDrop, BinPaths as EnforcerBinPaths, OnceLockExt as _, VarError,
     spawn_command_with_args,
 };
-use liquid_simplicity::types::Network;
+use sidechain_utilities::types::Network;
 
 #[derive(Clone, Debug, Default)]
 pub struct BinPaths {

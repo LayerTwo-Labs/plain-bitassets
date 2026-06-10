@@ -23,7 +23,7 @@ fn resolve_script_path() -> String {
     }
     if let Some(home) = std::env::var_os("HOME") {
         let candidate = std::path::Path::new(&home)
-            .join(".config/liquid-simplicity/simplicity_e2e_tx.py");
+            .join(".config/plain-bitassets/simplicity_e2e_tx.py");
         if candidate.exists() {
             return candidate.to_string_lossy().into_owned();
         }

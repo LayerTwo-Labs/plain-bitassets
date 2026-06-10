@@ -1,5 +1,5 @@
 [package]
-name = "liquid_simplicity_app"
+name = "plain_bitassets_app"
 authors.workspace = true
 description.workspace = true
 edition.workspace = true
@@ -29,9 +29,9 @@ jsonrpsee = { workspace = true, features = ["server"] }
 mimalloc = { workspace = true, features = ["v3"] }
 num = { workspace = true }
 parking_lot = { workspace = true }
-liquid_simplicity = { path = "../lib", features = ["clap"] }
-liquid_simplicity_app_cli = { path = "../cli" }
-liquid_simplicity_app_rpc_api = { path = "../rpc-api" }
+sidechain_utilities = { path = "../lib", features = ["clap"] }
+plain_bitassets_app_cli = { path = "../cli" }
+plain_bitassets_app_rpc_api = { path = "../rpc-api" }
 poll-promise = { workspace = true, features = ["tokio"] }
 quinn = { workspace = true }
 rustreexo = { workspace = true }
@@ -60,11 +60,11 @@ features = ["AES256-GCM", "ECIES-MAC", "HMAC-SHA256", "x25519"]
 
 [features]
 default = ["zmq"]
-zmq = ["liquid_simplicity/zmq"]
+zmq = ["sidechain_utilities/zmq"]
 
 [lints]
 workspace = true
 
 [[bin]]
-name = "liquid_simplicity_app"
+name = "plain_bitassets_app"
 path = "main.rs"

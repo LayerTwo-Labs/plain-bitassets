@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use fallible_iterator::FallibleIterator as _;
 use futures::{StreamExt as _, TryFutureExt as _};
 use parking_lot::RwLock;
-use liquid_simplicity::{
+use sidechain_utilities::{
     miner::{self, Miner},
     node::{self, Node},
     types::{
@@ -31,7 +31,7 @@ pub enum Error {
     #[error(transparent)]
     AmountOverflow(#[from] AmountOverflowError),
     #[error("CUSF mainchain proto error")]
-    CusfMainchain(#[from] liquid_simplicity::types::proto::Error),
+    CusfMainchain(#[from] sidechain_utilities::types::proto::Error),
     #[error("io error")]
     Io(#[from] std::io::Error),
     #[error("miner error: {0}")]
@@ -501,7 +501,7 @@ impl App {
             miner_write.confirm_bmm().await.inspect_err(|err| {
                 tracing::error!(
                     "{:#}",
-                    liquid_simplicity::util::ErrorChain::new(err)
+                    sidechain_utilities::util::ErrorChain::new(err)
                 )
             })?
         {
@@ -517,7 +517,7 @@ impl App {
                 .inspect_err(|err| {
                     tracing::error!(
                         "{:#}",
-                        liquid_simplicity::util::ErrorChain::new(err)
+                        sidechain_utilities::util::ErrorChain::new(err)
                     )
                 })? {
                 true => {

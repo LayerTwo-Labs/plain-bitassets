@@ -615,13 +615,31 @@ fn disconnect_withdrawal_bundle_submitted(
             return Err(Error::UnknownWithdrawalBundle { m6id });
         }
     };
-    let (bundle_status, latest_bundle_status) = bundle_status.pop();
-    assert!(matches!(
+    let latest_bundle_status = bundle_status.latest();
+    if !matches!(
         latest_bundle_status.value,
         WithdrawalBundleStatus::Submitted
             | WithdrawalBundleStatus::SubmittedUnexpected
-    ));
-    assert_eq!(latest_bundle_status.height, block_height);
+    ) {
+        tracing::warn!(
+            %m6id,
+            %block_height,
+            actual_status = ?latest_bundle_status.value,
+            actual_height = %latest_bundle_status.height,
+            "submitted withdrawal-bundle status mismatch during disconnect"
+        );
+        return Ok(());
+    }
+    if latest_bundle_status.height != block_height {
+        tracing::warn!(
+            %m6id,
+            expected_height = %block_height,
+            actual_height = %latest_bundle_status.height,
+            "submitted withdrawal-bundle status height mismatch during disconnect"
+        );
+        return Ok(());
+    }
+    let (bundle_status, _latest_bundle_status) = bundle_status.pop();
     match &bundle {
         WithdrawalBundleInfo::Unknown
         | WithdrawalBundleInfo::UnknownConfirmed { .. } => (),
@@ -663,7 +681,7 @@ fn disconnect_withdrawal_bundle_confirmed(
         .withdrawal_bundles
         .try_get(rwtxn, &m6id)?
         .ok_or_else(|| Error::UnknownWithdrawalBundle { m6id })?;
-    let (prev_bundle_status, latest_bundle_status) = bundle_status.pop();
+    let latest_bundle_status = bundle_status.latest();
     if matches!(
         latest_bundle_status.value,
         WithdrawalBundleStatus::Submitted
@@ -676,7 +694,16 @@ fn disconnect_withdrawal_bundle_confirmed(
         latest_bundle_status.value,
         WithdrawalBundleStatus::Confirmed
     );
-    assert_eq!(latest_bundle_status.height, block_height);
+    if latest_bundle_status.height != block_height {
+        tracing::warn!(
+            %m6id,
+            expected_height = %block_height,
+            actual_height = %latest_bundle_status.height,
+            "confirmed withdrawal-bundle status height mismatch during disconnect"
+        );
+        return Ok(());
+    }
+    let (prev_bundle_status, _latest_bundle_status) = bundle_status.pop();
     let prev_bundle_status = prev_bundle_status
         .expect("Pop confirmed bundle status should be valid");
     assert!(matches!(
@@ -733,14 +760,31 @@ fn disconnect_withdrawal_bundle_failed(
         .withdrawal_bundles
         .try_get(rwtxn, &m6id)?
         .ok_or_else(|| Error::UnknownWithdrawalBundle { m6id })?;
-    let (prev_bundle_status, latest_bundle_status) = bundle_status.pop();
+    let latest_bundle_status = bundle_status.latest();
     if latest_bundle_status.value == WithdrawalBundleStatus::Submitted {
         // Already applied
         return Ok(());
-    } else {
-        assert_eq!(latest_bundle_status.value, WithdrawalBundleStatus::Failed);
     }
-    assert_eq!(latest_bundle_status.height, block_height);
+    if latest_bundle_status.value != WithdrawalBundleStatus::Failed {
+        tracing::warn!(
+            %m6id,
+            %block_height,
+            actual_status = ?latest_bundle_status.value,
+            actual_height = %latest_bundle_status.height,
+            "failed withdrawal-bundle status mismatch during disconnect"
+        );
+        return Ok(());
+    }
+    if latest_bundle_status.height != block_height {
+        tracing::warn!(
+            %m6id,
+            expected_height = %block_height,
+            actual_height = %latest_bundle_status.height,
+            "failed withdrawal-bundle status height mismatch during disconnect"
+        );
+        return Ok(());
+    }
+    let (prev_bundle_status, _latest_bundle_status) = bundle_status.pop();
     let prev_bundle_status =
         prev_bundle_status.expect("Pop failed bundle status should be valid");
     assert!(matches!(
@@ -846,7 +890,11 @@ fn disconnect_event(
             let outpoint = OutPoint::Deposit(deposit.outpoint);
             let outpoint_key = OutPointKey::from_outpoint(&outpoint);
             if !state.utxos.delete(rwtxn, &outpoint_key)? {
-                return Err(error::NoUtxo { outpoint }.into());
+                tracing::warn!(
+                    %outpoint,
+                    %block_height,
+                    "deposit UTXO missing during disconnect"
+                );
             }
             *latest_deposit_block_hash = Some(event_block_hash);
         }
@@ -893,26 +941,34 @@ pub fn disconnect(
     if let Some(latest_withdrawal_bundle_event_block_hash) =
         latest_withdrawal_bundle_event_block_hash
     {
-        let (
-            last_withdrawal_bundle_event_block_seq_idx,
-            (
-                last_withdrawal_bundle_event_block_hash,
-                last_withdrawal_bundle_event_block_height,
-            ),
-        ) = state
-            .withdrawal_bundle_event_blocks
-            .last(rwtxn)?
-            .ok_or(Error::NoWithdrawalBundleEventBlock)?;
-        assert_eq!(
-            latest_withdrawal_bundle_event_block_hash,
-            last_withdrawal_bundle_event_block_hash
-        );
-        assert_eq!(block_height - 1, last_withdrawal_bundle_event_block_height);
-        if !state
-            .deposit_blocks
-            .delete(rwtxn, &last_withdrawal_bundle_event_block_seq_idx)?
+        let withdrawal_bundle_event_block_seq_idx = {
+            let mut withdrawal_bundle_event_block_seq_idx = None;
+            let mut withdrawal_bundle_event_blocks =
+                state.withdrawal_bundle_event_blocks.iter(rwtxn)?;
+            while let Some((seq_idx, (block_hash, _height))) =
+                withdrawal_bundle_event_blocks.next()?
+            {
+                if block_hash == latest_withdrawal_bundle_event_block_hash {
+                    withdrawal_bundle_event_block_seq_idx = Some(seq_idx);
+                }
+            }
+            withdrawal_bundle_event_block_seq_idx
+        };
+        if let Some(withdrawal_bundle_event_block_seq_idx) =
+            withdrawal_bundle_event_block_seq_idx
         {
-            return Err(Error::NoWithdrawalBundleEventBlock);
+            if !state
+                .withdrawal_bundle_event_blocks
+                .delete(rwtxn, &withdrawal_bundle_event_block_seq_idx)?
+            {
+                return Err(Error::NoWithdrawalBundleEventBlock);
+            };
+        } else {
+            tracing::warn!(
+                %latest_withdrawal_bundle_event_block_hash,
+                %block_height,
+                "withdrawal-bundle event block marker missing during disconnect"
+            );
         };
     }
     let last_withdrawal_bundle_failure_height = state
@@ -944,20 +1000,28 @@ pub fn disconnect(
     }
     // Handle deposits
     if let Some(latest_deposit_block_hash) = latest_deposit_block_hash {
-        let (
-            last_deposit_block_seq_idx,
-            (last_deposit_block_hash, last_deposit_block_height),
-        ) = state
-            .deposit_blocks
-            .last(rwtxn)?
-            .ok_or(Error::NoDepositBlock)?;
-        assert_eq!(latest_deposit_block_hash, last_deposit_block_hash);
-        assert_eq!(block_height - 1, last_deposit_block_height);
-        if !state
-            .deposit_blocks
-            .delete(rwtxn, &last_deposit_block_seq_idx)?
-        {
-            return Err(Error::NoDepositBlock);
+        let deposit_block_seq_idx = {
+            let mut deposit_block_seq_idx = None;
+            let mut deposit_blocks = state.deposit_blocks.iter(rwtxn)?;
+            while let Some((seq_idx, (block_hash, _height))) =
+                deposit_blocks.next()?
+            {
+                if block_hash == latest_deposit_block_hash {
+                    deposit_block_seq_idx = Some(seq_idx);
+                }
+            }
+            deposit_block_seq_idx
+        };
+        if let Some(deposit_block_seq_idx) = deposit_block_seq_idx {
+            if !state.deposit_blocks.delete(rwtxn, &deposit_block_seq_idx)? {
+                return Err(Error::NoDepositBlock);
+            };
+        } else {
+            tracing::warn!(
+                %latest_deposit_block_hash,
+                %block_height,
+                "deposit block marker missing during disconnect"
+            );
         };
     }
     Ok(())

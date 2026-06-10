@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, fmt::Display};
 use eframe::egui::{self, InnerResponse, Response};
 
 use hex::FromHex;
-use liquid_simplicity::{state::DutchAuctionState, types::DutchAuctionId};
+use sidechain_utilities::{state::DutchAuctionState, types::DutchAuctionId};
 
 use crate::{
     app::App,

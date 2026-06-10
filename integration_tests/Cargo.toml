@@ -1,5 +1,5 @@
 [package]
-name = "liquid_simplicity_integration_tests"
+name = "plain_bitassets_integration_tests"
 authors.workspace = true
 description.workspace = true
 edition.workspace = true
@@ -18,8 +18,8 @@ dotenvy = { workspace = true }
 futures = { workspace = true }
 jsonrpsee = { workspace = true }
 libtest-mimic = { workspace = true }
-liquid_simplicity = { path = "../lib", features = ["clap"] }
-liquid_simplicity_app_rpc_api = { path = "../rpc-api" }
+sidechain_utilities = { path = "../lib", features = ["clap"] }
+plain_bitassets_app_rpc_api = { path = "../rpc-api" }
 reserve-port = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

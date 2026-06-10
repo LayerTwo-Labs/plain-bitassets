@@ -4,7 +4,7 @@ members = ["app", "cli", "integration_tests", "lib", "rpc-api"]
 
 [workspace.package]
 authors = ["Ash Manning <ash@layertwolabs.com>"]
-description = "Liquid Simplicity: BitWindow-compatible sidechain UI for the Liquid/Elements sidechain with Simplicity support"
+description = "Plain BitAssets: BitWindow-compatible BitAssets sidechain node and UI"
 edition = "2024"
 license-file = "LICENSE.txt"
 publish = false

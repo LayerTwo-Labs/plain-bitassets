@@ -9,6 +9,103 @@ git submodule update --init
 cargo build
 ```
 
+## Run BitAssets for BitWindow
+
+BitWindow expects the BitAssets sidechain JSON-RPC service on port `6004`.
+This node can also expose:
+
+- CUSF sidechain gRPC for BitWindow-compatible sidechain calls on port `50052`
+- lite-wallet QUIC updates for phone/local wallets on UDP port `6104`
+
+Start BitWindow's L1/enforcer stack first, then run BitAssets from this repo:
+
+```sh
+cargo run -p plain_bitassets_app -- \
+  --headless \
+  --network signet \
+  --mainchain-grpc-host 127.0.0.1 \
+  --mainchain-grpc-port 50051 \
+  --rpc-host 127.0.0.1 \
+  --rpc-port 6004 \
+  --sidechain-grpc-port 50052 \
+  --lite-wallet-quic-addr 127.0.0.1:6104
+```
+
+If BitWindow is already running, leave it open. `bitwindowd` and
+`orchestratord` both proxy BitAssets by dialing `127.0.0.1:6004`, so a running
+plain-BitAssets node on that port is enough for BitWindow to connect.
+
+### Verify the BitWindow connection
+
+Confirm the node is listening on the expected ports:
+
+```sh
+lsof -nP -iTCP:6004 -sTCP:LISTEN
+lsof -nP -iTCP:50052 -sTCP:LISTEN
+lsof -nP -iUDP:6104
+```
+
+Probe the JSON-RPC API BitWindow uses:
+
+```sh
+curl --fail --silent --show-error \
+  --data-binary '{"jsonrpc":"2.0","id":"bitassets","method":"getblockcount","params":[]}' \
+  -H 'content-type: application/json' \
+  http://127.0.0.1:6004
+```
+
+A healthy node returns a JSON-RPC `result`, for example:
+
+```json
+{"jsonrpc":"2.0","id":"bitassets","result":0}
+```
+
+You can also verify BitWindow has an active connection to the node:
+
+```sh
+lsof -nP -iTCP | grep '127.0.0.1:6004'
+```
+
+Look for a `bitwindowd -> 127.0.0.1:6004` established connection.
+
+### BitWindow configuration expectations
+
+BitWindow's sidechain config should contain a `bitassets` entry like this:
+
+```json
+{
+  "name": "BitAssets",
+  "port": 6004,
+  "slot": 4,
+  "type": "sidechain"
+}
+```
+
+On macOS, BitWindow commonly reads the merged runtime config from:
+
+```sh
+~/Library/Application Support/bitwindow/chains_config.json
+```
+
+If BitWindow previously tried to auto-download or auto-start a packaged
+BitAssets backend and failed, keep this plain-BitAssets node running on `6004`
+and restart or reopen BitWindow. BitWindow will reconnect to the already
+listening JSON-RPC service.
+
+### Common issue: sidechain deposit list error
+
+An error like this in BitWindow's Sidechains tab is not a BitAssets node
+connection failure:
+
+```text
+WalletException: could not list sidechain deposits: unable to fetch wallet transaction ...
+No such mempool or blockchain transaction
+```
+
+That comes from BitWindow asking the enforcer wallet for L1 sidechain deposit
+history. BitAssets is still connected if `getblockcount` on `127.0.0.1:6004`
+works and `bitwindowd` has an established connection to port `6004`.
+
 ## Connect a Wallet to Utreexo Lite-Wallet Messages
 
 BitAssets exposes a lite-wallet update API for wallets that do not want to run
@@ -29,7 +126,7 @@ sync, recovery after disconnects, and debugging.
 Run the app/headless node with JSON-RPC and the lite-wallet QUIC listener:
 
 ```sh
-cargo run -p liquid_simplicity_app -- \
+cargo run -p plain_bitassets_app -- \
   --headless \
   --network signet \
   --rpc-host 127.0.0.1 \
@@ -47,7 +144,7 @@ Floresta-compatible wallets can import Utreexo peer anchors. If the wallet
 already knows the Bitcoin private-signet Utreexo peers, export them explicitly:
 
 ```sh
-cargo run -p liquid_simplicity_app_cli -- \
+cargo run -p plain_bitassets_app_cli -- \
   --rpc-port 6004 \
   export-private-signet-utreexo-anchors \
   --peer <bitcoin-utreexo-peer-host:port> \
@@ -58,7 +155,7 @@ If this BitAssets node is already connected to active private-signet peers,
 export those instead:
 
 ```sh
-cargo run -p liquid_simplicity_app_cli -- \
+cargo run -p plain_bitassets_app_cli -- \
   --rpc-port 6004 \
   export-private-signet-utreexo-anchors \
   --active \
@@ -69,7 +166,7 @@ To give a wallet a single discovery document that includes both the Utreexo
 anchor and this node's lite-wallet QUIC endpoint:
 
 ```sh
-cargo run -p liquid_simplicity_app_cli -- \
+cargo run -p plain_bitassets_app_cli -- \
   --rpc-port 6004 \
   private-signet-utreexo-peer-source \
   --peer <externally-reachable-bitcoin-utreexo-peer-host:port> \
@@ -180,7 +277,7 @@ Wallets should sign BitAssets transactions locally. After building and signing
 an authorized transaction, submit it through JSON-RPC:
 
 ```sh
-cargo run -p liquid_simplicity_app_cli -- \
+cargo run -p plain_bitassets_app_cli -- \
   --rpc-port 6004 \
   submit-authorized-transaction <hex-borsh-authorized-tx>
 ```

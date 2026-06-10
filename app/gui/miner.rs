@@ -5,7 +5,7 @@ use std::sync::{
 
 use eframe::egui::{self, Button};
 use futures::FutureExt as _;
-use liquid_simplicity::types::proto::mainchain;
+use sidechain_utilities::types::proto::mainchain;
 
 use crate::app::App;
 

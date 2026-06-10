@@ -1,7 +1,7 @@
 use std::task::Poll;
 
 use eframe::egui::{self, Color32, RichText};
-use liquid_simplicity::{util::Watchable, wallet::Wallet};
+use sidechain_utilities::{util::Watchable, wallet::Wallet};
 use strum::{EnumIter, IntoEnumIterator};
 
 use crate::{app::App, line_buffer::LineBuffer, util::PromiseStream};

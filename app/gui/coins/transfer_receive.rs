@@ -1,5 +1,5 @@
 use eframe::egui::{self, Button};
-use liquid_simplicity::types::Address;
+use sidechain_utilities::types::Address;
 
 use crate::{app::App, gui::util::UiExt};
 

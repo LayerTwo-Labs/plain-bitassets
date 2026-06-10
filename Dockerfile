@@ -5,8 +5,8 @@ COPY . .
 
 RUN cargo build --locked --release && \
     mkdir -p /artifacts && \
-    cp /workspace/target/release/liquid_simplicity_app /artifacts/plain_bitassets_app && \
-    cp /workspace/target/release/liquid_simplicity_app_cli /artifacts/plain_bitassets_app_cli
+    cp /workspace/target/release/plain_bitassets_app /artifacts/plain_bitassets_app && \
+    cp /workspace/target/release/plain_bitassets_app_cli /artifacts/plain_bitassets_app_cli
 
 # Runtime stage
 FROM debian:bookworm-slim

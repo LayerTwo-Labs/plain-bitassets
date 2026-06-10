@@ -6,7 +6,7 @@ use fraction::Fraction;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use l2l_openapi::open_api;
 
-use liquid_simplicity::{
+use sidechain_utilities::{
     authorization::{Dst, Signature},
     net::{Peer, PeerConnectionStatus},
     state::{AmmPoolState, BitAssetSeqId, DutchAuctionState},
@@ -377,7 +377,7 @@ pub trait Rpc {
     #[method(name = "get_bmm_inclusions")]
     async fn get_bmm_inclusions(
         &self,
-        block_hash: liquid_simplicity::types::BlockHash,
+        block_hash: sidechain_utilities::types::BlockHash,
     ) -> RpcResult<Vec<bitcoin::BlockHash>>;
 
     /// Get the best mainchain block hash known by Thunder

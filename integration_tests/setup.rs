@@ -10,8 +10,8 @@ use bip300301_enforcer_integration_tests::{
 };
 use bip300301_enforcer_lib::types::SidechainNumber;
 use futures::{TryFutureExt as _, channel::mpsc, future};
-use liquid_simplicity::types::{FilledOutputContent, Network, PointedOutput};
-use liquid_simplicity_app_rpc_api::RpcClient as _;
+use sidechain_utilities::types::{FilledOutputContent, Network, PointedOutput};
+use plain_bitassets_app_rpc_api::RpcClient as _;
 use reserve_port::ReservedPort;
 use thiserror::Error;
 use tokio::time::sleep;
@@ -87,7 +87,7 @@ pub struct PostSetup {
     /// RPC client for bitassets_app
     pub rpc_client: jsonrpsee::http_client::HttpClient,
     /// Address for receiving deposits
-    pub deposit_address: liquid_simplicity::types::Address,
+    pub deposit_address: sidechain_utilities::types::Address,
     // MUST occur after tasks in order to ensure that tasks are dropped
     // before reserved ports are freed
     pub reserved_ports: ReservedPorts,
@@ -137,7 +137,7 @@ impl PostSetup {
 
 impl Sidechain for PostSetup {
     const SIDECHAIN_NUMBER: SidechainNumber =
-        SidechainNumber(liquid_simplicity::types::THIS_SIDECHAIN);
+        SidechainNumber(sidechain_utilities::types::THIS_SIDECHAIN);
 
     type Init = Init;
 
@@ -229,7 +229,7 @@ impl Sidechain for PostSetup {
                     | FilledOutputContent::DutchAuctionReceipt(_) => false,
                 }
                 && match utxo.outpoint {
-                    liquid_simplicity::types::OutPoint::Deposit(outpoint) => {
+                    sidechain_utilities::types::OutPoint::Deposit(outpoint) => {
                         outpoint.txid == txid
                     }
                     _ => false,
@@ -269,7 +269,7 @@ impl Sidechain for PostSetup {
             )
             .await?;
         let blocks_to_mine = 'blocks_to_mine: {
-            use liquid_simplicity::state::WITHDRAWAL_BUNDLE_FAILURE_GAP;
+            use sidechain_utilities::state::WITHDRAWAL_BUNDLE_FAILURE_GAP;
             let block_count = self.rpc_client.getblockcount().await?;
             let Some(block_height) = block_count.checked_sub(1) else {
                 break 'blocks_to_mine WITHDRAWAL_BUNDLE_FAILURE_GAP;

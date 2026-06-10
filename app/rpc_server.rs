@@ -6,7 +6,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use bitcoin::Amount;
+use bitcoin::{Amount, hashes::Hash as _};
 use fraction::Fraction;
 use futures::StreamExt as _;
 use jsonrpsee::{
@@ -16,7 +16,7 @@ use jsonrpsee::{
 };
 use serde::{Deserialize, Serialize};
 
-use liquid_simplicity::{
+use sidechain_utilities::{
     authorization::{self, Dst, Signature},
     net::{self, Peer},
     state::{self, AmmPair, AmmPoolState, BitAssetSeqId, DutchAuctionState},
@@ -29,7 +29,7 @@ use liquid_simplicity::{
     },
     wallet::Balance,
 };
-use liquid_simplicity_app_rpc_api::{
+use plain_bitassets_app_rpc_api::{
     FLORESTA_UTREEXO_ANCHOR_SERVICES, FlorestaUtreexoAnchor,
     FlorestaUtreexoPeerSource, LiteWalletProofRef, LiteWalletUpdate,
     LiteWalletUtreexoProof, RpcServer, TxInfo, TxProof,
@@ -51,7 +51,7 @@ use futures::stream::{self, Stream};
 use std::pin::Pin;
 use tonic::{Request, Response, Status};
 
-use liquid_simplicity::types::proto::sidechain::generated::{
+use sidechain_utilities::types::proto::sidechain::generated::{
     self as sidechain,
     sidechain_service_server::{SidechainService, SidechainServiceServer},
     *,
@@ -384,14 +384,14 @@ impl RpcServerImpl {
                 for txid in confirmed_watched_utxos
                     .keys()
                     .filter_map(|outpoint| match outpoint {
-                        liquid_simplicity::types::OutPoint::Regular {
+                        sidechain_utilities::types::OutPoint::Regular {
                             txid,
                             vout: _,
                         } => Some(*txid),
-                        liquid_simplicity::types::OutPoint::Coinbase {
+                        sidechain_utilities::types::OutPoint::Coinbase {
                             ..
                         }
-                        | liquid_simplicity::types::OutPoint::Deposit(_) => None,
+                        | sidechain_utilities::types::OutPoint::Deposit(_) => None,
                     })
                     .collect::<HashSet<_>>()
                 {
@@ -476,7 +476,7 @@ impl RpcServerImpl {
                                     &output.address,
                                 )) {
                                     created_utxos.push(PointedOutput {
-                                        outpoint: liquid_simplicity::types::OutPoint::Regular {
+                                        outpoint: sidechain_utilities::types::OutPoint::Regular {
                                             txid,
                                             vout: vout as u32,
                                         },
@@ -924,7 +924,7 @@ impl RpcServer for RpcServerImpl {
 
     async fn get_bmm_inclusions(
         &self,
-        block_hash: liquid_simplicity::types::BlockHash,
+        block_hash: sidechain_utilities::types::BlockHash,
     ) -> RpcResult<Vec<bitcoin::BlockHash>> {
         self.app
             .node
@@ -1248,7 +1248,7 @@ impl RpcServer for RpcServerImpl {
 
     async fn openapi_schema(&self) -> RpcResult<utoipa::openapi::OpenApi> {
         let res =
-            <liquid_simplicity_app_rpc_api::RpcDoc as utoipa::OpenApi>::openapi();
+            <plain_bitassets_app_rpc_api::RpcDoc as utoipa::OpenApi>::openapi();
         Ok(res)
     }
 
@@ -1783,41 +1783,32 @@ mod tests {
 }
 
 // === cusf.sidechain.v1.SidechainService gRPC server (BitWindow compatibility) ===
-// Minimal but functional proxy to elementsd :18443 (regtest, ID5).
-// Uses the same curl+cookie pattern as the BMM panel for zero new deps.
 
-fn elements_rpc(method: &str, params_json: &str) -> Result<serde_json::Value, String> {
-    let cookie = "__cookie__:b0e3e4ddc36861525be17bb9074d71ec5d7f66e92f6116f3c59038a5f4bccf39";
-    let data = format!(
-        r#"{{"jsonrpc":"1.0","id":"1","method":"{}","params":{}}}"#,
-        method, params_json
-    );
-    let out = std::process::Command::new("curl")
-        .arg("-s")
-        .arg("--user")
-        .arg(cookie)
-        .arg("--data-binary")
-        .arg(&data)
-        .arg("-H")
-        .arg("content-type: text/plain;")
-        .arg("http://127.0.0.1:18443/")
-        .output()
-        .map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        return Err(format!("curl failed: {}", String::from_utf8_lossy(&out.stderr)));
-    }
-    let s = String::from_utf8_lossy(&out.stdout);
-    let v: serde_json::Value = serde_json::from_str(&s).map_err(|e| e.to_string())?;
-    if let Some(err) = v.get("error") {
-        if !err.is_null() {
-            return Err(format!("elementsd error: {err}"));
-        }
-    }
-    Ok(v.get("result").cloned().unwrap_or(serde_json::Value::Null))
+#[derive(Clone)]
+struct SidechainGrpcImpl {
+    app: App,
 }
 
-#[derive(Clone, Default)]
-struct SidechainGrpcImpl;
+fn sidechain_sequence_id(app: &App) -> u64 {
+    app.node
+        .try_get_tip_height()
+        .ok()
+        .flatten()
+        .map(u64::from)
+        .unwrap_or_default()
+}
+
+fn sidechain_block_header_info(app: &App) -> Option<BlockHeaderInfo> {
+    let tip_hash = app.node.try_get_tip().ok().flatten()?;
+    let height = app.node.try_get_tip_height().ok().flatten()?;
+    let header = app.node.get_header(tip_hash).ok()?;
+    Some(BlockHeaderInfo {
+        block_hash: tip_hash.into(),
+        prev_block_hash: header.prev_side_hash.map(Vec::from).unwrap_or_default(),
+        prev_main_block_hash: header.prev_main_hash.as_byte_array().to_vec(),
+        height,
+    })
+}
 
 #[tonic::async_trait]
 impl SidechainService for SidechainGrpcImpl {
@@ -1825,10 +1816,10 @@ impl SidechainService for SidechainGrpcImpl {
         &self,
         _req: Request<GetMempoolTxsRequest>,
     ) -> Result<Response<GetMempoolTxsResponse>, Status> {
-        // Proxy call (result ignored; proto stub has no tx payload)
-        drop(elements_rpc("getrawmempool", "[]"));
         Ok(Response::new(GetMempoolTxsResponse {
-            sequence_id: Some(SequenceId { sequence_id: 1 }),
+            sequence_id: Some(SequenceId {
+                sequence_id: sidechain_sequence_id(&self.app),
+            }),
         }))
     }
 
@@ -1836,7 +1827,9 @@ impl SidechainService for SidechainGrpcImpl {
         &self,
         _req: Request<GetUtxosRequest>,
     ) -> Result<Response<GetUtxosResponse>, Status> {
-        drop(elements_rpc("listunspent", "[]"));
+        self.app.node.get_all_utxos().map_err(|err| {
+            Status::internal(format!("failed to read BitAssets UTXOs: {err:#}"))
+        })?;
         Ok(Response::new(GetUtxosResponse {}))
     }
 
@@ -1844,9 +1837,15 @@ impl SidechainService for SidechainGrpcImpl {
         &self,
         req: Request<SubmitTransactionRequest>,
     ) -> Result<Response<SubmitTransactionResponse>, Status> {
-        let tx_hex = hex::encode(&req.into_inner().transaction);
-        let params = format!(r#"["{}"]"#, tx_hex);
-        drop(elements_rpc("sendrawtransaction", &params));
+        let transaction = borsh::from_slice(&req.into_inner().transaction)
+            .map_err(|err| Status::invalid_argument(format!(
+                "failed to decode BitAssets authorized transaction: {err}"
+            )))?;
+        self.app.node.submit_transaction(transaction).map_err(|err| {
+            Status::invalid_argument(format!(
+                "failed to submit BitAssets transaction: {err:#}"
+            ))
+        })?;
         Ok(Response::new(SubmitTransactionResponse {}))
     }
 
@@ -1857,43 +1856,36 @@ impl SidechainService for SidechainGrpcImpl {
         &self,
         _req: Request<SubscribeEventsRequest>,
     ) -> Result<Response<Self::SubscribeEventsStream>, Status> {
-        // Send one ConnectBlock using current elements height (real impl would poll + stream deltas)
-        let height = elements_rpc("getblockcount", "[]")
-            .ok()
-            .and_then(|v| v.as_u64())
-            .unwrap_or(100) as u32;
-
-        let header = BlockHeaderInfo {
-            block_hash: vec![0u8; 32],
-            prev_block_hash: vec![0u8; 32],
-            prev_main_block_hash: vec![0u8; 32],
-            height,
-        };
-        let event = sidechain::subscribe_events_response::Event {
-            event: Some(
-                sidechain::subscribe_events_response::event::Event::ConnectBlock(
-                    sidechain::subscribe_events_response::event::ConnectBlock {
-                        header_info: Some(header),
-                        block_info: Some(BlockInfo {}),
-                    },
+        let sequence_id = sidechain_sequence_id(&self.app);
+        let header_info = sidechain_block_header_info(&self.app);
+        let event = header_info.map(|header_info| {
+            sidechain::subscribe_events_response::Event {
+                event: Some(
+                    sidechain::subscribe_events_response::event::Event::ConnectBlock(
+                        sidechain::subscribe_events_response::event::ConnectBlock {
+                            header_info: Some(header_info),
+                            block_info: Some(BlockInfo {}),
+                        },
+                    ),
                 ),
-            ),
-        };
-        let resp = SubscribeEventsResponse {
-            sequence_id: Some(SequenceId { sequence_id: 1 }),
-            event: Some(event),
-        };
-        let s = stream::once(async { Ok(resp) });
+            }
+        });
+        let s = stream::once(async move {
+            Ok(SubscribeEventsResponse {
+                sequence_id: Some(SequenceId { sequence_id }),
+                event,
+            })
+        });
         Ok(Response::new(Box::pin(s)))
     }
 }
 
 /// Start the SidechainService gRPC server so BitWindow can connect (localhost:50052 by default).
 pub async fn run_sidechain_grpc_server(
-    _app: App,
+    app: App,
     addr: std::net::SocketAddr,
 ) -> anyhow::Result<()> {
-    let svc = SidechainServiceServer::new(SidechainGrpcImpl::default());
+    let svc = SidechainServiceServer::new(SidechainGrpcImpl { app });
     // Health service so clients can discover readiness
     let (health_reporter, health_server) = tonic_health::server::health_reporter();
     health_reporter

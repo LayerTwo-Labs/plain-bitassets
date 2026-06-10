@@ -1,5 +1,5 @@
 [package]
-name = "liquid_simplicity"
+name = "sidechain_utilities"
 authors.workspace = true
 description.workspace = true
 edition.workspace = true
@@ -81,5 +81,5 @@ zmq = ["dep:zeromq"]
 workspace = true
 
 [lib]
-name = "liquid_simplicity"
+name = "sidechain_utilities"
 path = "lib.rs"

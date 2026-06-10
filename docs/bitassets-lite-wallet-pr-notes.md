@@ -143,7 +143,7 @@ QUIC_WAIT_SECS=90 \
 
 ```bash
 cargo check -p plain_bitassets_app_rpc_api -p plain_bitassets_app_cli -p plain_bitassets_app
-cargo test -p plain_bitassets --lib -- --quiet
+cargo test -p sidechain_utilities --lib -- --quiet
 cargo test -p plain_bitassets_app --bin plain_bitassets_app -- --quiet
 ```
 

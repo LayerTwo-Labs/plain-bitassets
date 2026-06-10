@@ -1,7 +1,7 @@
 use eframe::egui;
 use human_size::{Byte, Kibibyte, Mebibyte, SpecificSize};
 
-use liquid_simplicity::types::{Body, GetBitcoinValue, Header};
+use sidechain_utilities::types::{Body, GetBitcoinValue, Header};
 
 use crate::app::App;
 
