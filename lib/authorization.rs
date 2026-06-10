@@ -97,6 +97,10 @@ pub enum Error {
     BorshSerialize(#[from] borsh::io::Error),
     #[error("ed25519_dalek error")]
     DalekError(#[from] SignatureError),
+    #[error("not enough authorizations")]
+    NotEnoughAuthorizations,
+    #[error("too many authorizations")]
+    TooManyAuthorizations,
     #[error(
         "wrong key for address: address = {address},
              hash(verifying_key) = {hash_verifying_key}"
@@ -192,6 +196,22 @@ pub fn verify_authorized_transaction(
 }
 
 pub fn verify_authorizations(body: &Body) -> Result<(), Error> {
+    // Every input must be covered by exactly one authorization. Without this
+    // check, `body.authorizations.iter().zip(messages)` below silently
+    // truncates to the shorter iterator, so a body carrying fewer
+    // authorizations than inputs would leave the surplus inputs unverified
+    // (the same truncation also affects the address-binding `.zip()` in
+    // `state::block`). Reject any count mismatch up front, mirroring the
+    // sibling Rust L2s (e.g. Thunder).
+    let verifications_required: usize =
+        body.transactions.iter().map(|tx| tx.inputs.len()).sum();
+    match body.authorizations.len().cmp(&verifications_required) {
+        std::cmp::Ordering::Less => return Err(Error::NotEnoughAuthorizations),
+        std::cmp::Ordering::Equal => (),
+        std::cmp::Ordering::Greater => {
+            return Err(Error::TooManyAuthorizations);
+        }
+    }
     let input_numbers = body
         .transactions
         .iter()
@@ -316,4 +336,100 @@ pub fn authorize(
         authorizations,
         transaction,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{
+        BitcoinOutputContent, Body, OutPoint, Output, OutputContent,
+        Transaction, Txid,
+    };
+
+    /// Build a deterministic 2-input transaction plus a valid authorization
+    /// for it, so each test can vary only the *number* of authorizations in
+    /// the body.
+    fn tx_with_two_inputs() -> (Transaction, Authorization) {
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[1u8; 32]);
+        let verifying_key = VerifyingKey(signing_key.verifying_key());
+        let address = get_address(&verifying_key);
+
+        let tx = Transaction {
+            inputs: vec![
+                OutPoint::Regular {
+                    txid: Txid::default(),
+                    vout: 0,
+                },
+                OutPoint::Regular {
+                    txid: Txid::default(),
+                    vout: 1,
+                },
+            ],
+            outputs: vec![Output::new(
+                address,
+                OutputContent::Bitcoin(BitcoinOutputContent(
+                    bitcoin::Amount::ZERO,
+                )),
+            )],
+            memo: vec![],
+            data: None,
+        };
+
+        let signature = sign_tx(&signing_key, &tx).unwrap();
+        let authorization = Authorization {
+            verifying_key,
+            signature,
+        };
+        (tx, authorization)
+    }
+
+    /// BA-001 regression: a body carrying fewer authorizations than inputs
+    /// (2 inputs, 1 auth) must be rejected. Before the count check this
+    /// returned `Ok`, leaving the second input unverified — a consensus-level
+    /// authorization bypass.
+    #[test]
+    fn rejects_too_few_authorizations() {
+        let (tx, authorization) = tx_with_two_inputs();
+        let body = Body {
+            coinbase: vec![],
+            transactions: vec![tx],
+            authorizations: vec![authorization],
+        };
+        assert!(matches!(
+            verify_authorizations(&body),
+            Err(Error::NotEnoughAuthorizations)
+        ));
+    }
+
+    /// A body carrying more authorizations than inputs must also be rejected.
+    #[test]
+    fn rejects_too_many_authorizations() {
+        let (tx, authorization) = tx_with_two_inputs();
+        let body = Body {
+            coinbase: vec![],
+            transactions: vec![tx],
+            authorizations: vec![
+                authorization.clone(),
+                authorization.clone(),
+                authorization,
+            ],
+        };
+        assert!(matches!(
+            verify_authorizations(&body),
+            Err(Error::TooManyAuthorizations)
+        ));
+    }
+
+    /// Control: the correct number of authorizations (2 auths for 2 inputs)
+    /// still passes, proving the signatures themselves are valid.
+    #[test]
+    fn accepts_matching_authorization_count() {
+        let (tx, authorization) = tx_with_two_inputs();
+        let body = Body {
+            coinbase: vec![],
+            transactions: vec![tx],
+            authorizations: vec![authorization.clone(), authorization],
+        };
+        assert!(verify_authorizations(&body).is_ok());
+    }
 }
