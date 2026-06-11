@@ -761,3 +761,117 @@ impl Watchable<()> for State {
         tokio_stream::wrappers::WatchStream::new(self.tip.watch().clone())
     }
 }
+
+#[cfg(test)]
+mod p2p_validation_bypass_tests {
+    use bitcoin::Amount;
+    use heed::EnvOpenOptions;
+
+    use crate::authorization::{Authorization, get_address, Signature};
+    use crate::mempool::MemPool;
+    use crate::state::State;
+    use crate::types::{
+        Address, FilledOutput, FilledOutputContent, OutPoint, OutPointKey, Output,
+        OutputContent, Transaction, Txid,
+    };
+
+    fn signing_key(seed: u8) -> ed25519_dalek::SigningKey {
+        ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
+    }
+
+    fn temp_env() -> sneed::Env {
+        let dir = std::env::temp_dir()
+            .join(format!("bitassets-p2p-test-{}", std::process::id()));
+        drop(std::fs::remove_dir_all(&dir));
+        std::fs::create_dir_all(&dir).expect("create temp env dir");
+        let mut opts = EnvOpenOptions::new();
+        opts.map_size(16 * 1024 * 1024)
+            .max_dbs(State::NUM_DBS + MemPool::NUM_DBS + 4);
+        unsafe { sneed::Env::open(&opts, &dir) }.expect("open env")
+    }
+
+    #[test]
+    fn p2p_path_accepts_transaction_that_validation_rejects() {
+        let env = temp_env();
+        let state = State::new(&env).expect("State::new");
+        let mempool = MemPool::new(&env).expect("MemPool::new");
+
+        let victim = signing_key(1);
+        let victim_vk = crate::types::VerifyingKey(victim.verifying_key());
+        let victim_addr: Address = get_address(&victim_vk);
+        let funding_outpoint = OutPoint::Regular {
+            txid: Txid([7u8; 32]),
+            vout: 0,
+        };
+        let funded_output = FilledOutput {
+            address: victim_addr,
+            content: FilledOutputContent::Bitcoin(crate::types::BitcoinOutputContent(
+                Amount::from_sat(100_000),
+            )),
+            memo: vec![],
+        };
+        {
+            let mut rwtxn = env.write_txn().expect("write txn");
+            state
+                .utxos
+                .put(&mut rwtxn, &OutPointKey::from(&funding_outpoint), &funded_output)
+                .expect("put utxo");
+            rwtxn.commit().expect("commit funding");
+        }
+
+        let tx = Transaction {
+            inputs: vec![funding_outpoint],
+            outputs: vec![Output {
+                address: get_address(&crate::types::VerifyingKey(signing_key(2).verifying_key())),
+                content: OutputContent::Bitcoin(crate::types::BitcoinOutputContent(
+                    Amount::from_sat(90_000),
+                )),
+                memo: vec![],
+            }],
+            memo: vec![],
+            data: None,
+        };
+
+        let forged = Authorization {
+            verifying_key: victim_vk,
+            signature: Signature(ed25519_dalek::Signature::from_bytes(&[0u8; 64])),
+        };
+        let authd_tx = crate::types::AuthorizedTransaction {
+            transaction: tx,
+            authorizations: vec![forged],
+        };
+
+        {
+            let rotxn = env.read_txn().expect("read txn");
+            let result = state.validate_transaction(&rotxn, &authd_tx);
+            eprintln!("validate_transaction(forged tx) => {result:?}");
+            assert!(result.is_err(), "validator must reject the forged-sig tx: {result:?}");
+            assert!(
+                format!("{result:?}").to_lowercase().contains("authoriz"),
+                "rejection must be an authorization error, got {result:?}"
+            );
+        }
+
+        {
+            let mut rwtxn = env.write_txn().expect("write txn");
+            mempool
+                .put(&mut rwtxn, &authd_tx)
+                .expect("mempool.put accepted the invalid tx (the bug)");
+            rwtxn.commit().expect("commit mempool");
+        }
+
+        {
+            let rotxn = env.read_txn().expect("read txn");
+            let in_mempool = mempool.take_all(&rotxn).expect("take_all");
+            assert_eq!(
+                in_mempool.len(),
+                1,
+                "the forged-signature tx must be sitting in the mempool"
+            );
+            assert_eq!(
+                in_mempool[0].transaction.txid(),
+                authd_tx.transaction.txid(),
+            );
+        }
+    }
+}

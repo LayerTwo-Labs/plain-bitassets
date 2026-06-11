@@ -1117,6 +1117,15 @@ impl NetTask {
                                 .env
                                 .write_txn()
                                 .map_err(EnvError::from)?;
+                            // Validate the peer-supplied transaction before
+                            // accepting it into the mempool, mirroring the RPC
+                            // path (`Node::submit_transaction`). Without this,
+                            // transactions with invalid signatures / failing
+                            // balance checks are accepted and re-broadcast.
+                            let _: bitcoin::Amount = self
+                                .ctxt
+                                .state
+                                .validate_transaction(&rwtxn, &new_tx)?;
                             self.ctxt.mempool.put(&mut rwtxn, &new_tx)?;
                             rwtxn.commit().map_err(RwTxnError::from)?;
                             // broadcast
