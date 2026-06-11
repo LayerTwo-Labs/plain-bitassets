@@ -30,6 +30,7 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2.9.1
         with:
+          cache-bin: false
           shared-key: x86_64-unknown-linux-gnu
 
       - name: Rustfmt
@@ -93,6 +94,7 @@ jobs:
       - name: Rust Cache (electrs)
         uses: Swatinem/rust-cache@v2.9.1
         with:
+          cache-bin: false
           prefix-key: "v0-rust-electrs"
           workspaces: ../electrs -> target
       - name: Install electrs
@@ -106,6 +108,7 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2.9.1
         with:
+          cache-bin: false
           shared-key: x86_64-unknown-linux-gnu
       - name: Build (debug)
         run: cargo build
@@ -160,6 +163,7 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2.9.1
         with:
+          cache-bin: false
           key: ${{ matrix.name }}
 
       - name: Install windows-specific deps
