@@ -25,7 +25,7 @@ pub use address::Address;
 pub use bitasset_data::{BitAssetData, BitAssetDataUpdates, Update};
 pub use hashes::{
     AssetId, BitAssetId, BlockHash, DutchAuctionId, Hash, M6id, MerkleRoot,
-    Txid,
+    MerkleProof, MerkleProofNode, Txid,
 };
 pub use keys::{EncryptionPubKey, VerifyingKey};
 pub use transaction::{
@@ -365,8 +365,62 @@ impl Body {
         coinbase: &[Output],
         txs: &[Transaction],
     ) -> MerkleRoot {
-        // FIXME: Compute actual merkle root instead of just a hash.
-        hashes::hash_with_scratch_buffer(&(coinbase, txs)).into()
+        let mut leaves = Vec::with_capacity(txs.len() + 1);
+        leaves.push(hashes::hash_with_scratch_buffer(&coinbase));
+        leaves.extend(txs.iter().map(hashes::hash_with_scratch_buffer));
+        Body::compute_cbmt_tree(&leaves)[0].into()
+    }
+
+    // https://github.com/nervosnetwork/merkle-tree/blob/5d1898263e7167560fdaa62f09e8d52991a1c712/README.md#tree-struct
+    fn compute_cbmt_tree(leaves: &[Hash]) -> Vec<Hash> {
+        let n = leaves.len();
+        let mut nodes = vec![Hash::default(); 2 * n - 1];
+
+        nodes[n - 1..].copy_from_slice(leaves);
+
+        for idx in (0..n - 1).rev() {
+            nodes[idx] = hashes::hash_with_scratch_buffer(&(
+                nodes[2 * idx + 1],
+                nodes[2 * idx + 2],
+            ));
+        }
+
+        nodes
+    }
+
+    pub fn compute_tx_merkle_proof(
+        coinbase: &[Output],
+        txs: &[Transaction],
+        tx_idx: usize,
+    ) -> MerkleProof {
+        let mut leaves = Vec::with_capacity(txs.len() + 1);
+        leaves.push(hashes::hash_with_scratch_buffer(&coinbase));
+        leaves.extend(txs.iter().map(hashes::hash_with_scratch_buffer));
+        Body::compute_cbmt_proof(&leaves, tx_idx + 1)
+    }
+
+    fn compute_cbmt_proof(leaves: &[Hash], leaf_index: usize) -> MerkleProof {
+        let n = leaves.len();
+        let nodes = Body::compute_cbmt_tree(leaves);
+        let mut idx = leaf_index + n - 1;
+        let mut siblings = Vec::new();
+
+        while idx > 0 {
+            let sibling_idx = (idx + 1) ^ 1;
+            let sibling_idx = sibling_idx - 1;
+
+            siblings.push(MerkleProofNode {
+                hash: nodes[sibling_idx],
+                is_left: sibling_idx < idx,
+            });
+
+            idx = (idx - 1) / 2;
+        }
+
+        MerkleProof {
+            leaf_index,
+            siblings,
+        }
     }
 
     pub fn get_inputs(&self) -> Vec<OutPoint> {
@@ -558,3 +612,66 @@ pub(crate) static VERSION: LazyLock<Version> = LazyLock::new(|| {
     const VERSION_STR: &str = env!("CARGO_PKG_VERSION");
     semver::Version::parse(VERSION_STR).unwrap().into()
 });
+
+#[cfg(test)]
+mod merkle_tests {
+    use super::*;
+
+    fn tx(memo: &[u8]) -> Transaction {
+        let mut tx = Transaction::default();
+        tx.memo = memo.to_vec();
+        tx
+    }
+
+    #[test]
+    fn tx_merkle_proof_verifies_membership() {
+        let coinbase = Vec::new();
+        let txs = vec![
+            tx(b"tx-0"),
+            tx(b"tx-1"),
+            tx(b"tx-2"),
+            tx(b"tx-3"),
+        ];
+
+        let root = Body::compute_merkle_root(&coinbase, &txs);
+        let proof = Body::compute_tx_merkle_proof(&coinbase, &txs, 2);
+        let leaf = hashes::hash_with_scratch_buffer(&txs[2]);
+
+        assert!(proof.verify(leaf, root));
+    }
+
+    #[test]
+    fn tx_merkle_proof_rejects_non_member() {
+        let coinbase = Vec::new();
+        let txs = vec![
+            tx(b"tx-0"),
+            tx(b"tx-1"),
+            tx(b"tx-2"),
+            tx(b"tx-3"),
+        ];
+        let other = tx(b"other");
+
+        let root = Body::compute_merkle_root(&coinbase, &txs);
+        let proof = Body::compute_tx_merkle_proof(&coinbase, &txs, 2);
+        let leaf = hashes::hash_with_scratch_buffer(&other);
+
+        assert!(!proof.verify(leaf, root));
+    }
+
+    #[test]
+    fn tx_merkle_proof_rejects_wrong_position() {
+        let coinbase = Vec::new();
+        let txs = vec![
+            tx(b"tx-0"),
+            tx(b"tx-1"),
+            tx(b"tx-2"),
+            tx(b"tx-3"),
+        ];
+
+        let root = Body::compute_merkle_root(&coinbase, &txs);
+        let proof = Body::compute_tx_merkle_proof(&coinbase, &txs, 2);
+        let leaf = hashes::hash_with_scratch_buffer(&txs[1]);
+
+        assert!(!proof.verify(leaf, root));
+    }
+}
