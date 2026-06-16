@@ -10,12 +10,12 @@ use sneed::{DatabaseUnique, RoDatabaseUnique, RoTxn, RwTxn, UnitKey};
 use crate::{
     authorization::Authorization,
     types::{
-        Address, AmountOverflowError, Authorized, AuthorizedTransaction,
-        BitAssetId, BlockHash, Body, FilledOutput, FilledTransaction,
-        GetAddress as _, GetBitcoinValue as _, Header, InPoint, M6id, OutPoint,
-        OutPointKey, SpentOutput, Transaction, TxData, VERSION, Verify as _,
-        Version, WithdrawalBundle, WithdrawalBundleStatus,
-        proto::mainchain::TwoWayPegData,
+        Address, AddressOutPointKey, AmountOverflowError, Authorized,
+        AuthorizedTransaction, BitAssetId, BlockHash, Body, FilledOutput,
+        FilledTransaction, GetAddress as _, GetBitcoinValue as _, Header,
+        InPoint, M6id, OutPoint, OutPointKey, SpentOutput, Transaction, TxData,
+        VERSION, Verify as _, Version, WithdrawalBundle,
+        WithdrawalBundleStatus, proto::mainchain::TwoWayPegData,
     },
     util::Watchable,
 };
@@ -68,6 +68,18 @@ type WithdrawalBundlesDb = DatabaseUnique<
     )>,
 >;
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct UtxoEntry {
+    pub created_height: u32,
+    pub output: FilledOutput,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SpentUtxoEntry {
+    pub created_height: u32,
+    pub output: SpentOutput,
+}
+
 #[derive(Clone)]
 pub struct State {
     /// Current tip
@@ -80,7 +92,9 @@ pub struct State {
     /// Associates Dutch auction sequence numbers with auction state
     dutch_auctions: dutch_auction::Db,
     utxos: DatabaseUnique<OutPointKey, SerdeBincode<FilledOutput>>,
-    stxos: DatabaseUnique<OutPointKey, SerdeBincode<SpentOutput>>,
+    utxos_by_address:
+        DatabaseUnique<AddressOutPointKey, SerdeBincode<UtxoEntry>>,
+    stxos: DatabaseUnique<OutPointKey, SerdeBincode<SpentUtxoEntry>>,
     /// Pending withdrawal bundle. MUST exist in withdrawal_bundles
     pending_withdrawal_bundle: DatabaseUnique<UnitKey, SerdeBincode<M6id>>,
     /// Latest failed (known) withdrawal bundle
@@ -104,7 +118,7 @@ pub struct State {
 }
 
 impl State {
-    pub const NUM_DBS: u32 = bitassets::Dbs::NUM_DBS + 12;
+    pub const NUM_DBS: u32 = bitassets::Dbs::NUM_DBS + 12 + 1;
 
     pub fn new(env: &sneed::Env) -> Result<Self, Error> {
         let mut rwtxn = env.write_txn()?;
@@ -115,6 +129,8 @@ impl State {
         let dutch_auctions =
             DatabaseUnique::create(env, &mut rwtxn, "dutch_auctions")?;
         let utxos = DatabaseUnique::create(env, &mut rwtxn, "utxos")?;
+        let utxos_by_address =
+            DatabaseUnique::create(env, &mut rwtxn, "utxos_by_address")?;
         let stxos = DatabaseUnique::create(env, &mut rwtxn, "stxos")?;
         let pending_withdrawal_bundle = DatabaseUnique::create(
             env,
@@ -147,6 +163,7 @@ impl State {
             bitassets,
             dutch_auctions,
             utxos,
+            utxos_by_address,
             stxos,
             pending_withdrawal_bundle,
             latest_failed_withdrawal_bundle,
@@ -180,8 +197,77 @@ impl State {
 
     pub fn stxos(
         &self,
-    ) -> &RoDatabaseUnique<OutPointKey, SerdeBincode<SpentOutput>> {
+    ) -> &RoDatabaseUnique<OutPointKey, SerdeBincode<SpentUtxoEntry>> {
         &self.stxos
+    }
+
+    fn put_utxo(
+        &self,
+        rwtxn: &mut RwTxn,
+        outpoint_key: OutPointKey,
+        output: FilledOutput,
+        created_height: u32,
+    ) -> Result<AddressOutPointKey, sneed::db::Error> {
+        let entry = UtxoEntry {
+            created_height,
+            output,
+        };
+        let address_key =
+            AddressOutPointKey::new(entry.output.address, outpoint_key);
+        self.utxos_by_address.put(rwtxn, &address_key, &entry)?;
+        self.utxos.put(rwtxn, &outpoint_key, &entry.output)?;
+        Ok(address_key)
+    }
+
+    fn delete_utxo(
+        &self,
+        rwtxn: &mut RwTxn,
+        address_key: &AddressOutPointKey,
+    ) -> Result<bool, sneed::db::Error> {
+        self.utxos_by_address.delete(rwtxn, &address_key)?;
+        Ok(self.utxos.delete(rwtxn, &address_key.outpoint_key())?)
+    }
+
+    fn spend_utxo(
+        &self,
+        rwtxn: &mut RwTxn,
+        outpoint_key: OutPointKey,
+        spent_output: SpentOutput,
+    ) -> Result<bool, sneed::db::Error> {
+        let address_key =
+            AddressOutPointKey::new(spent_output.output.address, outpoint_key);
+
+        let Some(entry) = self.utxos_by_address.try_get(rwtxn, &address_key)?
+        else {
+            return Ok(false);
+        };
+
+        let entry = SpentUtxoEntry {
+            created_height: entry.created_height,
+            output: spent_output,
+        };
+
+        self.stxos.put(rwtxn, &outpoint_key, &entry)?;
+        self.delete_utxo(rwtxn, &address_key)
+    }
+
+    fn unspend_utxo(
+        &self,
+        rwtxn: &mut RwTxn,
+        outpoint_key: &OutPointKey,
+    ) -> Result<bool, sneed::db::Error> {
+        let Some(entry) = self.stxos.try_get(rwtxn, outpoint_key)? else {
+            return Ok(false);
+        };
+
+        self.put_utxo(
+            rwtxn,
+            *outpoint_key,
+            entry.output.output,
+            entry.created_height,
+        )?;
+
+        Ok(self.stxos.delete(rwtxn, outpoint_key)?)
     }
 
     pub fn withdrawal_bundle_event_blocks(
@@ -222,13 +308,23 @@ impl State {
         &self,
         rotxn: &RoTxn,
         addresses: &HashSet<Address>,
+        height_threshold: u32,
     ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
-        let utxos: HashMap<OutPoint, FilledOutput> = self
-            .utxos
-            .iter(rotxn)?
-            .filter(|(_, output)| Ok(addresses.contains(&output.address)))
-            .map(|(key, output)| Ok((key.to_outpoint(), output)))
-            .collect()?;
+        let mut utxos = HashMap::new();
+        for address in addresses {
+            let start = AddressOutPointKey::start(*address);
+            let end = AddressOutPointKey::end(*address);
+            let mut iter = self
+                .utxos_by_address
+                .range(rotxn, &(start..=end))
+                .map_err(sneed::db::Error::from)?;
+            while let Some((key, entry)) = iter.next()? {
+                if entry.created_height >= height_threshold {
+                    let outpoint = key.outpoint_key().to_outpoint();
+                    utxos.insert(outpoint, entry.output);
+                }
+            }
+        }
         Ok(utxos)
     }
 
@@ -300,13 +396,13 @@ impl State {
                 .try_get(rotxn, &key)?
                 .ok_or(Error::NoStxo { outpoint: *input })?;
             assert_eq!(
-                stxo.inpoint,
+                stxo.output.inpoint,
                 InPoint::Regular {
                     txid,
                     vin: vin as u32
                 }
             );
-            spent_utxos.push(stxo.output);
+            spent_utxos.push(stxo.output.output);
         }
         spent_utxos.reverse();
         Ok(FilledTransaction {
@@ -656,7 +752,8 @@ impl State {
         let mut total_deposit_stxo_value = bitcoin::Amount::ZERO;
         let mut total_withdrawal_stxo_value = bitcoin::Amount::ZERO;
         self.stxos.iter(rotxn)?.map_err(Error::from).for_each(
-            |(outpoint_key, spent_output)| {
+            |(outpoint_key, spent_entry)| {
+                let spent_output = spent_entry.output;
                 let outpoint = outpoint_key.to_outpoint();
                 if let OutPoint::Deposit(_) = outpoint {
                     total_deposit_stxo_value = total_deposit_stxo_value

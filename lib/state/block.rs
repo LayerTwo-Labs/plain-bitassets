@@ -6,8 +6,8 @@ use sneed::{RoTxn, RwTxn};
 use crate::{
     state::{Error, PrevalidatedBlock, State, amm, dutch_auction, error},
     types::{
-        AmountOverflowError, Authorization, BitAssetId, BlockHash, Body,
-        FilledOutput, FilledOutputContent, GetAddress as _,
+        AddressOutPointKey, AmountOverflowError, Authorization, BitAssetId,
+        BlockHash, Body, FilledOutput, FilledOutputContent, GetAddress as _,
         GetBitcoinValue as _, Hash, Header, InPoint, OutPoint, OutPointKey,
         OutputContent, SpentOutput, TxData, Verify as _,
     },
@@ -207,8 +207,6 @@ pub fn connect_prevalidated(
         .sum::<usize>()
         + body.coinbase.len();
 
-    // Use Vec + sort_unstable instead of individual DB operations for better performance
-    let mut utxo_deletes: Vec<OutPointKey> = Vec::with_capacity(total_inputs);
     let mut stxo_puts: Vec<(OutPointKey, SpentOutput)> =
         Vec::with_capacity(total_inputs);
     let mut utxo_puts: Vec<(OutPointKey, FilledOutput)> =
@@ -263,7 +261,6 @@ pub fn connect_prevalidated(
                     vin: vin as u32,
                 },
             };
-            utxo_deletes.push(key);
             stxo_puts.push((key, spent_output));
         }
 
@@ -358,21 +355,20 @@ pub fn connect_prevalidated(
     }
 
     // Sort all vectors in parallel for optimal cursor access
-    utxo_deletes.par_sort_unstable();
     stxo_puts.par_sort_unstable_by_key(|(key, _)| *key);
     utxo_puts.par_sort_unstable_by_key(|(key, _)| *key);
 
-    // Apply all database operations using pre-sorted keys for optimal B-tree access
-    for key in &utxo_deletes {
-        state.utxos.delete(rwtxn, key)?;
+    for (key, output) in stxo_puts {
+        if !state.spend_utxo(rwtxn, key, output)? {
+            return Err(error::NoUtxo {
+                outpoint: key.to_outpoint(),
+            }
+            .into());
+        }
     }
 
-    for (key, spent_output) in &stxo_puts {
-        state.stxos.put(rwtxn, key, spent_output)?;
-    }
-
-    for (key, filled_output) in &utxo_puts {
-        state.utxos.put(rwtxn, key, filled_output)?;
+    for (key, filled_output) in utxo_puts {
+        state.put_utxo(rwtxn, key, filled_output, prevalidated.next_height)?;
     }
 
     // Update tip and height using precomputed values
@@ -433,7 +429,7 @@ pub fn connect(
             content: filled_content,
             memo: output.memo.clone(),
         };
-        state.utxos.put(rwtxn, &outpoint_key, &filled_output)?;
+        state.put_utxo(rwtxn, outpoint_key, filled_output, height)?;
     }
     for transaction in &body.transactions {
         let filled_tx = state.fill_transaction(rwtxn, transaction)?;
@@ -451,20 +447,21 @@ pub fn connect(
                     vin: vin as u32,
                 },
             };
-            state.utxos.delete(rwtxn, &input_key)?;
-            state.stxos.put(rwtxn, &input_key, &spent_output)?;
+            if !state.spend_utxo(rwtxn, input_key, spent_output)? {
+                return Err(error::NoUtxo { outpoint: *input }.into());
+            }
         }
         let Some(filled_outputs) = filled_tx.filled_outputs() else {
             let err = error::FillTxOutputContents(Box::new(filled_tx));
             return Err(err.into());
         };
-        for (vout, filled_output) in filled_outputs.iter().enumerate() {
+        for (vout, filled_output) in filled_outputs.into_iter().enumerate() {
             let outpoint = OutPoint::Regular {
                 txid,
                 vout: vout as u32,
             };
             let outpoint_key = OutPointKey::from_outpoint(&outpoint);
-            state.utxos.put(rwtxn, &outpoint_key, filled_output)?;
+            state.put_utxo(rwtxn, outpoint_key, filled_output, height)?;
         }
         match &transaction.data {
             None => (),
@@ -646,13 +643,15 @@ pub fn disconnect_tip(
         }
         // delete UTXOs, last-to-first
         tx.outputs.iter().enumerate().rev().try_for_each(
-            |(vout, _output)| {
+            |(vout, output)| {
                 let outpoint = OutPoint::Regular {
                     txid,
                     vout: vout as u32,
                 };
                 let outpoint_key = OutPointKey::from_outpoint(&outpoint);
-                if state.utxos.delete(rwtxn, &outpoint_key)? {
+                let address_key =
+                    AddressOutPointKey::new(output.address, outpoint_key);
+                if state.delete_utxo(rwtxn, &address_key)? {
                     Ok::<_, Error>(())
                 } else {
                     Err(error::NoUtxo { outpoint }.into())
@@ -662,13 +661,7 @@ pub fn disconnect_tip(
         // unspend STXOs, last-to-first
         tx.inputs.iter().rev().try_for_each(|outpoint| {
             let outpoint_key = OutPointKey::from_outpoint(outpoint);
-            if let Some(spent_output) =
-                state.stxos.try_get(rwtxn, &outpoint_key)?
-            {
-                state.stxos.delete(rwtxn, &outpoint_key)?;
-                state
-                    .utxos
-                    .put(rwtxn, &outpoint_key, &spent_output.output)?;
+            if state.unspend_utxo(rwtxn, &outpoint_key)? {
                 Ok(())
             } else {
                 Err(Error::NoStxo {
@@ -678,20 +671,24 @@ pub fn disconnect_tip(
         })
     })?;
     // delete coinbase UTXOs, last-to-first
-    body.coinbase.iter().enumerate().rev().try_for_each(
-        |(vout, _output)| {
+    body.coinbase
+        .iter()
+        .enumerate()
+        .rev()
+        .try_for_each(|(vout, output)| {
             let outpoint = OutPoint::Coinbase {
                 merkle_root: header.merkle_root,
                 vout: vout as u32,
             };
             let outpoint_key = OutPointKey::from_outpoint(&outpoint);
-            if state.utxos.delete(rwtxn, &outpoint_key)? {
+            let address_key =
+                AddressOutPointKey::new(output.address, outpoint_key);
+            if state.delete_utxo(rwtxn, &address_key)? {
                 Ok::<_, Error>(())
             } else {
                 Err(error::NoUtxo { outpoint }.into())
             }
-        },
-    )?;
+        })?;
     match (header.prev_side_hash, height) {
         (None, 0) => {
             state.tip.delete(rwtxn, &())?;

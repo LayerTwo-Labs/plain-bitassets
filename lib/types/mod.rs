@@ -24,17 +24,17 @@ mod transaction;
 pub use address::Address;
 pub use bitasset_data::{BitAssetData, BitAssetDataUpdates, Update};
 pub use hashes::{
-    AssetId, BitAssetId, BlockHash, DutchAuctionId, Hash, M6id, MerkleRoot,
-    MerkleProof, MerkleProofNode, Txid,
+    AssetId, BitAssetId, BlockHash, DutchAuctionId, Hash, M6id, MerkleProof,
+    MerkleProofNode, MerkleRoot, Txid,
 };
 pub use keys::{EncryptionPubKey, VerifyingKey};
 pub use transaction::{
-    AmmBurn, AmmMint, AmmSwap, AssetOutput, AssetOutputContent, Authorized,
-    AuthorizedTransaction, BitcoinOutput, BitcoinOutputContent,
-    DutchAuctionBid, DutchAuctionCollect, DutchAuctionParams, FilledOutput,
-    FilledOutputContent, FilledTransaction, InPoint, OutPoint, OutPointKey,
-    Output, OutputContent, PointedOutput, SpentOutput, Transaction, TxData,
-    TxInputs, WithdrawalOutputContent,
+    AddressOutPointKey, AmmBurn, AmmMint, AmmSwap, AssetOutput,
+    AssetOutputContent, Authorized, AuthorizedTransaction, BitcoinOutput,
+    BitcoinOutputContent, DutchAuctionBid, DutchAuctionCollect,
+    DutchAuctionParams, FilledOutput, FilledOutputContent, FilledTransaction,
+    InPoint, OutPoint, OutPointKey, Output, OutputContent, PointedOutput,
+    SpentOutput, Transaction, TxData, TxInputs, WithdrawalOutputContent,
 };
 
 pub const THIS_SIDECHAIN: u8 = 4;
@@ -626,12 +626,7 @@ mod merkle_tests {
     #[test]
     fn tx_merkle_proof_verifies_membership() {
         let coinbase = Vec::new();
-        let txs = vec![
-            tx(b"tx-0"),
-            tx(b"tx-1"),
-            tx(b"tx-2"),
-            tx(b"tx-3"),
-        ];
+        let txs = vec![tx(b"tx-0"), tx(b"tx-1"), tx(b"tx-2"), tx(b"tx-3")];
 
         let root = Body::compute_merkle_root(&coinbase, &txs);
         let proof = Body::compute_tx_merkle_proof(&coinbase, &txs, 2);
@@ -643,12 +638,7 @@ mod merkle_tests {
     #[test]
     fn tx_merkle_proof_rejects_non_member() {
         let coinbase = Vec::new();
-        let txs = vec![
-            tx(b"tx-0"),
-            tx(b"tx-1"),
-            tx(b"tx-2"),
-            tx(b"tx-3"),
-        ];
+        let txs = vec![tx(b"tx-0"), tx(b"tx-1"), tx(b"tx-2"), tx(b"tx-3")];
         let other = tx(b"other");
 
         let root = Body::compute_merkle_root(&coinbase, &txs);
@@ -661,12 +651,7 @@ mod merkle_tests {
     #[test]
     fn tx_merkle_proof_rejects_wrong_position() {
         let coinbase = Vec::new();
-        let txs = vec![
-            tx(b"tx-0"),
-            tx(b"tx-1"),
-            tx(b"tx-2"),
-            tx(b"tx-3"),
-        ];
+        let txs = vec![tx(b"tx-0"), tx(b"tx-1"), tx(b"tx-2"), tx(b"tx-3")];
 
         let root = Body::compute_merkle_root(&coinbase, &txs);
         let proof = Body::compute_tx_merkle_proof(&coinbase, &txs, 2);
