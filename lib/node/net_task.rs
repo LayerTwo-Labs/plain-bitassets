@@ -5,7 +5,7 @@ use std::{
     collections::{HashMap, HashSet},
     net::SocketAddr,
     sync::Arc,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use error_fatality::{Nested as _, Split};
@@ -129,6 +129,15 @@ impl From<net::Error> for Error {
     }
 }
 
+const TXDB_PRUNE_INTERVAL_BLOCKS: u32 = 144 * 7;
+const TXDB_RETENTION_SECS: u64 = 28 * 24 * 60 * 60;
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
+}
+
 fn connect_tip_(
     rwtxn: &mut RwTxn<'_>,
     archive: &Archive,
@@ -139,18 +148,30 @@ fn connect_tip_(
     two_way_peg_data: &mainchain::TwoWayPegData,
 ) -> Result<(), Error> {
     let block_hash = header.hash();
+    let prevalidated = state.prevalidate_block(rwtxn, header, body)?;
+    let block_height = prevalidated.next_height;
+    let merkle_root = prevalidated.computed_merkle_root;
+    let filled_txs = prevalidated.filled_transactions.clone();
+    state.connect_prevalidated_block(rwtxn, header, body, prevalidated)?;
     if tracing::enabled!(tracing::Level::DEBUG) {
-        let merkle_root =
-            Body::compute_merkle_root(&body.coinbase, &body.transactions);
-        let height = state.try_get_height(rwtxn)?;
-        state.apply_block(rwtxn, header, body)?;
-        tracing::debug!(?height, %merkle_root, %block_hash, "connected body")
-    } else {
-        state.apply_block(rwtxn, header, body)?;
+        tracing::debug!(height = block_height, %merkle_root, %block_hash, "connected body")
     }
     let () = state.connect_two_way_peg_data(rwtxn, two_way_peg_data)?;
     let () = archive.put_header(rwtxn, header)?;
     let () = archive.put_body(rwtxn, block_hash, body)?;
+    let unix_stamp = unix_now();
+    let () = archive.put_txdb_for_connected_block(
+        rwtxn,
+        block_hash,
+        block_height,
+        body,
+        &filled_txs,
+        unix_stamp,
+    )?;
+    if block_height > 0 && block_height % TXDB_PRUNE_INTERVAL_BLOCKS == 0 {
+        let cutoff_unix = unix_stamp.saturating_sub(TXDB_RETENTION_SECS);
+        let _ = archive.prune_txdb_older_than(rwtxn, cutoff_unix)?;
+    }
     for transaction in &body.transactions {
         let () = mempool.delete(rwtxn, transaction.txid())?;
     }
@@ -250,6 +271,7 @@ fn disconnect_tip_(
         }
     };
     let () = state.disconnect_two_way_peg_data(rwtxn, &two_way_peg_data)?;
+    let _ = archive.prune_txdb_block(rwtxn, tip_block_hash)?;
     let () = state.disconnect_tip(rwtxn, &tip_header, &tip_body)?;
     for transaction in tip_body.authorized_transactions().iter().rev() {
         mempool.put(rwtxn, transaction)?;

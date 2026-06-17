@@ -310,6 +310,80 @@ impl<'a> BytesDecode<'a> for AddressOutPointKey {
     }
 }
 
+const TXID_SIZE: usize = blake3::OUT_LEN;
+const ADDR_TXID_DB_KEY_SIZE: usize = ADDRESS_SIZE + TXID_SIZE;
+
+/// Fixed-width txdb key: address || txid.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct AddressTxidKey([u8; ADDR_TXID_DB_KEY_SIZE]);
+
+impl AddressTxidKey {
+    #[inline]
+    pub fn new(address: Address, txid: Txid) -> Self {
+        let mut key = [0u8; ADDR_TXID_DB_KEY_SIZE];
+        key[..ADDRESS_SIZE].copy_from_slice(&address.0);
+        key[ADDRESS_SIZE..].copy_from_slice(txid.as_slice());
+        Self(key)
+    }
+
+    #[inline]
+    pub fn start(address: Address) -> Self {
+        let mut key = [0u8; ADDR_TXID_DB_KEY_SIZE];
+        key[..ADDRESS_SIZE].copy_from_slice(&address.0);
+        Self(key)
+    }
+
+    #[inline]
+    pub fn end(address: Address) -> Self {
+        let mut key = [0xffu8; ADDR_TXID_DB_KEY_SIZE];
+        key[..ADDRESS_SIZE].copy_from_slice(&address.0);
+        Self(key)
+    }
+
+    #[inline]
+    pub fn address(&self) -> Address {
+        let mut address = [0u8; ADDRESS_SIZE];
+        address.copy_from_slice(&self.0[..ADDRESS_SIZE]);
+        Address(address)
+    }
+
+    #[inline]
+    pub fn txid(&self) -> Txid {
+        let mut txid = [0u8; TXID_SIZE];
+        txid.copy_from_slice(&self.0[ADDRESS_SIZE..]);
+        Txid(txid)
+    }
+}
+
+impl AsRef<[u8]> for AddressTxidKey {
+    #[inline]
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl<'a> BytesEncode<'a> for AddressTxidKey {
+    type EItem = AddressTxidKey;
+
+    #[inline]
+    fn bytes_encode(
+        item: &'a Self::EItem,
+    ) -> Result<Cow<'a, [u8]>, BoxedError> {
+        Ok(Cow::Borrowed(item.as_ref()))
+    }
+}
+
+impl<'a> BytesDecode<'a> for AddressTxidKey {
+    type DItem = AddressTxidKey;
+
+    #[inline]
+    fn bytes_decode(bytes: &'a [u8]) -> Result<Self::DItem, BoxedError> {
+        let mut key = [0u8; ADDR_TXID_DB_KEY_SIZE];
+        key.copy_from_slice(bytes);
+        Ok(Self(key))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{OUTPOINT_KEY_SIZE, OutPoint, OutPointKey};
