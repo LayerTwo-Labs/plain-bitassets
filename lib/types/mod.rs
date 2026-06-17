@@ -21,7 +21,7 @@ pub mod proto;
 pub mod schema;
 mod transaction;
 
-pub use address::Address;
+pub use address::{ADDRESS_SIZE, Address};
 pub use bitasset_data::{BitAssetData, BitAssetDataUpdates, Update};
 pub use hashes::{
     AssetId, BitAssetId, BlockHash, DutchAuctionId, Hash, M6id, MerkleProof,

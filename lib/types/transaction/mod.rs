@@ -18,7 +18,7 @@ use crate::{
     types::{
         AmountOverflowError, BitAssetData, BitAssetDataUpdates, GetAddress,
         GetBitcoinValue,
-        address::Address,
+        address::{ADDRESS_SIZE, Address},
         hashes::{
             self, AssetId, BitAssetId, DutchAuctionId, Hash, M6id, MerkleRoot,
             Txid,
@@ -114,7 +114,6 @@ impl std::fmt::Display for OutPoint {
     }
 }
 
-const ADDRESS_SIZE: usize = 20;
 const OUTPOINT_KEY_SIZE: usize = 37;
 const ADDRESS_OUTPOINT_KEY_SIZE: usize = ADDRESS_SIZE + OUTPOINT_KEY_SIZE;
 

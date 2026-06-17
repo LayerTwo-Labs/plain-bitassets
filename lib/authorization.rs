@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::types::{
-    Address, AuthorizedTransaction, Body, GetAddress, Transaction, Verify,
-    VerifyingKey,
+    ADDRESS_SIZE, Address, AuthorizedTransaction, Body, GetAddress,
+    Transaction, Verify, VerifyingKey,
 };
 
 pub use ed25519_dalek::{SignatureError, Signer, SigningKey, Verifier};
@@ -147,7 +147,7 @@ impl Verify for Authorization {
 pub fn get_address(verifying_key: &VerifyingKey) -> Address {
     let mut hasher = blake3::Hasher::new();
     let mut reader = hasher.update(&verifying_key.to_bytes()).finalize_xof();
-    let mut output: [u8; 20] = [0; 20];
+    let mut output: [u8; ADDRESS_SIZE] = [0; ADDRESS_SIZE];
     reader.fill(&mut output);
     Address(output)
 }
