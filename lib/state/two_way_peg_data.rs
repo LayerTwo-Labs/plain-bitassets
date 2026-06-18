@@ -1008,7 +1008,7 @@ mod tests {
             Address, BitcoinOutputContent, FilledOutput, FilledOutputContent,
             InPoint, M6id, OutPoint, OutPointKey, Txid, WithdrawalBundle,
             WithdrawalBundleEvent, WithdrawalBundleEventStatus,
-            WithdrawalBundleStatus,
+            WithdrawalBundleStatus, WithdrawalOutputContent,
             proto::mainchain::{BlockEvent, BlockInfo, TwoWayPegData},
         },
     };
@@ -1225,18 +1225,21 @@ mod tests {
                 txid: txid_bytes.into(),
                 vout: 0,
             };
-            let output = Output {
+            let output = FilledOutput {
                 address: {
                     let mut addr = [0u8; 20];
                     let idx = idx.to_be_bytes();
                     addr[..idx.len()].copy_from_slice(&idx);
                     Address::from(addr)
                 },
-                content: OutputContent::Withdrawal {
-                    value: bitcoin::Amount::from_sat(1_000),
-                    main_fee: bitcoin::Amount::ZERO,
-                    main_address: main_address(idx),
-                },
+                content: FilledOutputContent::BitcoinWithdrawal(
+                    WithdrawalOutputContent {
+                        value: bitcoin::Amount::from_sat(1_000),
+                        main_fee: bitcoin::Amount::ZERO,
+                        main_address: main_address(idx),
+                    },
+                ),
+                memo: Vec::new(),
             };
             state.utxos.put(
                 &mut rwtxn,
@@ -1281,5 +1284,100 @@ mod tests {
             "unexpected overweight P2WPKH bundle: {weight} wu"
         );
         Ok(())
+    }
+
+    // connecting a deposit then disconnecting it on a reorg must round-trip
+    #[test]
+    fn deposit_reorg_round_trips() {
+        use crate::types::proto::mainchain::Deposit;
+        use crate::types::{Body, Header, Transaction};
+
+        let env = temp_env("deposit_reorg_round_trips");
+        let state = State::new(&env).unwrap();
+
+        let empty_body = Body {
+            coinbase: Vec::new(),
+            transactions: Vec::new(),
+            authorizations: Vec::new(),
+        };
+        let no_txs: &[Transaction] = &[];
+        let merkle_root = Body::compute_merkle_root(&[], no_txs);
+        let main0 = bitcoin::BlockHash::from_byte_array([10; 32]);
+        let main1 = bitcoin::BlockHash::from_byte_array([11; 32]);
+
+        let genesis = Header {
+            merkle_root,
+            prev_side_hash: None,
+            prev_main_hash: main0,
+        };
+        {
+            let mut rwtxn = env.write_txn().unwrap();
+            state
+                .apply_block(&mut rwtxn, &genesis, &empty_body)
+                .unwrap();
+            state
+                .connect_two_way_peg_data(&mut rwtxn, &TwoWayPegData::default())
+                .unwrap();
+            rwtxn.commit().unwrap();
+        }
+
+        let block1 = Header {
+            merkle_root,
+            prev_side_hash: Some(genesis.hash()),
+            prev_main_hash: main1,
+        };
+        let deposit_outpoint = bitcoin::OutPoint {
+            txid: bitcoin::Txid::from_byte_array([2; 32]),
+            vout: 0,
+        };
+        let deposit_key =
+            OutPointKey::from(&OutPoint::Deposit(deposit_outpoint));
+        let deposit_twpd = {
+            let mut block_info = LinkedHashMap::new();
+            block_info.insert(
+                main1,
+                BlockInfo {
+                    bmm_commitment: None,
+                    events: vec![BlockEvent::Deposit(Deposit {
+                        tx_index: 0,
+                        outpoint: deposit_outpoint,
+                        output: FilledOutput {
+                            address: Address::ALL_ZEROS,
+                            content: FilledOutputContent::Bitcoin(
+                                BitcoinOutputContent(
+                                    bitcoin::Amount::from_sat(1000),
+                                ),
+                            ),
+                            memo: Vec::new(),
+                        },
+                    })],
+                },
+            );
+            TwoWayPegData { block_info }
+        };
+        {
+            let mut rwtxn = env.write_txn().unwrap();
+            state.apply_block(&mut rwtxn, &block1, &empty_body).unwrap();
+            state
+                .connect_two_way_peg_data(&mut rwtxn, &deposit_twpd)
+                .unwrap();
+            assert!(
+                state.utxos.try_get(&rwtxn, &deposit_key).unwrap().is_some()
+            );
+            assert!(state.deposit_blocks.last(&rwtxn).unwrap().is_some());
+            rwtxn.commit().unwrap();
+        }
+
+        {
+            let mut rwtxn = env.write_txn().unwrap();
+            state
+                .disconnect_two_way_peg_data(&mut rwtxn, &deposit_twpd)
+                .unwrap();
+            assert!(
+                state.utxos.try_get(&rwtxn, &deposit_key).unwrap().is_none()
+            );
+            assert!(state.deposit_blocks.last(&rwtxn).unwrap().is_none());
+            rwtxn.commit().unwrap();
+        }
     }
 }
