@@ -787,7 +787,7 @@ impl Watchable<()> for State {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use ed25519_dalek::SigningKey;
 
     use crate::{
@@ -795,14 +795,15 @@ mod tests {
         state::{Error, State, error},
         types::{
             Address, AuthorizedTransaction, BitAssetData, BitAssetId,
-            BitcoinOutputContent, FilledOutput, FilledOutputContent,
-            FilledTransaction, Hash, InPoint, OutPoint, OutPointKey, Output,
-            OutputContent, SpentOutput, Transaction, TxData, Txid,
-            VerifyingKey,
+            FilledOutput, FilledOutputContent, FilledTransaction, Hash,
+            InPoint, OutPoint, OutPointKey, Output, OutputContent, SpentOutput,
+            Transaction, TxData, Txid, VerifyingKey,
         },
     };
 
-    fn temp_env_path(test_name: &str) -> anyhow::Result<std::path::PathBuf> {
+    pub fn temp_env_path(
+        test_name: &str,
+    ) -> anyhow::Result<std::path::PathBuf> {
         let mut path = std::env::temp_dir();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
@@ -815,19 +816,27 @@ mod tests {
     }
 
     // open a fresh state-backed env in a unique temp dir
-    fn temp_env(test_name: &str) -> anyhow::Result<sneed::Env> {
+    pub fn temp_env(test_name: &str) -> anyhow::Result<sneed::Env> {
         let path = temp_env_path(test_name)?;
         std::fs::create_dir_all(&path)?;
         let mut opts = heed::EnvOpenOptions::new();
-        opts.map_size(16 * 1024 * 1024).max_dbs(State::NUM_DBS);
+        opts.map_size(64 * 1024 * 1024).max_dbs(State::NUM_DBS);
         let res = unsafe { sneed::Env::open(&opts, &path) }?;
         Ok(res)
     }
 
-    fn fresh_state(test_name: &str) -> anyhow::Result<(sneed::Env, State)> {
+    pub fn fresh_state(test_name: &str) -> anyhow::Result<(sneed::Env, State)> {
         let env = temp_env(test_name)?;
         let state = State::new(&env)?;
         Ok((env, state))
+    }
+
+    /// Create a bitcoin filled output
+    pub fn bitcoin_filled_output(address: Address, sats: u64) -> FilledOutput {
+        FilledOutput::new_bitcoin_value(
+            address,
+            bitcoin::Amount::from_sat(sats),
+        )
     }
 
     /// Fund `address` with a single bitcoin UTXO of `value` sats, returning its
@@ -836,18 +845,13 @@ mod tests {
         env: &sneed::Env,
         state: &State,
         address: Address,
-        value: u64,
+        value_sats: u64,
     ) -> OutPoint {
         let outpoint = OutPoint::Regular {
             txid: Default::default(),
             vout: 0,
         };
-        let output = FilledOutput::new(
-            address,
-            FilledOutputContent::Bitcoin(BitcoinOutputContent(
-                bitcoin::Amount::from_sat(value),
-            )),
-        );
+        let output = bitcoin_filled_output(address, value_sats);
         let mut rwtxn = env.write_txn().unwrap();
         state
             .utxos
@@ -912,12 +916,7 @@ mod tests {
 
         let transaction = Transaction::new(
             vec![outpoint],
-            vec![Output::new(
-                address,
-                OutputContent::Bitcoin(BitcoinOutputContent(
-                    bitcoin::Amount::from_sat(900),
-                )),
-            )],
+            vec![bitcoin_filled_output(address, 900).into()],
         );
 
         // The attack: spend the input while providing no authorization for it.
@@ -1008,13 +1007,6 @@ mod tests {
 
         use bitcoin::hashes::Hash as _;
 
-        let value_output = |sats: u64| FilledOutput {
-            address: Address::ALL_ZEROS,
-            content: FilledOutputContent::Bitcoin(BitcoinOutputContent(
-                bitcoin::Amount::from_sat(sats),
-            )),
-            memo: Vec::new(),
-        };
         let (env, state) = fresh_state("sidechain-wealth")?;
         {
             let mut rwtxn = env.write_txn()?;
@@ -1029,7 +1021,7 @@ mod tests {
             state.utxos.put(
                 &mut rwtxn,
                 &OutPointKey::from(&deposit_utxo_op),
-                &value_output(50),
+                &bitcoin_filled_output(Address::ALL_ZEROS, 50),
             )?;
 
             // Two spent DEPOSIT STXOs: 100 + 100 sats.
@@ -1039,7 +1031,7 @@ mod tests {
                     vout: 0,
                 });
                 let stxo = SpentOutput {
-                    output: value_output(sats),
+                    output: bitcoin_filled_output(Address::ALL_ZEROS, sats),
                     inpoint: InPoint::Regular {
                         txid: [i; 32].into(),
                         vin: 0,
@@ -1057,7 +1049,7 @@ mod tests {
                     vout: 0,
                 };
                 let stxo = SpentOutput {
-                    output: value_output(sats),
+                    output: bitcoin_filled_output(Address::ALL_ZEROS, sats),
                     inpoint: InPoint::Withdrawal {
                         m6id: crate::types::M6id(
                             bitcoin::Txid::from_byte_array([i; 32]),
