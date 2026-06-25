@@ -25,7 +25,7 @@ dirs = "6.0.0"
 dotenvy = "0.15.7"
 ed25519-dalek = "2.1.1"
 educe = { version = "0.6.0", default-features = false }
-eframe = "0.31.0"
+eframe = "0.34.0"
 either = "1.13.0"
 error-fatality = "0.1.2"
 fallible-iterator = "0.3.0"

@@ -58,8 +58,8 @@ impl MyBitAssets {
             known_name_bitasset_reservations,
             unknown_name_bitasset_reservations,
         ) = app.map(Self::get_bitasset_reservations).unwrap_or_default();
-        let _response = egui::SidePanel::left("My BitAsset Reservations")
-            .exact_width(350.)
+        let _response = egui::Panel::left("My BitAsset Reservations")
+            .exact_size(350.)
             .resizable(false)
             .show_inside(ui, move |ui| {
                 ui.heading("BitAsset Reservations");
@@ -144,8 +144,8 @@ impl MyBitAssets {
     pub fn show_bitassets(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
         let (known_name_bitassets, unknown_name_bitassets) =
             app.map(Self::get_bitassets).unwrap_or_default();
-        egui::SidePanel::left("My BitAssets")
-            .exact_width(350.)
+        egui::Panel::left("My BitAssets")
+            .exact_size(350.)
             .resizable(false)
             .show_inside(ui, |ui| {
                 ui.heading("BitAssets");

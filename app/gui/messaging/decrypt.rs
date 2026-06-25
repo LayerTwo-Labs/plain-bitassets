@@ -73,10 +73,15 @@ impl DecryptMessage {
             };
             self.receiver_pubkey = Some(receiver_pubkey);
         }
-        let ciphertext_response = ui
-            .horizontal_wrapped(|ui| {
-                ui.monospace("Ciphertext message (hex):\n")
-                    | ui.add(egui::TextEdit::multiline(&mut self.ciphertext))
+        let ciphertext_response = egui::Panel::left("ciphertext message")
+            .exact_size(ui.available_width() / 2.)
+            .resizable(false)
+            .show_inside(ui, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.monospace("Ciphertext message (hex):");
+                    ui.add(egui::TextEdit::multiline(&mut self.ciphertext))
+                })
+                .join()
             })
             .join();
         let receiver_pubkey = match &self.receiver_pubkey {

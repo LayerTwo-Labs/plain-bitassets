@@ -47,7 +47,7 @@ impl Coins {
         app: Option<&App>,
         ui: &mut egui::Ui,
     ) -> anyhow::Result<()> {
-        egui::TopBottomPanel::top("coins_tabs").show(ui.ctx(), |ui| {
+        egui::Panel::top("coins_tabs").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 Tab::iter().for_each(|tab_variant| {
                     let tab_name = tab_variant.to_string();
@@ -55,7 +55,7 @@ impl Coins {
                 })
             });
         });
-        egui::CentralPanel::default().show(ui.ctx(), |ui| match self.tab {
+        egui::CentralPanel::default().show_inside(ui, |ui| match self.tab {
             Tab::TransferReceive => {
                 let () = self.transfer_receive.show(app, ui);
             }

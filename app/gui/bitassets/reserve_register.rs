@@ -175,8 +175,8 @@ pub(super) struct ReserveRegister {
 
 impl ReserveRegister {
     pub fn show(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
-        egui::SidePanel::left("reserve")
-            .exact_width(ui.available_width() / 2.)
+        egui::Panel::left("reserve")
+            .exact_size(ui.available_width() / 2.)
             .resizable(false)
             .show_inside(ui, |ui| {
                 ui.vertical_centered(|ui| {
