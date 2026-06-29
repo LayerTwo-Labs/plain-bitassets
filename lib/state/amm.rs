@@ -299,15 +299,16 @@ impl PoolState {
     /// Returns the pool state after reverting a swap
     fn revert_swap(&self, swap: AmmSwap) -> Result<Self, Error> {
         let amm_pair = AmmPair::new(swap.asset_receive, swap.asset_spend);
-        let new_reserve0;
-        let new_reserve1;
-        if swap.asset_spend == amm_pair.asset1() {
-            new_reserve0 = self.reserve0 + swap.amount_receive;
-            new_reserve1 = self.reserve1 - swap.amount_spend;
-        } else {
-            new_reserve0 = self.reserve0 - swap.amount_spend;
-            new_reserve1 = self.reserve1 + swap.amount_receive;
-        }
+        let (new_reserve0, new_reserve1) =
+            if swap.asset_spend == amm_pair.asset1() {
+                let new_reserve0 = self.reserve0 + swap.amount_receive;
+                let new_reserve1 = self.reserve1 - swap.amount_spend;
+                (new_reserve0, new_reserve1)
+            } else {
+                let new_reserve0 = self.reserve0 - swap.amount_spend;
+                let new_reserve1 = self.reserve1 + swap.amount_receive;
+                (new_reserve0, new_reserve1)
+            };
         let new_state = Self {
             reserve0: new_reserve0,
             reserve1: new_reserve1,
@@ -477,19 +478,20 @@ pub(in crate::state) fn apply_swap(
             asset1: amm_pair.asset1(),
         }
     })?;
-    let new_amm_pool_state;
-    let amount_receive_after_fee;
-    if asset_spend < asset_receive {
-        new_amm_pool_state =
-            amm_pool_state.swap_asset0_for_asset1(amount_spend)?;
-        amount_receive_after_fee =
-            amm_pool_state.reserve1 - new_amm_pool_state.reserve1;
-    } else {
-        new_amm_pool_state =
-            amm_pool_state.swap_asset1_for_asset0(amount_spend)?;
-        amount_receive_after_fee =
-            amm_pool_state.reserve0 - new_amm_pool_state.reserve0;
-    };
+    let (new_amm_pool_state, amount_receive_after_fee) =
+        if asset_spend < asset_receive {
+            let new_amm_pool_state =
+                amm_pool_state.swap_asset0_for_asset1(amount_spend)?;
+            let amount_receive_after_fee =
+                amm_pool_state.reserve1 - new_amm_pool_state.reserve1;
+            (new_amm_pool_state, amount_receive_after_fee)
+        } else {
+            let new_amm_pool_state =
+                amm_pool_state.swap_asset1_for_asset0(amount_spend)?;
+            let amount_receive_after_fee =
+                amm_pool_state.reserve0 - new_amm_pool_state.reserve0;
+            (new_amm_pool_state, amount_receive_after_fee)
+        };
     if amount_receive != amount_receive_after_fee {
         return Err(Error::InvalidSwap);
     }
