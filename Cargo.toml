@@ -86,7 +86,7 @@ url = "2.5.4"
 utoipa = { version = "5.2.0", default-features = false }
 uuid = "1.13.1"
 x25519-dalek = "2.0.0"
-zeromq = "0.5.0"
+zeromq = "0.6.0"
 
 [workspace.dependencies.bip300301_enforcer_lib]
 default-features = false
