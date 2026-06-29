@@ -797,6 +797,7 @@ impl Watchable<()> for State {
 
 #[cfg(test)]
 mod test {
+    use bitcoin::hashes::Hash as _;
     use ed25519_dalek::SigningKey;
 
     use crate::{
@@ -806,7 +807,7 @@ mod test {
             Address, AuthorizedTransaction, BitAssetData, BitAssetId,
             FilledOutput, FilledOutputContent, FilledTransaction, Hash,
             InPoint, OutPoint, OutPointKey, Output, OutputContent, SpentOutput,
-            Transaction, TxData, Txid, VerifyingKey,
+            Transaction, TxData, Txid, VerifyingKey, WithdrawalOutputContent,
         },
     };
 
@@ -1007,6 +1008,48 @@ mod test {
         state.validate_bitassets(&rotxn, &tx).expect(
             "registration burning the matching reservation should validate",
         );
+        Ok(())
+    }
+
+    #[test]
+    fn cannot_spend_withdrawal_output() -> anyhow::Result<()> {
+        let (_temp_dir, env, state) =
+            fresh_state("cannot-spend-withdrawal-output")?;
+        let main_address = {
+            let pkh = bitcoin::PubkeyHash::hash(b"test pubkey");
+            bitcoin::Address::p2pkh(pkh, bitcoin::NetworkKind::Test)
+                .into_unchecked()
+        };
+        let withdrawal = FilledOutput {
+            address: Address::ALL_ZEROS,
+            content: FilledOutputContent::BitcoinWithdrawal(
+                WithdrawalOutputContent {
+                    value: bitcoin::Amount::from_sat(1000),
+                    main_fee: bitcoin::Amount::from_sat(300),
+                    main_address,
+                },
+            ),
+            memo: Vec::new(),
+        };
+        let outpoint = OutPoint::Regular {
+            txid: [1; 32].into(),
+            vout: 0,
+        };
+        let tx = FilledTransaction {
+            transaction: Transaction {
+                inputs: vec![outpoint],
+                outputs: vec![
+                    bitcoin_filled_output(Address::ALL_ZEROS, 1300).into(),
+                ],
+                ..Default::default()
+            },
+            spent_utxos: vec![withdrawal],
+        };
+        let rotxn = env.read_txn()?;
+        assert!(matches!(
+            state.validate_filled_transaction(&rotxn, &tx),
+            Err(crate::state::Error::SpendWithdrawalOutput { .. })
+        ));
         Ok(())
     }
 
