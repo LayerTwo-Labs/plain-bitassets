@@ -612,6 +612,15 @@ impl State {
         let () = self.validate_reservations(tx)?;
         let () = self.validate_bitassets(rotxn, tx)?;
         let fee = tx.bitcoin_fee()?;
+        for (outpoint, output) in tx.spent_inputs() {
+            // a withdrawal output is committed to a bundle and can only be
+            // spent by the bundle, never by a transaction
+            if output.content.is_withdrawal() {
+                return Err(Error::SpendWithdrawalOutput {
+                    outpoint: *outpoint,
+                });
+            }
+        }
         Ok(fee)
     }
 
