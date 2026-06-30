@@ -51,10 +51,15 @@ impl EncryptMessage {
                     .map_err(anyhow::Error::new),
             );
         }
-        let plaintext_response = ui
-            .horizontal_wrapped(|ui| {
-                ui.monospace("Plaintext message:\n")
-                    | ui.add(egui::TextEdit::multiline(&mut self.plaintext))
+        let plaintext_response = egui::Panel::left("plaintext message")
+            .exact_size(ui.available_width() / 2.)
+            .resizable(false)
+            .show_inside(ui, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.monospace("Plaintext message:");
+                    ui.add(egui::TextEdit::multiline(&mut self.plaintext))
+                })
+                .join()
             })
             .join();
         let receiver_pubkey = match &self.receiver_pubkey {

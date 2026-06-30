@@ -688,7 +688,7 @@ impl State {
                         .ok_or(AmountOverflowError)?;
                 }
                 if let InPoint::Withdrawal { .. } = spent_output.inpoint {
-                    total_withdrawal_stxo_value = total_deposit_stxo_value
+                    total_withdrawal_stxo_value = total_withdrawal_stxo_value
                         .checked_add(spent_output.output.get_bitcoin_value())
                         .ok_or(AmountOverflowError)?;
                 }
@@ -787,7 +787,7 @@ impl Watchable<()> for State {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use ed25519_dalek::SigningKey;
 
     use crate::{
@@ -795,29 +795,48 @@ mod tests {
         state::{Error, State, error},
         types::{
             Address, AuthorizedTransaction, BitAssetData, BitAssetId,
-            BitcoinOutputContent, FilledOutput, FilledOutputContent,
-            FilledTransaction, Hash, OutPoint, OutPointKey, Output,
-            OutputContent, Transaction, TxData, Txid, VerifyingKey,
+            FilledOutput, FilledOutputContent, FilledTransaction, Hash,
+            InPoint, OutPoint, OutPointKey, Output, OutputContent, SpentOutput,
+            Transaction, TxData, Txid, VerifyingKey,
         },
     };
 
-    /// Open a fresh state in a unique temporary directory.
-    fn new_state(dir_name_suffix: &str) -> (sneed::Env, State) {
-        let dir_name = if dir_name_suffix.is_empty() {
-            format!("bitassets_{}", std::process::id())
-        } else {
-            format!("bitassets_{dir_name_suffix}_{}", std::process::id())
-        };
-        let path = std::env::temp_dir().join(dir_name);
-        let _remove_result = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).unwrap();
-        let env = {
-            let mut opts = heed::EnvOpenOptions::new();
-            opts.map_size(10 * 1024 * 1024).max_dbs(State::NUM_DBS);
-            unsafe { sneed::Env::open(&opts, &path) }.unwrap()
-        };
-        let state = State::new(&env).unwrap();
-        (env, state)
+    pub fn temp_env_path(
+        test_name: &str,
+    ) -> anyhow::Result<std::path::PathBuf> {
+        let mut path = std::env::temp_dir();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        path.push(format!(
+            "bitassets-{test_name}-{}-{nanos}",
+            std::process::id()
+        ));
+        Ok(path)
+    }
+
+    // open a fresh state-backed env in a unique temp dir
+    pub fn temp_env(test_name: &str) -> anyhow::Result<sneed::Env> {
+        let path = temp_env_path(test_name)?;
+        std::fs::create_dir_all(&path)?;
+        let mut opts = heed::EnvOpenOptions::new();
+        opts.map_size(64 * 1024 * 1024).max_dbs(State::NUM_DBS);
+        let res = unsafe { sneed::Env::open(&opts, &path) }?;
+        Ok(res)
+    }
+
+    pub fn fresh_state(test_name: &str) -> anyhow::Result<(sneed::Env, State)> {
+        let env = temp_env(test_name)?;
+        let state = State::new(&env)?;
+        Ok((env, state))
+    }
+
+    /// Create a bitcoin filled output
+    pub fn bitcoin_filled_output(address: Address, sats: u64) -> FilledOutput {
+        FilledOutput::new_bitcoin_value(
+            address,
+            bitcoin::Amount::from_sat(sats),
+        )
     }
 
     /// Fund `address` with a single bitcoin UTXO of `value` sats, returning its
@@ -826,18 +845,13 @@ mod tests {
         env: &sneed::Env,
         state: &State,
         address: Address,
-        value: u64,
+        value_sats: u64,
     ) -> OutPoint {
         let outpoint = OutPoint::Regular {
             txid: Default::default(),
             vout: 0,
         };
-        let output = FilledOutput::new(
-            address,
-            FilledOutputContent::Bitcoin(BitcoinOutputContent(
-                bitcoin::Amount::from_sat(value),
-            )),
-        );
+        let output = bitcoin_filled_output(address, value_sats);
         let mut rwtxn = env.write_txn().unwrap();
         state
             .utxos
@@ -892,8 +906,9 @@ mod tests {
     /// spent UTXOs silently skips the unauthorized input, allowing any UTXO to
     /// be spent without a signature.
     #[test]
-    fn validate_transaction_rejects_missing_authorization() {
-        let (env, state) = new_state("auth_count");
+    fn validate_transaction_rejects_missing_authorization() -> anyhow::Result<()>
+    {
+        let (env, state) = fresh_state("auth_count")?;
         let signing_key = SigningKey::from_bytes(&[1u8; 32]);
         let verifying_key: VerifyingKey = signing_key.verifying_key().into();
         let address = authorization::get_address(&verifying_key);
@@ -901,12 +916,7 @@ mod tests {
 
         let transaction = Transaction::new(
             vec![outpoint],
-            vec![Output::new(
-                address,
-                OutputContent::Bitcoin(BitcoinOutputContent(
-                    bitcoin::Amount::from_sat(900),
-                )),
-            )],
+            vec![bitcoin_filled_output(address, 900).into()],
         );
 
         // The attack: spend the input while providing no authorization for it.
@@ -914,11 +924,11 @@ mod tests {
             transaction: transaction.clone(),
             authorizations: Vec::new(),
         };
-        let rotxn = env.read_txn().unwrap();
+        let rotxn = env.read_txn()?;
         let err = state
             .validate_transaction(&rotxn, &unauthorized)
             .expect_err("tx with no authorizations must be rejected");
-        assert!(
+        anyhow::ensure!(
             matches!(
                 err,
                 Error::Authorization(
@@ -930,11 +940,11 @@ mod tests {
 
         // The same transaction with a valid authorization is accepted.
         let authorized =
-            authorization::authorize(&[(address, &signing_key)], transaction)
-                .unwrap();
+            authorization::authorize(&[(address, &signing_key)], transaction)?;
         state
             .validate_transaction(&rotxn, &authorized)
             .expect("correctly authorized tx should validate");
+        Ok(())
     }
 
     /// A registration whose spent reservation does not commit to the
@@ -942,9 +952,10 @@ mod tests {
     /// later panics in `apply_registration`, which fails to find the
     /// reservation to burn.
     #[test]
-    fn validate_bitassets_rejects_registration_without_matching_reservation() {
-        let (env, state) = new_state("registration");
-        let rotxn = env.read_txn().unwrap();
+    fn validate_bitassets_rejects_registration_without_matching_reservation()
+    -> anyhow::Result<()> {
+        let (env, state) = fresh_state("registration")?;
+        let rotxn = env.read_txn()?;
         let name_hash = [7; 32];
         let bitasset_id = BitAssetId(name_hash);
         let revealed_nonce: Hash = [3; 32];
@@ -966,7 +977,7 @@ mod tests {
         let err = state.validate_bitassets(&rotxn, &tx).expect_err(
             "registration without a matching reservation must be rejected",
         );
-        assert!(
+        anyhow::ensure!(
             matches!(
                 err,
                 Error::BitAsset(
@@ -987,5 +998,84 @@ mod tests {
         state.validate_bitassets(&rotxn, &tx).expect(
             "registration burning the matching reservation should validate",
         );
+        Ok(())
+    }
+
+    #[test]
+    fn sidechain_wealth() -> anyhow::Result<()> {
+        use std::str::FromStr;
+
+        use bitcoin::hashes::Hash as _;
+
+        let (env, state) = fresh_state("sidechain-wealth")?;
+        {
+            let mut rwtxn = env.write_txn()?;
+
+            // One unspent DEPOSIT UTXO: 50 sats.
+            let deposit_utxo_op = OutPoint::Deposit(bitcoin::OutPoint {
+                txid: bitcoin::Txid::from_str(
+                    "0000000000000000000000000000000000000000000000000000000000000001",
+                )?,
+                vout: 0,
+            });
+            state.utxos.put(
+                &mut rwtxn,
+                &OutPointKey::from(&deposit_utxo_op),
+                &bitcoin_filled_output(Address::ALL_ZEROS, 50),
+            )?;
+
+            // Two spent DEPOSIT STXOs: 100 + 100 sats.
+            for (i, sats) in [(2u8, 100u64), (3u8, 100u64)] {
+                let op = OutPoint::Deposit(bitcoin::OutPoint {
+                    txid: bitcoin::Txid::from_byte_array([i; 32]),
+                    vout: 0,
+                });
+                let stxo = SpentOutput {
+                    output: bitcoin_filled_output(Address::ALL_ZEROS, sats),
+                    inpoint: InPoint::Regular {
+                        txid: [i; 32].into(),
+                        vin: 0,
+                    },
+                };
+                state
+                    .stxos
+                    .put(&mut rwtxn, &OutPointKey::from(&op), &stxo)?;
+            }
+
+            // Two WITHDRAWAL STXOs: 10 + 10 sats
+            for (i, sats) in [(4u8, 10u64), (5u8, 10u64)] {
+                let op = OutPoint::Regular {
+                    txid: [i; 32].into(),
+                    vout: 0,
+                };
+                let stxo = SpentOutput {
+                    output: bitcoin_filled_output(Address::ALL_ZEROS, sats),
+                    inpoint: InPoint::Withdrawal {
+                        m6id: crate::types::M6id(
+                            bitcoin::Txid::from_byte_array([i; 32]),
+                        ),
+                    },
+                };
+                state
+                    .stxos
+                    .put(&mut rwtxn, &OutPointKey::from(&op), &stxo)?;
+            }
+
+            rwtxn.commit()?;
+        }
+
+        let rotxn = env.read_txn()?;
+        let sidechain_wealth = state.sidechain_wealth(&rotxn)?;
+
+        // Correct value: deposit UTXO 50 + deposit STXOs 200 - withdrawal
+        // STXOs 20 = 230 sats.
+        let expected_sidechain_wealth = bitcoin::Amount::from_sat(230);
+        anyhow::ensure!(
+            sidechain_wealth == expected_sidechain_wealth,
+            "Expected sidechain wealth ({}), but computed ({})",
+            expected_sidechain_wealth,
+            sidechain_wealth,
+        );
+        Ok(())
     }
 }

@@ -531,7 +531,9 @@ pub use content::Content;
 mod filled_content {
     use serde::{Deserialize, Serialize};
 
-    use crate::types::{AssetId, BitAssetId, DutchAuctionId, Hash, Txid};
+    use crate::types::{
+        AssetId, BitAssetId, DutchAuctionId, Hash, Txid, transaction::output,
+    };
 
     /// Defines a FilledContent enum with the specified visibility, name,
     /// derives, and attributes for each variant
@@ -611,6 +613,12 @@ mod filled_content {
     );
 
     impl FilledContent {
+        /// Constructs a new filled Bitcoin value output
+        #[inline(always)]
+        pub fn new_bitcoin_value(amount: bitcoin::Amount) -> Self {
+            Self::Bitcoin(output::BitcoinContent(amount))
+        }
+
         /** Returns the BitAsset ID, if the filled
          * output content corresponds to a BitAsset. */
         pub fn bitasset(&self) -> Option<&BitAssetId> {
@@ -950,6 +958,7 @@ pub struct Output<OutputContent = Content> {
 }
 
 impl<Content> Output<Content> {
+    #[inline(always)]
     pub fn new(address: Address, content: Content) -> Self {
         Self {
             address,
@@ -1041,6 +1050,15 @@ impl From<TxOutput> for Option<AssetOutput> {
 pub type FilledOutput = Output<FilledContent>;
 
 impl FilledOutput {
+    /// Construct a new Bitcoin value output
+    #[inline(always)]
+    pub fn new_bitcoin_value(
+        address: Address,
+        amount: bitcoin::Amount,
+    ) -> Self {
+        Self::new(address, FilledContent::new_bitcoin_value(amount))
+    }
+
     /** Returns the BitAsset ID if the filled output content
      * corresponds to a BitAsset */
     pub fn bitasset(&self) -> Option<&BitAssetId> {

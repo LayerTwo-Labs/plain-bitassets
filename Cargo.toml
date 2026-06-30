@@ -25,7 +25,7 @@ dirs = "6.0.0"
 dotenvy = "0.15.7"
 ed25519-dalek = "2.1.1"
 educe = { version = "0.6.0", default-features = false }
-eframe = "0.31.0"
+eframe = "0.34.0"
 either = "1.13.0"
 error-fatality = "0.1.2"
 fallible-iterator = "0.3.0"
@@ -86,17 +86,17 @@ url = "2.5.4"
 utoipa = { version = "5.2.0", default-features = false }
 uuid = "1.13.1"
 x25519-dalek = "2.0.0"
-zeromq = "0.5.0"
+zeromq = "0.6.0"
 
 [workspace.dependencies.bip300301_enforcer_lib]
 default-features = false
 git = "https://github.com/LayerTwo-Labs/bip300301_enforcer"
-rev = "a4197ad2ae9d35252d12008ff616bce710b647d2"
+rev = "1100b6085d9ed64eeaf1b57b3c44609626bd4b23"
 
 [workspace.dependencies.bip300301_enforcer_integration_tests]
 default-features = false
 git = "https://github.com/LayerTwo-Labs/bip300301_enforcer"
-rev = "a4197ad2ae9d35252d12008ff616bce710b647d2"
+rev = "1100b6085d9ed64eeaf1b57b3c44609626bd4b23"
 
 [workspace.dependencies.l2l-openapi]
 git = "https://github.com/Ash-L2L/l2l-openapi"

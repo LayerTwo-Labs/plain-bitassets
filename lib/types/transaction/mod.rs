@@ -752,7 +752,7 @@ impl FilledTransaction {
         self.transaction.implied_reservation_commitment()
     }
 
-    /// Accessor for tx outputs
+    /// Accessor for tx inputs
     pub fn inputs(&self) -> &TxInputs {
         &self.transaction.inputs
     }

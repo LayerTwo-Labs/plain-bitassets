@@ -32,7 +32,7 @@ pub struct BitAssets {
 
 impl BitAssets {
     pub fn show(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
-        egui::TopBottomPanel::top("bitassets_tabs").show(ui.ctx(), |ui| {
+        egui::Panel::top("bitassets_tabs").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 Tab::iter().for_each(|tab_variant| {
                     let tab_name = tab_variant.to_string();
@@ -40,7 +40,7 @@ impl BitAssets {
                 })
             });
         });
-        egui::CentralPanel::default().show(ui.ctx(), |ui| match self.tab {
+        egui::CentralPanel::default().show_inside(ui, |ui| match self.tab {
             Tab::AllBitAssets => {
                 let () = self.all_bitassets.show(app, ui);
             }

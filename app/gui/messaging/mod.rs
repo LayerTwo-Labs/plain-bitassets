@@ -34,7 +34,7 @@ impl Messaging {
     }
 
     pub fn show(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
-        egui::TopBottomPanel::top("messaging_tabs").show(ui.ctx(), |ui| {
+        egui::Panel::top("messaging_tabs").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 Tab::iter().for_each(|tab_variant| {
                     let tab_name = tab_variant.to_string();
@@ -42,7 +42,7 @@ impl Messaging {
                 })
             });
         });
-        egui::CentralPanel::default().show(ui.ctx(), |ui| match self.tab {
+        egui::CentralPanel::default().show_inside(ui, |ui| match self.tab {
             Tab::Decrypt => {
                 self.decrypt.show(app, ui);
             }
