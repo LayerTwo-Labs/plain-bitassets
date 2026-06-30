@@ -26,6 +26,7 @@ use crate::{
     },
 };
 
+pub mod error;
 mod output;
 pub use output::{
     AssetContent as AssetOutputContent, AssetOutput,
@@ -954,17 +955,24 @@ impl FilledTransaction {
 
     /// Returns the difference between the value spent and value out, if it is
     /// non-negative.
-    pub fn bitcoin_fee(
-        &self,
-    ) -> Result<Option<bitcoin::Amount>, AmountOverflowError> {
-        let spent_value = self.spent_bitcoin_value()?;
-        let value_out = self.bitcoin_value_out()?;
-        if spent_value < value_out {
-            Ok(None)
-        } else {
-            Ok(Some(spent_value - value_out))
-        }
+    pub fn bitcoin_fee(&self) -> Result<bitcoin::Amount, error::BitcoinFee> {
+        use error::bitcoin_fee::Inner as ErrorInner;
+        let value_in = self
+            .spent_bitcoin_value()
+            .map_err(ErrorInner::ValueInOverflow)?;
+        let value_out = self
+            .bitcoin_value_out()
+            .map_err(ErrorInner::ValueOutOverflow)?;
+        let res =
+            value_in
+                .checked_sub(value_out)
+                .ok_or(ErrorInner::Underfunded {
+                    value_in,
+                    value_out,
+                })?;
+        Ok(res)
     }
+
     /// Return an iterator over spent reservations
     pub fn spent_reservations(
         &self,

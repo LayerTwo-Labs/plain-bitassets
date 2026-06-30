@@ -19,7 +19,7 @@ pub mod hashes;
 pub mod keys;
 pub mod proto;
 pub mod schema;
-mod transaction;
+pub mod transaction;
 
 pub use address::Address;
 pub use bitasset_data::{BitAssetData, BitAssetDataUpdates, Update};

@@ -458,7 +458,6 @@ impl RpcServer for RpcServerImpl {
             .transaction
             .bitcoin_fee()
             .map_err(custom_err)?
-            .unwrap()
             .to_sat();
         let res = TxInfo {
             confirmations,
