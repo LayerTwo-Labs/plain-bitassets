@@ -26,6 +26,7 @@ use crate::{
     },
 };
 
+pub mod error;
 mod output;
 pub use output::{
     AssetContent as AssetOutputContent, AssetOutput,
@@ -225,9 +226,17 @@ impl<'a> BytesDecode<'a> for OutPointKey {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{OUTPOINT_KEY_SIZE, OutPoint, OutPointKey};
+mod test {
     use bitcoin::hashes::Hash as _;
+
+    use crate::types::{
+        Address, GetBitcoinValue as _,
+        transaction::{
+            FilledOutput, FilledOutputContent, FilledTransaction,
+            OUTPOINT_KEY_SIZE, OutPoint, OutPointKey, Output, OutputContent,
+            Transaction, output,
+        },
+    };
 
     #[test]
     fn check_outpoint_key_size() -> anyhow::Result<()> {
@@ -258,6 +267,52 @@ mod tests {
             let decoded = OutPoint::from(key);
             anyhow::ensure!(decoded == op);
         }
+        Ok(())
+    }
+
+    // a withdrawal output must be funded for both its payout and its mainchain
+    // fee, since both leave the treasury
+    #[test]
+    fn withdrawal_value_includes_main_fee() -> anyhow::Result<()> {
+        let value = bitcoin::Amount::from_sat(1000);
+        let main_fee = bitcoin::Amount::from_sat(300);
+        let main_address = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2"
+            .parse::<bitcoin::Address<
+            bitcoin::address::NetworkUnchecked,
+        >>()?;
+        let withdrawal = Output {
+            address: Address::ALL_ZEROS,
+            content: OutputContent::Withdrawal(output::WithdrawalContent {
+                value,
+                main_fee,
+                main_address,
+            }),
+            memo: Vec::new(),
+        };
+        anyhow::ensure!(withdrawal.get_bitcoin_value() == value + main_fee);
+
+        let value_output = |amount| FilledOutput {
+            address: Address::ALL_ZEROS,
+            content: FilledOutputContent::Bitcoin(output::BitcoinContent(
+                amount,
+            )),
+            memo: Vec::new(),
+        };
+        let withdrawal_tx = |funding| FilledTransaction {
+            transaction: Transaction {
+                outputs: vec![withdrawal.clone()],
+                ..Default::default()
+            },
+            spent_utxos: vec![value_output(funding)],
+        };
+
+        // inputs covering only the payout are insufficient
+        anyhow::ensure!(withdrawal_tx(value).bitcoin_fee().is_err());
+        // inputs covering payout plus mainchain fee fully fund it
+        anyhow::ensure!(
+            withdrawal_tx(value + main_fee).bitcoin_fee()?
+                == bitcoin::Amount::ZERO
+        );
         Ok(())
     }
 }
@@ -954,17 +1009,24 @@ impl FilledTransaction {
 
     /// Returns the difference between the value spent and value out, if it is
     /// non-negative.
-    pub fn bitcoin_fee(
-        &self,
-    ) -> Result<Option<bitcoin::Amount>, AmountOverflowError> {
-        let spent_value = self.spent_bitcoin_value()?;
-        let value_out = self.bitcoin_value_out()?;
-        if spent_value < value_out {
-            Ok(None)
-        } else {
-            Ok(Some(spent_value - value_out))
-        }
+    pub fn bitcoin_fee(&self) -> Result<bitcoin::Amount, error::BitcoinFee> {
+        use error::bitcoin_fee::Inner as ErrorInner;
+        let value_in = self
+            .spent_bitcoin_value()
+            .map_err(ErrorInner::ValueInOverflow)?;
+        let value_out = self
+            .bitcoin_value_out()
+            .map_err(ErrorInner::ValueOutOverflow)?;
+        let res =
+            value_in
+                .checked_sub(value_out)
+                .ok_or(ErrorInner::Underfunded {
+                    value_in,
+                    value_out,
+                })?;
+        Ok(res)
     }
+
     /// Return an iterator over spent reservations
     pub fn spent_reservations(
         &self,

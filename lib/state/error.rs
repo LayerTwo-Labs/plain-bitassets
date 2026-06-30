@@ -8,6 +8,7 @@ use transitive::Transitive;
 use crate::types::{
     AmountOverflowError, AmountUnderflowError, AssetId, BitAssetId, BlockHash,
     Hash, M6id, MerkleRoot, OutPoint, Txid, WithdrawalBundleError,
+    transaction::error as transaction,
 };
 
 /// Errors related to an AMM pool
@@ -349,6 +350,8 @@ pub enum Error {
     BitAsset(#[from] BitAsset),
     #[error("bitasset {name_hash:?} already registered")]
     BitAssetAlreadyRegistered { name_hash: Hash },
+    #[error(transparent)]
+    BitcoinFee(#[from] transaction::BitcoinFee),
     #[error("bundle too heavy {weight} > {max_weight}")]
     BundleTooHeavy { weight: u64, max_weight: u64 },
     #[error(transparent)]
@@ -380,8 +383,6 @@ pub enum Error {
     NoDepositBlock,
     #[error("total fees less than coinbase value")]
     NotEnoughFees,
-    #[error("value in is less than value out")]
-    NotEnoughValueIn,
     #[error("no tip")]
     NoTip,
     #[error("stxo {outpoint} doesn't exist")]

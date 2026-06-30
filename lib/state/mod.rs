@@ -611,7 +611,8 @@ impl State {
     ) -> Result<bitcoin::Amount, Error> {
         let () = self.validate_reservations(tx)?;
         let () = self.validate_bitassets(rotxn, tx)?;
-        tx.bitcoin_fee()?.ok_or(Error::NotEnoughValueIn)
+        let fee = tx.bitcoin_fee()?;
+        Ok(fee)
     }
 
     pub fn validate_transaction(
