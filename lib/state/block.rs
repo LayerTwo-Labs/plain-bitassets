@@ -6,10 +6,10 @@ use sneed::{RoTxn, RwTxn};
 use crate::{
     state::{Error, PrevalidatedBlock, State, amm, dutch_auction, error},
     types::{
-        AmountOverflowError, Authorization, BitAssetId, BlockHash, Body,
-        FilledOutput, FilledOutputContent, GetAddress as _,
-        GetBitcoinValue as _, Hash, Header, InPoint, OutPoint, OutPointKey,
-        OutputContent, SpentOutput, TxData, Verify as _,
+        AmountOverflowError, Authorization, BitAssetId, Body, FilledOutput,
+        FilledOutputContent, GetAddress as _, GetBitcoinValue as _, Header,
+        InPoint, OutPoint, OutPointKey, OutputContent, SpentOutput, TxData,
+        Verify as _,
     },
 };
 
@@ -18,13 +18,19 @@ fn calculate_total_inputs(body: &Body) -> usize {
     body.transactions.iter().map(|t| t.inputs.len()).sum()
 }
 
-/// Validate a block, returning the merkle root and fees
+/// Validate a block, returning fees
 pub fn validate(
     state: &State,
     rotxn: &RoTxn,
     header: &Header,
     body: &Body,
 ) -> Result<bitcoin::Amount, Error> {
+    let body_size =
+        borsh::object_length(&body).map_err(Error::BorshSerialize)?;
+    if body_size > Body::MAX_SIZE {
+        return Err(Error::BodyTooLarge);
+    }
+
     let tip_hash = state.try_get_tip(rotxn)?;
     if header.prev_side_hash != tip_hash {
         let err = error::InvalidHeader::PrevSideHash {
@@ -97,6 +103,12 @@ pub fn prevalidate(
     header: &Header,
     body: &Body,
 ) -> Result<PrevalidatedBlock, Error> {
+    let body_size =
+        borsh::object_length(&body).map_err(Error::BorshSerialize)?;
+    if body_size > Body::MAX_SIZE {
+        return Err(Error::BodyTooLarge);
+    }
+
     let tip_hash = state.try_get_tip(rotxn)?;
     if header.prev_side_hash != tip_hash {
         let err = error::InvalidHeader::PrevSideHash {
@@ -173,7 +185,7 @@ pub fn prevalidate(
 
     Ok(PrevalidatedBlock {
         filled_transactions,
-        computed_merkle_root: BlockHash::from(Hash::from(computed_merkle_root)),
+        computed_merkle_root,
         total_fees,
         coinbase_value,
         next_height: height,
