@@ -40,7 +40,7 @@ pub const WITHDRAWAL_BUNDLE_FAILURE_GAP: u32 = 4;
 /// to avoid redundant computation during connection
 pub struct PrevalidatedBlock {
     pub filled_transactions: Vec<FilledTransaction>,
-    pub computed_merkle_root: crate::types::BlockHash,
+    pub computed_merkle_root: crate::types::MerkleRoot,
     pub total_fees: bitcoin::Amount,
     pub coinbase_value: bitcoin::Amount,
     pub next_height: u32, // Precomputed next height to avoid DB read in write txn

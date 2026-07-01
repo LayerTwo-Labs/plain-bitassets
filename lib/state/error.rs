@@ -352,6 +352,8 @@ pub enum Error {
     BitAssetAlreadyRegistered { name_hash: Hash },
     #[error(transparent)]
     BitcoinFee(#[from] transaction::BitcoinFee),
+    #[error("body too large")]
+    BodyTooLarge,
     #[error("bundle too heavy {weight} > {max_weight}")]
     BundleTooHeavy { weight: u64, max_weight: u64 },
     #[error(transparent)]
