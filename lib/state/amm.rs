@@ -584,7 +584,8 @@ mod test {
 
     #[test]
     fn apply_mint_burn_wrong_lp_baseline() -> anyhow::Result<()> {
-        let (env, state) = fresh_state("apply_mint_burn_wrong_lp_baseline")?;
+        let (_temp_dir, env, state) =
+            fresh_state("apply_mint_burn_wrong_lp_baseline")?;
 
         let asset_a = bitasset(1);
         let asset_b = bitasset(2);
@@ -700,14 +701,6 @@ mod test {
         assert_eq!(pool_after_burn.reserve0, 500_001);
         assert_eq!(pool_after_burn.reserve1, 500_001);
         assert_eq!(pool_after_burn.outstanding_lp_tokens, 500_001);
-
-        // cleanup
-        {
-            drop(state);
-            let path = env.path().clone();
-            drop(env);
-            std::fs::remove_dir_all(path)?;
-        }
         Ok(())
     }
 }
