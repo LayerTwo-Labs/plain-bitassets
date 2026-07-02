@@ -621,8 +621,7 @@ impl Dbs {
             })?;
         let new_total_supply = bitasset_data
             .total_supply
-            .0
-            .first()
+            .latest()
             .data
             .checked_add(mint_amount)
             .ok_or(Error::TotalSupplyOverflow)?;
@@ -659,9 +658,9 @@ impl Dbs {
             .ok_or(Error::Missing {
                 bitasset: minted_bitasset,
             })?;
-        let total_supply = bitasset_data.total_supply.0.first().data;
+        let total_supply = bitasset_data.total_supply.latest().data;
         let _ = bitasset_data.total_supply.pop();
-        let new_total_supply = bitasset_data.total_supply.0.first().data;
+        let new_total_supply = bitasset_data.total_supply.latest().data;
         assert_eq!(
             new_total_supply,
             total_supply
