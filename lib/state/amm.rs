@@ -417,7 +417,7 @@ pub(in crate::state) fn apply_mint(
     let new_amm_pool_state = amm_pool_state.mint(amount0, amount1)?;
     let lp_tokens_minted = new_amm_pool_state
         .outstanding_lp_tokens
-        .checked_sub(lp_token_mint)
+        .checked_sub(amm_pool_state.outstanding_lp_tokens)
         .ok_or(Error::InvalidMint)?;
     if lp_tokens_minted != lp_token_mint {
         do yeet Error::InvalidMint;
@@ -521,4 +521,185 @@ pub(in crate::state) fn revert_swap(
     let new_amm_pool_state = amm_pool_state.revert_swap(amm_swap)?;
     pools.put(rwtxn, &amm_pair, &new_amm_pool_state)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{
+        state::{
+            amm::{AmmPair, PoolState, apply_burn, apply_mint},
+            test::fresh_state,
+        },
+        types::{
+            Address, AssetId, BitAssetId, FilledOutput, FilledOutputContent,
+            FilledTransaction, OutPoint, Output, OutputContent, Transaction,
+            TxData, Txid,
+        },
+    };
+
+    fn bitasset(byte: u8) -> BitAssetId {
+        BitAssetId([byte; blake3::OUT_LEN])
+    }
+
+    fn txid(byte: u8) -> Txid {
+        Txid([byte; blake3::OUT_LEN])
+    }
+
+    fn outpoint(byte: u8, vout: u32) -> OutPoint {
+        OutPoint::Regular {
+            txid: txid(byte),
+            vout,
+        }
+    }
+
+    fn bitasset_output(asset: BitAssetId, value: u64) -> FilledOutput {
+        Output::new(
+            Address::ALL_ZEROS,
+            FilledOutputContent::BitAsset(asset, value),
+        )
+    }
+
+    fn lp_output(
+        asset0: AssetId,
+        asset1: AssetId,
+        amount: u64,
+    ) -> FilledOutput {
+        Output::new(
+            Address::ALL_ZEROS,
+            FilledOutputContent::AmmLpToken {
+                asset0,
+                asset1,
+                amount,
+            },
+        )
+    }
+
+    #[test]
+    fn apply_mint_burn_wrong_lp_baseline() -> anyhow::Result<()> {
+        let (env, state) = fresh_state("apply_mint_burn_wrong_lp_baseline")?;
+
+        let asset_a = bitasset(1);
+        let asset_b = bitasset(2);
+        let asset0 = AssetId::BitAsset(asset_a);
+        let asset1 = AssetId::BitAsset(asset_b);
+        let pair = AmmPair::new(asset0, asset1);
+
+        let initial_pool = PoolState {
+            reserve0: 1_000_000,
+            reserve1: 1_000_000,
+            outstanding_lp_tokens: 1_000_000,
+            creation_txid: txid(9),
+        };
+        {
+            let mut rwtxn = env.write_txn()?;
+            state.amm_pools.put(&mut rwtxn, &pair, &initial_pool)?;
+            rwtxn.commit()?;
+        }
+
+        let correct_after_mint = initial_pool.mint(2, 2)?;
+        let actual_lp_tokens_for_deposit = correct_after_mint
+            .outstanding_lp_tokens
+            - initial_pool.outstanding_lp_tokens;
+        anyhow::ensure!(actual_lp_tokens_for_deposit == 2);
+
+        let mint_tx =
+            |lp_token_mint: u64| -> anyhow::Result<FilledTransaction> {
+                let res = FilledTransaction {
+                    transaction: Transaction {
+                        inputs: vec![outpoint(10, 0), outpoint(11, 0)],
+                        outputs: vec![Output::new(
+                            Address::ALL_ZEROS,
+                            OutputContent::AmmLpToken(lp_token_mint),
+                        )],
+                        memo: Vec::new(),
+                        data: Some(TxData::AmmMint {
+                            amount0: 2,
+                            amount1: 2,
+                            lp_token_mint,
+                        }),
+                    },
+                    spent_utxos: vec![
+                        bitasset_output(asset_a, 2),
+                        bitasset_output(asset_b, 2),
+                    ],
+                };
+                let filled_mint_outputs = res
+                    .filled_outputs()
+                    .ok_or_else(|| anyhow::anyhow!("AMM LP output fills"))?;
+                anyhow::ensure!(
+                    filled_mint_outputs[0].content()
+                        == &FilledOutputContent::AmmLpToken {
+                            asset0,
+                            asset1,
+                            amount: lp_token_mint,
+                        }
+                );
+                Ok(res)
+            };
+
+        // Attempting to apply a mint with incorrect declared lp_tokens should
+        // fail
+        {
+            let attacker_declared_lp = 500_001;
+            let mint_tx = mint_tx(attacker_declared_lp)?;
+            let mut rwtxn = env.write_txn()?;
+            anyhow::ensure!(
+                apply_mint(&state.amm_pools, &mut rwtxn, &mint_tx).is_err()
+            );
+        }
+        // Attempting to apply a mint with correctly declared lp_tokens should
+        // succeed
+        {
+            let mint_tx = mint_tx(actual_lp_tokens_for_deposit)?;
+            let mut rwtxn = env.write_txn()?;
+            let () = apply_mint(&state.amm_pools, &mut rwtxn, &mint_tx)?;
+            rwtxn.commit()?;
+        }
+
+        let lp_token_burn = 500_001;
+        let burn_tx = FilledTransaction {
+            transaction: Transaction {
+                inputs: vec![outpoint(12, 0)],
+                outputs: vec![
+                    Output::new(
+                        Address::ALL_ZEROS,
+                        OutputContent::BitAsset(500_001),
+                    ),
+                    Output::new(
+                        Address::ALL_ZEROS,
+                        OutputContent::BitAsset(500_001),
+                    ),
+                ],
+                memo: Vec::new(),
+                data: Some(TxData::AmmBurn {
+                    amount0: 500_001,
+                    amount1: 500_001,
+                    lp_token_burn,
+                }),
+            },
+            spent_utxos: vec![lp_output(asset0, asset1, lp_token_burn)],
+        };
+
+        {
+            let mut rwtxn = env.write_txn()?;
+            let () = apply_burn(&state.amm_pools, &mut rwtxn, &burn_tx)?;
+            rwtxn.commit()?;
+        }
+        let pool_after_burn = {
+            let rotxn = env.read_txn()?;
+            state.amm_pools.get(&rotxn, &pair)?
+        };
+        assert_eq!(pool_after_burn.reserve0, 500_001);
+        assert_eq!(pool_after_burn.reserve1, 500_001);
+        assert_eq!(pool_after_burn.outstanding_lp_tokens, 500_001);
+
+        // cleanup
+        {
+            drop(state);
+            let path = env.path().clone();
+            drop(env);
+            std::fs::remove_dir_all(path)?;
+        }
+        Ok(())
+    }
 }
