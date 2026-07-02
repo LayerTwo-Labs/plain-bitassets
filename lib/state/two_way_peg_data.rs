@@ -1058,7 +1058,7 @@ mod test {
                 &RollBack::<HeightStamped<_>>::new(m6id, 1),
             )?;
             // the failure reinstated the utxo
-            state.utxos.put(&mut rwtxn, &key, &output)?;
+            state.put_utxo(&mut rwtxn, key, output, 1)?;
             rwtxn.commit()?;
             m6id
         };

@@ -6,10 +6,10 @@ use sneed::{RoTxn, RwTxn};
 use crate::{
     state::{Error, PrevalidatedBlock, State, amm, dutch_auction, error},
     types::{
-        AmountOverflowError, Authorization, BitAssetId, Body, FilledOutput, AddressOutPointKey,
-        FilledOutputContent, GetAddress as _, GetBitcoinValue as _, Header,
-        InPoint, OutPoint, OutPointKey, OutputContent, SpentOutput, TxData,
-        Verify as _,
+        AddressOutPointKey, AmountOverflowError, Authorization, BitAssetId,
+        Body, FilledOutput, FilledOutputContent, GetAddress as _,
+        GetBitcoinValue as _, Header, InPoint, OutPoint, OutPointKey,
+        OutputContent, SpentOutput, TxData, Verify as _,
     },
 };
 
@@ -814,23 +814,25 @@ mod test {
             )?;
             let seq = state.bitassets.next_seq(&rwtxn)?;
             anyhow::ensure!(seq == BitAssetSeqId(1));
-            state.utxos.put(
+            state.put_utxo(
                 &mut rwtxn,
-                &OutPointKey::from_outpoint(&bitasset_outpoint),
-                &FilledOutput {
+                OutPointKey::from_outpoint(&bitasset_outpoint),
+                FilledOutput {
                     address,
                     content: FilledOutputContent::BitAsset(bitasset_id, 5),
                     memo: Vec::new(),
                 },
+                0,
             )?;
-            state.utxos.put(
+            state.put_utxo(
                 &mut rwtxn,
-                &OutPointKey::from_outpoint(&control_outpoint),
-                &FilledOutput {
+                OutPointKey::from_outpoint(&control_outpoint),
+                FilledOutput {
                     address,
                     content: FilledOutputContent::BitAssetControl(bitasset_id),
                     memo: Vec::new(),
                 },
+                0,
             )?;
             rwtxn.commit()?;
         }
