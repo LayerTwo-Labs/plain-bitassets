@@ -97,7 +97,7 @@ impl Receive {
         };
         let address = app
             .wallet
-            .get_new_address()
+            .get_or_generate_last_address()
             .map_err(anyhow::Error::from)
             .inspect_err(|err| tracing::error!("{err:#}"));
         Self {
@@ -119,7 +119,13 @@ impl Receive {
             .add_enabled(app.is_some(), Button::new("generate"))
             .clicked()
         {
-            *self = Self::new(app)
+            let address = app
+                .unwrap()
+                .wallet
+                .get_new_address()
+                .map_err(anyhow::Error::from)
+                .inspect_err(|err| tracing::error!("{err:#}"));
+            self.address = Some(address);
         }
     }
 }
@@ -139,8 +145,8 @@ impl TransferReceive {
     }
 
     pub fn show(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
-        egui::SidePanel::left("transfer")
-            .exact_width(ui.available_width() / 2.)
+        egui::Panel::left("transfer")
+            .exact_size(ui.available_width() / 2.)
             .resizable(false)
             .show_inside(ui, |ui| {
                 ui.vertical_centered(|ui| {

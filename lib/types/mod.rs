@@ -19,7 +19,7 @@ pub mod hashes;
 pub mod keys;
 pub mod proto;
 pub mod schema;
-mod transaction;
+pub mod transaction;
 
 pub use address::{ADDRESS_SIZE, Address};
 pub use bitasset_data::{BitAssetData, BitAssetDataUpdates, Update};
@@ -233,6 +233,127 @@ pub struct WithdrawalBundle {
 }
 
 impl WithdrawalBundle {
+    /// Compute the size of a single txout
+    pub const fn txout_size(spk_size: u32) -> Option<u32> {
+        let Some(size) = (bitcoin::Amount::SIZE as u32)
+            .checked_add(bitcoin::VarInt(spk_size as u64).size() as u32)
+        else {
+            return None;
+        };
+        size.checked_add(spk_size)
+    }
+
+    /// Predict the weight of a withdrawal bundle, based on the number of
+    /// outputs (not including the commitment/treasury outputs) and the
+    /// sum of sizes of txouts (not including the commitment/treasury outputs).
+    /// Returns None if the predicted weight exceeds the maximum tx weight.
+    pub const fn predict_weight(
+        n_outputs: u32,
+        sum_txout_sizes: u32,
+    ) -> Option<bitcoin::Weight> {
+        use bitcoin::{VarInt, Weight};
+        const fn txin_base_size(script_sig_size: u32) -> Option<u32> {
+            const OUTPOINT_SIZE: u8 = 36;
+            const SEQUENCE_SIZE: u8 = 4;
+            let script_sig_len_size: u8 =
+                VarInt(script_sig_size as u64).size() as u8;
+            let Some(res) = ((OUTPOINT_SIZE + script_sig_len_size) as u32)
+                .checked_add(script_sig_size)
+            else {
+                return None;
+            };
+            res.checked_add(SEQUENCE_SIZE as u32)
+        }
+        const fn tx_base_size(
+            n_inputs: u32,
+            sum_txin_base_sizes: u32,
+            n_outputs: u32,
+            sum_txout_sizes: u32,
+        ) -> Option<u32> {
+            const VERSION_SIZE: u8 = 4;
+            const fn vin_base_size(
+                n_inputs: u32,
+                sum_txin_base_sizes: u32,
+            ) -> Option<u32> {
+                let len_size = VarInt(n_inputs as u64).size() as u8;
+                (len_size as u32).checked_add(sum_txin_base_sizes)
+            }
+            const fn vout_size(
+                n_outputs: u32,
+                sum_txout_sizes: u32,
+            ) -> Option<u32> {
+                let len_size = VarInt(n_outputs as u64).size() as u8;
+                (len_size as u32).checked_add(sum_txout_sizes)
+            }
+            const LOCKTIME_SIZE: u8 = bitcoin::absolute::LockTime::SIZE as u8;
+            let res = VERSION_SIZE as u32;
+            let Some(vin_base_size) =
+                vin_base_size(n_inputs, sum_txin_base_sizes)
+            else {
+                return None;
+            };
+            let Some(res) = res.checked_add(vin_base_size) else {
+                return None;
+            };
+            let Some(vout_size) = vout_size(n_outputs, sum_txout_sizes) else {
+                return None;
+            };
+            let Some(res) = res.checked_add(vout_size) else {
+                return None;
+            };
+            res.checked_add(LOCKTIME_SIZE as u32)
+        }
+        const N_INPUTS: u32 = 1;
+        const SUM_TXIN_BASE_SIZES: u32 = {
+            const TREASURY_TXIN_BASE_SIZE: u32 = {
+                const TREASURY_SCRIPT_SIG_SIZE: u32 = 0;
+                txin_base_size(TREASURY_SCRIPT_SIG_SIZE).unwrap()
+            };
+            TREASURY_TXIN_BASE_SIZE
+        };
+        let Some(n_outputs) = n_outputs.checked_add(2) else {
+            return None;
+        };
+        let Some(sum_txout_sizes) = ({
+            const INPUTS_COMMITMENT_TXOUT_SIZE: u32 = {
+                const INPUTS_COMMITMENT_OUTPUT_SPK_SIZE: u8 = 34;
+                WithdrawalBundle::txout_size(
+                    INPUTS_COMMITMENT_OUTPUT_SPK_SIZE as u32,
+                )
+                .unwrap()
+            };
+            const MAINCHAIN_FEE_COMMITMENT_TXOUT_SIZE: u32 = {
+                const MAINCHAIN_FEE_COMMITMENT_OUTPUT_SPK_SIZE: u8 = 10;
+                WithdrawalBundle::txout_size(
+                    MAINCHAIN_FEE_COMMITMENT_OUTPUT_SPK_SIZE as u32,
+                )
+                .unwrap()
+            };
+            (INPUTS_COMMITMENT_TXOUT_SIZE + MAINCHAIN_FEE_COMMITMENT_TXOUT_SIZE)
+                .checked_add(sum_txout_sizes)
+        }) else {
+            return None;
+        };
+        let Some(tx_base_size) = tx_base_size(
+            N_INPUTS,
+            SUM_TXIN_BASE_SIZES,
+            n_outputs,
+            sum_txout_sizes,
+        ) else {
+            return None;
+        };
+        let Some(tx_weight_wu) =
+            (tx_base_size as u64).checked_mul(Weight::WITNESS_SCALE_FACTOR)
+        else {
+            return None;
+        };
+        if tx_weight_wu <= bitcoin::Transaction::MAX_STANDARD_WEIGHT.to_wu() {
+            Some(Weight::from_wu(tx_weight_wu))
+        } else {
+            None
+        }
+    }
+
     pub fn new(
         block_height: u32,
         fee: bitcoin::Amount,
@@ -312,7 +433,7 @@ pub struct TwoWayPegData {
     pub bundle_statuses: HashMap<M6id, WithdrawalBundleEvent>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct Body {
     pub coinbase: Vec<Output>,
     pub transactions: Vec<Transaction>,
@@ -342,6 +463,9 @@ impl Body {
             authorizations,
         }
     }
+
+    /// Size limit in bytes
+    pub const MAX_SIZE: usize = 8 * 1024 * 1024;
 
     pub fn authorized_transactions(&self) -> Vec<AuthorizedTransaction> {
         let mut authorizations_iter = self.authorizations.iter();
@@ -501,16 +625,16 @@ pub struct AggregatedWithdrawal {
 
 impl Ord for AggregatedWithdrawal {
     fn cmp(&self, other: &Self) -> Ordering {
-        if self == other {
-            Ordering::Equal
-        } else if self.main_fee > other.main_fee
-            || self.value > other.value
-            || self.main_address > other.main_address
-        {
-            Ordering::Greater
-        } else {
-            Ordering::Less
-        }
+        // A *total* order (lexicographic by main_fee, value, main_address). The
+        // previous `OR of >` was not antisymmetric/transitive, so the
+        // withdrawal-bundle output order (and hence compute_m6id) depended on
+        // HashMap iteration order and could differ across nodes. A real total order makes
+        // the sorted bundle canonical regardless of aggregation order.
+        (self.main_fee, self.value, &self.main_address).cmp(&(
+            other.main_fee,
+            other.value,
+            &other.main_address,
+        ))
     }
 }
 
@@ -658,5 +782,68 @@ mod merkle_tests {
         let leaf = hashes::hash_with_scratch_buffer(&txs[1]);
 
         assert!(!proof.verify(leaf, root));
+    }
+}
+
+#[cfg(test)]
+mod withdrawal_bundle_order_regression {
+    use super::*;
+    use std::collections::{BTreeMap, HashMap};
+
+    use bitcoin::{Address, Amount, address::NetworkUnchecked};
+
+    fn aw(value: u64, main_fee: u64) -> AggregatedWithdrawal {
+        // value/main_fee drive the comparison; one address is enough to expose it.
+        let addr: Address<NetworkUnchecked> =
+            "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
+                .parse()
+                .unwrap();
+        AggregatedWithdrawal {
+            spend_utxos: HashMap::new(),
+            main_address: addr,
+            value: Amount::from_sat(value),
+            main_fee: Amount::from_sat(main_fee),
+        }
+    }
+
+    // Build the bundle m6id exactly as `collect_withdrawal_bundle` does, for a given
+    // (HashMap-determined) input order.
+    fn bundle_m6id(mut aggregated: Vec<AggregatedWithdrawal>) -> M6id {
+        aggregated.sort_by_key(|a| std::cmp::Reverse(a.clone()));
+        let outputs: Vec<bitcoin::TxOut> = aggregated
+            .iter()
+            .map(|a| bitcoin::TxOut {
+                value: a.value,
+                script_pubkey: a
+                    .main_address
+                    .assume_checked_ref()
+                    .script_pubkey(),
+            })
+            .collect();
+        WithdrawalBundle::new(0, Amount::ZERO, BTreeMap::new(), outputs)
+            .unwrap()
+            .compute_m6id()
+    }
+
+    // The withdrawal bundle's m6id must not depend on the order in which withdrawals
+    // were aggregated (HashMap iteration order is randomized per process). Before the
+    // total-order fix, the comparator was non-transitive and this failed.
+    #[test]
+    fn m6id_is_independent_of_aggregation_order() {
+        let a = aw(1, 3);
+        let b = aw(3, 2);
+        let c = aw(2, 1);
+        let m = bundle_m6id(vec![a.clone(), b.clone(), c.clone()]);
+        for perm in [
+            vec![c.clone(), b.clone(), a.clone()],
+            vec![b.clone(), a.clone(), c.clone()],
+            vec![a.clone(), c.clone(), b.clone()],
+        ] {
+            assert_eq!(
+                m,
+                bundle_m6id(perm),
+                "m6id must not depend on aggregation order"
+            );
+        }
     }
 }

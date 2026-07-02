@@ -40,7 +40,7 @@ pub const WITHDRAWAL_BUNDLE_FAILURE_GAP: u32 = 4;
 /// to avoid redundant computation during connection
 pub struct PrevalidatedBlock {
     pub filled_transactions: Vec<FilledTransaction>,
-    pub computed_merkle_root: crate::types::BlockHash,
+    pub computed_merkle_root: crate::types::MerkleRoot,
     pub total_fees: bitcoin::Amount,
     pub coinbase_value: bitcoin::Amount,
     pub next_height: u32, // Precomputed next height to avoid DB read in write txn
@@ -236,7 +236,6 @@ impl State {
     ) -> Result<bool, sneed::db::Error> {
         let address_key =
             AddressOutPointKey::new(spent_output.output.address, outpoint_key);
-
         let Some(entry) = self.utxos_by_address.try_get(rwtxn, &address_key)?
         else {
             return Ok(false);
@@ -557,7 +556,7 @@ impl State {
             && (n_bitasset_control_inputs < 1 || n_bitasset_control_outputs < 1)
         {
             return Err(error::BitAsset::NoBitAssetsToUpdate.into());
-        };
+        }
         if tx.is_amm_burn()
             && (n_unique_bitasset_outputs < 2
                 || n_unique_bitasset_inputs > n_unique_bitasset_outputs
@@ -603,6 +602,7 @@ impl State {
         };
         if let Some(TxData::BitAssetRegistration {
             name_hash,
+            revealed_nonce,
             initial_supply,
             ..
         }) = tx.data()
@@ -642,9 +642,32 @@ impl State {
                     return Err(Error::SecondLastOutputNotBitAsset);
                 }
             }
+            let bitasset_id = BitAssetId(*name_hash);
+            // A registration must burn the reservation that commits to it,
+            // i.e. a spent reservation whose commitment equals
+            // keyed_hash(revealed_nonce, name_hash). Without this check,
+            // `apply_registration` would later fail to find the reservation
+            // to burn.
+            {
+                let implied_commitment =
+                    blake3::keyed_hash(revealed_nonce, name_hash).into();
+                let burns_matching_reservation =
+                    tx.spent_reservations().any(|(_, filled_output)| {
+                        filled_output.reservation_commitment()
+                            == Some(&implied_commitment)
+                    });
+                if !burns_matching_reservation {
+                    return Err(
+                        error::BitAsset::NoReservationForRegistration {
+                            bitasset: bitasset_id,
+                        }
+                        .into(),
+                    );
+                }
+            }
             if self
                 .bitassets
-                .try_get_bitasset(rotxn, &BitAssetId(*name_hash))?
+                .try_get_bitasset(rotxn, &bitasset_id)?
                 .is_some()
             {
                 return Err(Error::BitAssetAlreadyRegistered {
@@ -683,7 +706,8 @@ impl State {
     ) -> Result<bitcoin::Amount, Error> {
         let () = self.validate_reservations(tx)?;
         let () = self.validate_bitassets(rotxn, tx)?;
-        tx.bitcoin_fee()?.ok_or(Error::NotEnoughValueIn)
+        let fee = tx.bitcoin_fee()?;
+        Ok(fee)
     }
 
     pub fn validate_transaction(
@@ -702,9 +726,8 @@ impl State {
                 return Err(Error::WrongPubKeyForAddress);
             }
         }
-        if Authorization::verify_transaction(transaction).is_err() {
-            return Err(Error::AuthorizationError);
-        }
+        let () = Authorization::verify_transaction(transaction)
+            .map_err(Error::Authorization)?;
         let fee =
             self.validate_filled_transaction(rotxn, &filled_transaction)?;
         Ok(fee)
@@ -761,7 +784,7 @@ impl State {
                         .ok_or(AmountOverflowError)?;
                 }
                 if let InPoint::Withdrawal { .. } = spent_output.inpoint {
-                    total_withdrawal_stxo_value = total_deposit_stxo_value
+                    total_withdrawal_stxo_value = total_withdrawal_stxo_value
                         .checked_add(spent_output.output.get_bitcoin_value())
                         .ok_or(AmountOverflowError)?;
                 }
@@ -856,5 +879,305 @@ impl Watchable<()> for State {
     /// Get a signal that notifies whenever the tip changes
     fn watch(&self) -> Self::WatchStream {
         tokio_stream::wrappers::WatchStream::new(self.tip.watch().clone())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use ed25519_dalek::SigningKey;
+
+    use crate::{
+        authorization,
+        state::{Error, State, error},
+        types::{
+            Address, AuthorizedTransaction, BitAssetData, BitAssetId,
+            FilledOutput, FilledOutputContent, FilledTransaction, Hash,
+            InPoint, OutPoint, OutPointKey, Output, OutputContent, SpentOutput,
+            Transaction, TxData, Txid, VerifyingKey,
+        },
+    };
+
+    pub fn temp_env_path(
+        test_name: &str,
+    ) -> anyhow::Result<std::path::PathBuf> {
+        let mut path = std::env::temp_dir();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        path.push(format!(
+            "bitassets-{test_name}-{}-{nanos}",
+            std::process::id()
+        ));
+        Ok(path)
+    }
+
+    // open a fresh state-backed env in a unique temp dir
+    pub fn temp_env(test_name: &str) -> anyhow::Result<sneed::Env> {
+        let path = temp_env_path(test_name)?;
+        std::fs::create_dir_all(&path)?;
+        let mut opts = heed::EnvOpenOptions::new();
+        opts.map_size(64 * 1024 * 1024).max_dbs(State::NUM_DBS);
+        let res = unsafe { sneed::Env::open(&opts, &path) }?;
+        Ok(res)
+    }
+
+    pub fn fresh_state(test_name: &str) -> anyhow::Result<(sneed::Env, State)> {
+        let env = temp_env(test_name)?;
+        let state = State::new(&env)?;
+        Ok((env, state))
+    }
+
+    /// Create a bitcoin filled output
+    pub fn bitcoin_filled_output(address: Address, sats: u64) -> FilledOutput {
+        FilledOutput::new_bitcoin_value(
+            address,
+            bitcoin::Amount::from_sat(sats),
+        )
+    }
+
+    /// Fund `address` with a single bitcoin UTXO of `value` sats, returning its
+    /// outpoint.
+    fn fund(
+        env: &sneed::Env,
+        state: &State,
+        address: Address,
+        value_sats: u64,
+    ) -> OutPoint {
+        let outpoint = OutPoint::Regular {
+            txid: Default::default(),
+            vout: 0,
+        };
+        let output = bitcoin_filled_output(address, value_sats);
+        let mut rwtxn = env.write_txn().unwrap();
+        state
+            .utxos
+            .put(&mut rwtxn, &OutPointKey::from(&outpoint), &output)
+            .unwrap();
+        rwtxn.commit().unwrap();
+        outpoint
+    }
+
+    /// Build a BitAsset registration that registers `bitasset_id` with
+    /// `revealed_nonce`, while spending a single reservation that commits to
+    /// `reservation_commitment`.
+    fn registration_tx(
+        bitasset_id: BitAssetId,
+        revealed_nonce: Hash,
+        reservation_commitment: Hash,
+        initial_supply: u64,
+        bitasset_data: BitAssetData,
+    ) -> FilledTransaction {
+        let address = Address([0; 20]);
+        let mut transaction = Transaction::new(
+            vec![OutPoint::Regular {
+                txid: Txid([0; 32]),
+                vout: 0,
+            }],
+            vec![
+                Output::new(address, OutputContent::BitAsset(initial_supply)),
+                Output::new(address, OutputContent::BitAssetControl),
+            ],
+        );
+        transaction.data = Some(TxData::BitAssetRegistration {
+            name_hash: bitasset_id.0,
+            revealed_nonce,
+            bitasset_data: Box::new(bitasset_data),
+            initial_supply,
+        });
+        let reservation = FilledOutput::new(
+            address,
+            FilledOutputContent::BitAssetReservation(
+                Txid([0; 32]),
+                reservation_commitment,
+            ),
+        );
+        FilledTransaction {
+            transaction,
+            spent_utxos: vec![reservation],
+        }
+    }
+
+    /// A transaction that spends an input without supplying an authorization
+    /// for it must be rejected. Otherwise the `zip` of authorizations and
+    /// spent UTXOs silently skips the unauthorized input, allowing any UTXO to
+    /// be spent without a signature.
+    #[test]
+    fn validate_transaction_rejects_missing_authorization() -> anyhow::Result<()>
+    {
+        let (env, state) = fresh_state("auth_count")?;
+        let signing_key = SigningKey::from_bytes(&[1u8; 32]);
+        let verifying_key: VerifyingKey = signing_key.verifying_key().into();
+        let address = authorization::get_address(&verifying_key);
+        let outpoint = fund(&env, &state, address, 1000);
+
+        let transaction = Transaction::new(
+            vec![outpoint],
+            vec![bitcoin_filled_output(address, 900).into()],
+        );
+
+        // The attack: spend the input while providing no authorization for it.
+        let unauthorized = AuthorizedTransaction {
+            transaction: transaction.clone(),
+            authorizations: Vec::new(),
+        };
+        let rotxn = env.read_txn()?;
+        let err = state
+            .validate_transaction(&rotxn, &unauthorized)
+            .expect_err("tx with no authorizations must be rejected");
+        anyhow::ensure!(
+            matches!(
+                err,
+                Error::Authorization(
+                    crate::authorization::Error::NotEnoughAuthorizations
+                )
+            ),
+            "unexpected error: {err:?}"
+        );
+
+        // The same transaction with a valid authorization is accepted.
+        let authorized =
+            authorization::authorize(&[(address, &signing_key)], transaction)?;
+        state
+            .validate_transaction(&rotxn, &authorized)
+            .expect("correctly authorized tx should validate");
+        Ok(())
+    }
+
+    /// A registration whose spent reservation does not commit to the
+    /// registered name must be rejected. Otherwise it passes validation and
+    /// later panics in `apply_registration`, which fails to find the
+    /// reservation to burn.
+    #[test]
+    fn validate_bitassets_rejects_registration_without_matching_reservation()
+    -> anyhow::Result<()> {
+        let (env, state) = fresh_state("registration")?;
+        let rotxn = env.read_txn()?;
+        let name_hash = [7; 32];
+        let bitasset_id = BitAssetId(name_hash);
+        let revealed_nonce: Hash = [3; 32];
+        let initial_supply = 123;
+        let bitasset_data = || BitAssetData::default();
+        let implied_commitment: Hash =
+            blake3::keyed_hash(&revealed_nonce, &name_hash).into();
+
+        // The reservation commits to something other than the registered name.
+        let mismatched_commitment: Hash = [0; 32];
+        assert_ne!(mismatched_commitment, implied_commitment);
+        let tx = registration_tx(
+            bitasset_id,
+            revealed_nonce,
+            mismatched_commitment,
+            initial_supply,
+            bitasset_data(),
+        );
+        let err = state.validate_bitassets(&rotxn, &tx).expect_err(
+            "registration without a matching reservation must be rejected",
+        );
+        anyhow::ensure!(
+            matches!(
+                err,
+                Error::BitAsset(
+                    error::BitAsset::NoReservationForRegistration { bitasset }
+                ) if bitasset == bitasset_id
+            ),
+            "unexpected error: {err:?}"
+        );
+
+        // The same registration burning the matching reservation is accepted.
+        let tx = registration_tx(
+            bitasset_id,
+            revealed_nonce,
+            implied_commitment,
+            initial_supply,
+            bitasset_data(),
+        );
+        state.validate_bitassets(&rotxn, &tx).expect(
+            "registration burning the matching reservation should validate",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sidechain_wealth() -> anyhow::Result<()> {
+        use std::str::FromStr;
+
+        use bitcoin::hashes::Hash as _;
+
+        let (env, state) = fresh_state("sidechain-wealth")?;
+        {
+            let mut rwtxn = env.write_txn()?;
+
+            // One unspent DEPOSIT UTXO: 50 sats.
+            let deposit_utxo_op = OutPoint::Deposit(bitcoin::OutPoint {
+                txid: bitcoin::Txid::from_str(
+                    "0000000000000000000000000000000000000000000000000000000000000001",
+                )?,
+                vout: 0,
+            });
+            state.utxos.put(
+                &mut rwtxn,
+                &OutPointKey::from(&deposit_utxo_op),
+                &bitcoin_filled_output(Address::ALL_ZEROS, 50),
+            )?;
+
+            // Two spent DEPOSIT STXOs: 100 + 100 sats.
+            for (i, sats) in [(2u8, 100u64), (3u8, 100u64)] {
+                let op = OutPoint::Deposit(bitcoin::OutPoint {
+                    txid: bitcoin::Txid::from_byte_array([i; 32]),
+                    vout: 0,
+                });
+                let stxo = super::SpentUtxoEntry {
+                    created_height: 0,
+                    output: SpentOutput {
+                        output: bitcoin_filled_output(Address::ALL_ZEROS, sats),
+                        inpoint: InPoint::Regular {
+                            txid: [i; 32].into(),
+                            vin: 0,
+                        },
+                    },
+                };
+                state
+                    .stxos
+                    .put(&mut rwtxn, &OutPointKey::from(&op), &stxo)?;
+            }
+
+            // Two WITHDRAWAL STXOs: 10 + 10 sats
+            for (i, sats) in [(4u8, 10u64), (5u8, 10u64)] {
+                let op = OutPoint::Regular {
+                    txid: [i; 32].into(),
+                    vout: 0,
+                };
+                let stxo = super::SpentUtxoEntry {
+                    created_height: 0,
+                    output: SpentOutput {
+                        output: bitcoin_filled_output(Address::ALL_ZEROS, sats),
+                        inpoint: InPoint::Withdrawal {
+                            m6id: crate::types::M6id(
+                                bitcoin::Txid::from_byte_array([i; 32]),
+                            ),
+                        },
+                    },
+                };
+                state
+                    .stxos
+                    .put(&mut rwtxn, &OutPointKey::from(&op), &stxo)?;
+            }
+
+            rwtxn.commit()?;
+        }
+
+        let rotxn = env.read_txn()?;
+        let sidechain_wealth = state.sidechain_wealth(&rotxn)?;
+
+        // Correct value: deposit UTXO 50 + deposit STXOs 200 - withdrawal
+        // STXOs 20 = 230 sats.
+        let expected_sidechain_wealth = bitcoin::Amount::from_sat(230);
+        anyhow::ensure!(
+            sidechain_wealth == expected_sidechain_wealth,
+            "Expected sidechain wealth ({}), but computed ({})",
+            expected_sidechain_wealth,
+            sidechain_wealth,
+        );
+        Ok(())
     }
 }

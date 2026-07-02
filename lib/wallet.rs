@@ -496,7 +496,7 @@ impl Wallet {
                 .checked_add(main_fee)
                 .ok_or(AmountOverflowError)?,
         )?;
-        let change = total - value - fee;
+        let change = total - value - fee - main_fee;
         let inputs = coins.into_keys().collect();
         let outputs = vec![
             Output::new(
@@ -1549,6 +1549,23 @@ impl Wallet {
         })
     }
 
+    /// Gets the latest generated address
+    pub fn try_get_last_address(&self) -> Result<Option<Address>, Error> {
+        let rotxn = self.env.read_txn()?;
+        let last = self.index_to_address.last(&rotxn)?;
+        Ok(last.map(|(_, address)| address))
+    }
+
+    /// Gets the latest generated address, or generates a new one if no
+    /// addresses have already been generated
+    pub fn get_or_generate_last_address(&self) -> Result<Address, Error> {
+        if let Some(address) = self.try_get_last_address()? {
+            Ok(address)
+        } else {
+            self.get_new_address()
+        }
+    }
+
     pub fn get_num_addresses(&self) -> Result<u32, Error> {
         let rotxn = self.env.read_txn()?;
         let res = self.index_to_address.len(&rotxn)? as u32;
@@ -1631,5 +1648,58 @@ impl Watchable<()> for Wallet {
             #[allow(clippy::unused_unit)]
             ()
         })
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::wallet::Wallet;
+
+    #[test]
+    fn test_get_or_generate_last_address() -> anyhow::Result<()> {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        let test_dir =
+            std::env::temp_dir().join(format!("bitassets_test_wallet_{nanos}"));
+
+        // Ensure clean state
+        if test_dir.exists() {
+            let _unused = std::fs::remove_dir_all(&test_dir);
+        }
+
+        let wallet = Wallet::new(&test_dir)?;
+
+        // Seed must be set before we can generate addresses
+        assert!(!wallet.has_seed()?);
+        let seed = [1u8; 64];
+        wallet.set_seed(&seed)?;
+        assert!(wallet.has_seed()?);
+
+        // Get last address when none have been generated
+        let last = wallet.try_get_last_address()?;
+        assert!(last.is_none());
+
+        // The first call should generate the first address.
+        let addr1 = wallet.get_or_generate_last_address()?;
+
+        let last = wallet.try_get_last_address()?;
+        assert_eq!(last, Some(addr1));
+
+        let addr2 = wallet.get_or_generate_last_address()?;
+        assert_eq!(addr1, addr2);
+
+        let addr3 = wallet.get_new_address()?;
+        assert_ne!(addr1, addr3);
+
+        let last = wallet.try_get_last_address()?;
+        assert_eq!(last, Some(addr3));
+
+        let addr4 = wallet.get_or_generate_last_address()?;
+        assert_eq!(addr3, addr4);
+
+        // Clean up
+        let _unused = std::fs::remove_dir_all(&test_dir);
+        Ok(())
     }
 }

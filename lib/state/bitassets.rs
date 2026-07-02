@@ -511,27 +511,34 @@ impl Dbs {
         initial_supply: u64,
         height: u32,
     ) -> Result<(), Error> {
-        // Find the reservation to burn
-        let implied_commitment =
-            filled_tx.implied_reservation_commitment().expect(
-                "A BitAsset registration tx should have an implied commitment",
-            );
-        let burned_reservation_txid =
-            filled_tx.spent_reservations().find_map(|(_, filled_output)| {
-                let (txid, commitment) = filled_output.reservation_data()
-                    .expect("A spent reservation should correspond to a commitment");
+        let bitasset_id = BitAssetId(name_hash);
+        // Find the reservation to burn: the spent reservation whose commitment
+        // equals keyed_hash(revealed_nonce, name_hash). This is enforced by
+        // `validate_bitassets`; returning an error here rather than panicking
+        // guards against any unvalidated connection path.
+        let implied_commitment = filled_tx
+            .implied_reservation_commitment()
+            .ok_or(Error::NoReservationForRegistration {
+                bitasset: bitasset_id,
+            })?;
+        let burned_reservation_txid = filled_tx
+            .spent_reservations()
+            .find_map(|(_, filled_output)| {
+                let (txid, commitment) = filled_output.reservation_data()?;
                 if *commitment == implied_commitment {
                     Some(txid)
                 } else {
                     None
                 }
-            }).expect("A BitAsset registration tx should correspond to a burned reservation");
+            })
+            .ok_or(Error::NoReservationForRegistration {
+                bitasset: bitasset_id,
+            })?;
         if !self.reservations.delete(rwtxn, burned_reservation_txid)? {
             return Err(Error::MissingReservation {
                 txid: *burned_reservation_txid,
             });
         }
-        let bitasset_id = BitAssetId(name_hash);
         // Assign a sequence number
         {
             let seq = self.next_seq(rwtxn)?;
