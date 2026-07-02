@@ -225,9 +225,10 @@ impl PoolState {
             .ok_or(Error::InvalidSwap)?;
 
         // used for computing product for swap price
-        let effective_spend_asset_reserve = reserve0 + spend_after_fee;
+        let effective_spend_asset_reserve =
+            *reserve0 as u128 + spend_after_fee as u128;
         let new_receive_asset_reserve_before_fee: u64 = reserve_product
-            .div_ceil(effective_spend_asset_reserve as u128)
+            .div_ceil(effective_spend_asset_reserve)
             .try_into()
             .map_err(|_| Error::InvalidSwap)?;
         let amount_receive_before_fee: u64 = reserve1
@@ -239,10 +240,13 @@ impl PoolState {
             .checked_sub(amount_receive_before_fee)
             .ok_or(Error::InvalidSwap)?;
         let (new_reserve0, new_reserve1) = {
+            let new_reserve0 = reserve0
+                .checked_add(amount_spend)
+                .ok_or(Error::ReserveOverflow)?;
             let new_reserve1 = reserve1
                 .checked_sub(amount_receive_after_fee)
                 .ok_or(Error::InsufficientLiquidity)?;
-            (reserve0 + amount_spend, new_reserve1)
+            (new_reserve0, new_reserve1)
         };
         Ok(PoolState {
             reserve0: new_reserve0,
@@ -269,9 +273,10 @@ impl PoolState {
             .checked_sub(spend_after_fee)
             .ok_or(Error::InvalidSwap)?;
         // used for computing product for swap price
-        let effective_spend_asset_reserve = reserve1 + spend_after_fee;
+        let effective_spend_asset_reserve =
+            *reserve1 as u128 + spend_after_fee as u128;
         let new_receive_asset_reserve_before_fee: u64 = reserve_product
-            .div_ceil(effective_spend_asset_reserve as u128)
+            .div_ceil(effective_spend_asset_reserve)
             .try_into()
             .map_err(|_| Error::InvalidSwap)?;
         let amount_receive_before_fee: u64 = reserve0
@@ -286,7 +291,10 @@ impl PoolState {
             let new_reserve0 = reserve0
                 .checked_sub(amount_receive_after_fee)
                 .ok_or(Error::InsufficientLiquidity)?;
-            (new_reserve0, reserve1 + amount_spend)
+            let new_reserve1 = reserve1
+                .checked_add(amount_spend)
+                .ok_or(Error::ReserveOverflow)?;
+            (new_reserve0, new_reserve1)
         };
         Ok(PoolState {
             reserve0: new_reserve0,
