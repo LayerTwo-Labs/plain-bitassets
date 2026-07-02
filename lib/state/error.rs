@@ -41,6 +41,8 @@ pub enum Amm {
     MissingPoolState { asset0: AssetId, asset1: AssetId },
     #[error("AMM pool invariant")]
     PoolInvariant,
+    #[error("AMM pool reserve overflow")]
+    ReserveOverflow,
     #[error("Failed to revert AMM mint")]
     RevertMint,
     #[error("Failed to revert AMM swap")]
