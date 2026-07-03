@@ -8,10 +8,11 @@ use bitcoin::amount::CheckedSum as _;
 
 use hashlink::{LinkedHashMap, linked_hash_map::Entry};
 use rustreexo::accumulator::{
-    mem_forest::MemForest, node_hash::BitcoinNodeHash, proof::Proof,
+    mem_forest::MemForest, node_hash::AccumulatorHash, proof::Proof,
 };
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
+use std::io;
 use thiserror::Error;
 use utoipa::ToSchema;
 
@@ -650,6 +651,116 @@ impl PartialOrd for AggregatedWithdrawal {
     }
 }
 
+/// Hash type used by the utreexo accumulator.
+///
+/// `Blake3UtxoHash::Some` is a real 32-byte BLAKE3 digest.
+/// `Placeholder` and `Empty` are rustreexo sentinel values used internally by
+/// the accumulator. They are not real UTXO hashes and should not appear in
+/// serialized accumulator diffs.
+///
+/// This type stores the concrete BLAKE3 digest as `[u8; 32]` instead of
+/// `blake3::Hash` because rustreexo and the surrounding accumulator code need
+/// ordering traits such as `Ord`, while `blake3::Hash` intentionally does not
+/// implement `Ord`.
+///
+/// WARNING: the exact `parent_hash` algorithm is consensus-critical. Changing
+/// it changes all accumulator roots and invalidates existing proofs.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Blake3UtxoHash {
+    Some([u8; 32]),
+    Placeholder,
+    #[default]
+    Empty,
+}
+
+impl Blake3UtxoHash {
+    pub fn hash_bytes(bytes: &[u8]) -> Self {
+        Self::Some(*blake3::hash(bytes).as_bytes())
+    }
+
+    pub fn as_bytes(&self) -> Option<[u8; 32]> {
+        match self {
+            Self::Some(bytes) => Some(*bytes),
+            Self::Placeholder | Self::Empty => None,
+        }
+    }
+}
+
+impl From<blake3::Hash> for Blake3UtxoHash {
+    fn from(hash: blake3::Hash) -> Self {
+        Self::Some(*hash.as_bytes())
+    }
+}
+
+impl From<[u8; 32]> for Blake3UtxoHash {
+    fn from(bytes: [u8; 32]) -> Self {
+        Self::Some(bytes)
+    }
+}
+
+impl std::fmt::Display for Blake3UtxoHash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Some(bytes) => write!(f, "{:?}", bytes),
+            Self::Placeholder => write!(f, "Placeholder"),
+            Self::Empty => write!(f, "Empty"),
+        }
+    }
+}
+
+impl AccumulatorHash for Blake3UtxoHash {
+    fn placeholder() -> Self {
+        Self::Placeholder
+    }
+
+    fn empty() -> Self {
+        Self::Empty
+    }
+
+    fn is_placeholder(&self) -> bool {
+        matches!(self, Self::Placeholder)
+    }
+
+    fn is_empty(&self) -> bool {
+        matches!(self, Self::Empty)
+    }
+
+    fn write<W>(&self, writer: &mut W) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        match self {
+            Self::Some(bytes) => writer.write_all(bytes),
+            Self::Placeholder | Self::Empty => writer.write_all(&[0u8; 32]),
+        }
+    }
+
+    fn read<R>(reader: &mut R) -> io::Result<Self>
+    where
+        R: io::Read,
+    {
+        let mut bytes = [0u8; 32];
+        reader.read_exact(&mut bytes)?;
+
+        if bytes == [0u8; 32] {
+            Ok(Self::Placeholder)
+        } else {
+            Ok(Self::Some(bytes))
+        }
+    }
+
+    fn parent_hash(left: &Self, right: &Self) -> Self {
+        let (Self::Some(left), Self::Some(right)) = (left, right) else {
+            unreachable!("parent_hash called with non-concrete hash");
+        };
+
+        let mut input = [0u8; 64];
+        input[..32].copy_from_slice(left);
+        input[32..].copy_from_slice(right);
+        Self::Some(*blake3::hash(&input).as_bytes())
+    }
+}
+
 /// Manage accumulator diffs.
 /// Insertions and removals 'cancel out' exactly once.
 /// Inserting twice will cause one insertion.
@@ -659,7 +770,7 @@ impl PartialOrd for AggregatedWithdrawal {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AccumulatorDiff {
     /// `true` indicates insertion, `false` indicates removal.
-    diff: LinkedHashMap<BitcoinNodeHash, bool>,
+    diff: LinkedHashMap<Blake3UtxoHash, bool>,
     /// Total number of insertions still represented in `diff`.
     insertions: usize,
     /// Total number of deletions still represented in `diff`.
@@ -675,7 +786,7 @@ impl AccumulatorDiff {
         }
     }
 
-    pub fn insert(&mut self, utxo_hash: BitcoinNodeHash) {
+    pub fn insert(&mut self, utxo_hash: Blake3UtxoHash) {
         match self.diff.entry(utxo_hash) {
             Entry::Occupied(entry) => {
                 if !entry.get() {
@@ -691,7 +802,7 @@ impl AccumulatorDiff {
         }
     }
 
-    pub fn remove(&mut self, utxo_hash: BitcoinNodeHash) {
+    pub fn remove(&mut self, utxo_hash: Blake3UtxoHash) {
         match self.diff.entry(utxo_hash) {
             Entry::Occupied(entry) => {
                 if *entry.get() {
@@ -726,8 +837,8 @@ impl Serialize for AccumulatorDiff {
 
         for (hash, insert) in &self.diff {
             let bytes = match hash {
-                BitcoinNodeHash::Some(bytes) => *bytes,
-                BitcoinNodeHash::Empty | BitcoinNodeHash::Placeholder => {
+                Blake3UtxoHash::Some(bytes) => *bytes,
+                Blake3UtxoHash::Empty | Blake3UtxoHash::Placeholder => {
                     return Err(serde::ser::Error::custom(
                         "accumulator diff contains non-concrete node hash",
                     ));
@@ -757,25 +868,25 @@ impl<'de> Deserialize<'de> for AccumulatorDiff {
             AccumulatorDiff::with_capacity(insertions.len() + deletions.len());
 
         for hash in insertions {
-            diff.insert(BitcoinNodeHash::Some(hash));
+            diff.insert(Blake3UtxoHash::Some(hash));
         }
 
         for hash in deletions {
-            diff.remove(BitcoinNodeHash::Some(hash));
+            diff.remove(Blake3UtxoHash::Some(hash));
         }
 
         Ok(diff)
     }
 }
 
+#[repr(transparent)]
 #[derive(Debug, Error)]
 #[error("utreexo error: {0}")]
-#[repr(transparent)]
 pub struct UtreexoError(String);
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 #[repr(transparent)]
-pub struct Accumulator(pub MemForest<BitcoinNodeHash>);
+pub struct Accumulator(pub MemForest<Blake3UtxoHash>);
 
 unsafe impl Send for Accumulator {}
 unsafe impl Sync for Accumulator {}
@@ -801,26 +912,14 @@ impl Accumulator {
                 deletions.push(utxo_hash);
             }
         }
-        tracing::trace!(
-            leaves = %self.0.leaves,
-            roots = ?self.get_roots(),
-            insertions = ?insertions,
-            deletions = ?deletions,
-            "Applying diff"
-        );
         let () = self
             .0
             .modify(&insertions, &deletions)
             .map_err(UtreexoError)?;
-        tracing::debug!(
-            leaves = %self.0.leaves,
-            roots = ?self.get_roots(),
-            "Applied diff"
-        );
         Ok(())
     }
 
-    pub fn get_roots(&self) -> Vec<BitcoinNodeHash> {
+    pub fn get_roots(&self) -> Vec<Blake3UtxoHash> {
         self.0
             .get_roots()
             .iter()
@@ -830,15 +929,15 @@ impl Accumulator {
 
     pub fn prove(
         &self,
-        targets: &[BitcoinNodeHash],
-    ) -> Result<Proof<BitcoinNodeHash>, UtreexoError> {
+        targets: &[Blake3UtxoHash],
+    ) -> Result<Proof<Blake3UtxoHash>, UtreexoError> {
         self.0.prove(targets).map_err(UtreexoError)
     }
 
     pub fn verify(
         &self,
-        proof: &Proof<BitcoinNodeHash>,
-        del_hashes: &[BitcoinNodeHash],
+        proof: &Proof<Blake3UtxoHash>,
+        del_hashes: &[Blake3UtxoHash],
     ) -> Result<bool, UtreexoError> {
         self.0.verify(proof, del_hashes).map_err(UtreexoError)
     }
@@ -852,9 +951,6 @@ impl<'de> Deserialize<'de> for Accumulator {
         let bytes: Vec<u8> =
             <Vec<_> as Deserialize>::deserialize(deserializer)?;
         let mem_forest = MemForest::deserialize(&*bytes)
-            .inspect_err(|err| {
-                tracing::debug!("deserialize err: {err}\n bytes: {bytes:?}")
-            })
             .map_err(<D::Error as serde::de::Error>::custom)?;
         Ok(Self(mem_forest))
     }
