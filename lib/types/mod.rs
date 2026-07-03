@@ -770,7 +770,7 @@ impl AccumulatorHash for Blake3UtxoHash {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AccumulatorDiff {
     /// `true` indicates insertion, `false` indicates removal.
-    diff: LinkedHashMap<Blake3UtxoHash, bool>,
+    diff: LinkedHashMap<[u8; 32], bool>,
     /// Total number of insertions still represented in `diff`.
     insertions: usize,
     /// Total number of deletions still represented in `diff`.
@@ -786,7 +786,7 @@ impl AccumulatorDiff {
         }
     }
 
-    pub fn insert(&mut self, utxo_hash: Blake3UtxoHash) {
+    pub fn insert(&mut self, utxo_hash: [u8; 32]) {
         match self.diff.entry(utxo_hash) {
             Entry::Occupied(entry) => {
                 if !entry.get() {
@@ -802,7 +802,7 @@ impl AccumulatorDiff {
         }
     }
 
-    pub fn remove(&mut self, utxo_hash: Blake3UtxoHash) {
+    pub fn remove(&mut self, utxo_hash: [u8; 32]) {
         match self.diff.entry(utxo_hash) {
             Entry::Occupied(entry) => {
                 if *entry.get() {
@@ -836,19 +836,10 @@ impl Serialize for AccumulatorDiff {
         let mut deletions = Vec::with_capacity(self.deletions);
 
         for (hash, insert) in &self.diff {
-            let bytes = match hash {
-                Blake3UtxoHash::Some(bytes) => *bytes,
-                Blake3UtxoHash::Empty | Blake3UtxoHash::Placeholder => {
-                    return Err(serde::ser::Error::custom(
-                        "accumulator diff contains non-concrete node hash",
-                    ));
-                }
-            };
-
             if *insert {
-                insertions.push(bytes);
+                insertions.push(*hash);
             } else {
-                deletions.push(bytes);
+                deletions.push(*hash);
             }
         }
 
@@ -868,11 +859,11 @@ impl<'de> Deserialize<'de> for AccumulatorDiff {
             AccumulatorDiff::with_capacity(insertions.len() + deletions.len());
 
         for hash in insertions {
-            diff.insert(Blake3UtxoHash::Some(hash));
+            diff.insert(hash);
         }
 
         for hash in deletions {
-            diff.remove(Blake3UtxoHash::Some(hash));
+            diff.remove(hash);
         }
 
         Ok(diff)
@@ -896,26 +887,23 @@ impl Accumulator {
         &mut self,
         diff: AccumulatorDiff,
     ) -> Result<(), UtreexoError> {
-        let AccumulatorDiff {
-            diff,
-            insertions: n_insertions,
-            deletions: n_deletions,
-        } = diff;
-        let (mut insertions, mut deletions) = (
-            Vec::with_capacity(n_insertions),
-            Vec::with_capacity(n_deletions),
-        );
-        for (utxo_hash, insert) in diff {
+        let mut insertions = Vec::with_capacity(diff.insertions);
+        let mut deletions = Vec::with_capacity(diff.deletions);
+
+        for (utxo_hash, insert) in diff.diff {
+            let utxo_hash = Blake3UtxoHash::Some(utxo_hash);
+
             if insert {
                 insertions.push(utxo_hash);
             } else {
                 deletions.push(utxo_hash);
             }
         }
-        let () = self
-            .0
+
+        self.0
             .modify(&insertions, &deletions)
             .map_err(UtreexoError)?;
+
         Ok(())
     }
 
