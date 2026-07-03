@@ -522,3 +522,134 @@ pub(in crate::state) fn revert_swap(
     pools.put(rwtxn, &amm_pair, &new_amm_pool_state)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use sneed::DatabaseUnique;
+
+    use super::{AmmPair, Error, PoolState, PoolsDb, apply_mint};
+    use crate::types::{
+        Address, AssetId, BitAssetId, FilledOutput, FilledOutputContent,
+        FilledTransaction, OutPoint, Transaction, TxData, Txid,
+    };
+
+    fn temp_pools_db() -> (sneed::Env, PoolsDb) {
+        let mut path = std::env::temp_dir();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        path.push(format!("bitassets-amm-mint-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&path).unwrap();
+        let mut opts = heed::EnvOpenOptions::new();
+        opts.map_size(16 * 1024 * 1024).max_dbs(1);
+        let env = unsafe { sneed::Env::open(&opts, &path) }.unwrap();
+        let mut rwtxn = env.write_txn().unwrap();
+        let pools =
+            DatabaseUnique::create(&env, &mut rwtxn, "amm_pools").unwrap();
+        rwtxn.commit().unwrap();
+        (env, pools)
+    }
+
+    /// Build a mint tx against the pool for `(asset_a, asset_b)`, depositing
+    /// `amount0`/`amount1` and declaring `lp_token_mint` LP tokens received.
+    fn mint_tx(
+        asset_a: BitAssetId,
+        asset_b: BitAssetId,
+        amount0: u64,
+        amount1: u64,
+        lp_token_mint: u64,
+    ) -> FilledTransaction {
+        let address = Address([0; 20]);
+        let mut transaction = Transaction::new(
+            vec![
+                OutPoint::Regular {
+                    txid: Txid([0; 32]),
+                    vout: 0,
+                },
+                OutPoint::Regular {
+                    txid: Txid([0; 32]),
+                    vout: 1,
+                },
+            ],
+            vec![],
+        );
+        transaction.data = Some(TxData::AmmMint {
+            amount0,
+            amount1,
+            lp_token_mint,
+        });
+        let spent_utxos = vec![
+            FilledOutput::new(
+                address,
+                FilledOutputContent::BitAsset(asset_a, amount0),
+            ),
+            FilledOutput::new(
+                address,
+                FilledOutputContent::BitAsset(asset_b, amount1),
+            ),
+        ];
+        FilledTransaction {
+            transaction,
+            spent_utxos,
+        }
+    }
+
+    /// A mint must validate the declared LP amount against the actual minted
+    /// LP delta (new outstanding minus old outstanding). If it instead
+    /// subtracts the attacker-declared amount as the baseline, any deposit
+    /// where `new_outstanding == 2 * lp_token_mint` is accepted, letting an
+    /// attacker over-issue LP tokens against an established pool and drain it
+    /// on burn.
+    #[test]
+    fn apply_mint_uses_old_outstanding_as_lp_baseline() {
+        let (_env, pools) = temp_pools_db();
+        let asset_a = BitAssetId([1; 32]);
+        let asset_b = BitAssetId([2; 32]);
+        let amm_pair = AmmPair::new(
+            AssetId::BitAsset(asset_a),
+            AssetId::BitAsset(asset_b),
+        );
+
+        // Established, honestly-funded pool: reserves 1_000_000/1_000_000 with
+        // 1_000_000 outstanding LP tokens (geometric mean of the first mint).
+        let pool = PoolState::new(Txid([0; 32]))
+            .mint(1_000_000, 1_000_000)
+            .unwrap();
+        assert_eq!(pool.outstanding_lp_tokens, 1_000_000);
+
+        // A balanced 2/2 deposit into this pool honestly mints exactly 2 LP
+        // tokens, taking outstanding supply to 1_000_002.
+        {
+            let mut rwtxn = _env.write_txn().unwrap();
+            pools.put(&mut rwtxn, &amm_pair, &pool).unwrap();
+            rwtxn.commit().unwrap();
+        }
+
+        // The attack: the same 2/2 deposit declares 500_001 LP tokens. This
+        // satisfies `new_outstanding (1_000_002) == 2 * lp_token_mint`, so the
+        // buggy baseline accepts it and over-issues LP tokens.
+        {
+            let mut rwtxn = _env.write_txn().unwrap();
+            let tx = mint_tx(asset_a, asset_b, 2, 2, 500_001);
+            let res = apply_mint(&pools, &mut rwtxn, &tx);
+            assert!(
+                matches!(res, Err(Error::InvalidMint)),
+                "over-issuing mint must be rejected, got {res:?}"
+            );
+            rwtxn.abort();
+        }
+
+        // The honest declaration of 2 LP tokens for the same deposit is
+        // accepted and takes outstanding supply to 1_000_002.
+        {
+            let mut rwtxn = _env.write_txn().unwrap();
+            let tx = mint_tx(asset_a, asset_b, 2, 2, 2);
+            apply_mint(&pools, &mut rwtxn, &tx)
+                .expect("honest mint must be accepted");
+            let updated = pools.try_get(&rwtxn, &amm_pair).unwrap().unwrap();
+            assert_eq!(updated.outstanding_lp_tokens, 1_000_002);
+            rwtxn.abort();
+        }
+    }
+}
