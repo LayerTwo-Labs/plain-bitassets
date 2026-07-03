@@ -449,3 +449,46 @@ pub(in crate::state) fn revert_collect(
     db.put(rwtxn, &auction_id, &auction_state)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{DutchAuctionState, error};
+    use crate::{
+        state::rollback::{RollBack, TxidStamped},
+        types::{AssetId, Txid},
+    };
+
+    fn stamped(value: u64, txid: Txid) -> RollBack<TxidStamped<u64>> {
+        RollBack::<TxidStamped<_>>::new(value, txid, 0)
+    }
+
+    /// A bid against a sold-out (but uncollected) auction must be rejected
+    /// cleanly. Otherwise `bid` reaches the end-price computation, which
+    /// divides by the pre-bid `base_amount_remaining`, and panics with
+    /// "attempt to divide by zero" on the block-connect path.
+    #[test]
+    fn sold_out_auction_bid_is_rejected_not_panicking() {
+        let txid = Txid([0; 32]);
+        // A sold-out auction (`base_amount_remaining == 0`) that is still
+        // uncollected, with a positive current price.
+        let auction = DutchAuctionState {
+            start_block: 0,
+            most_recent_bid_block: RollBack::<TxidStamped<_>>::new(0, txid, 0),
+            duration: 10,
+            base_asset: AssetId::Bitcoin,
+            initial_base_amount: 100,
+            base_amount_remaining: stamped(0, txid),
+            quote_asset: AssetId::Bitcoin,
+            quote_amount: stamped(100, txid),
+            initial_price: 100,
+            price_after_most_recent_bid: stamped(50, txid),
+            initial_end_price: 10,
+            end_price_after_most_recent_bid: stamped(10, txid),
+        };
+        let res = auction.bid(Txid([1; 32]), 10, 1);
+        assert!(
+            matches!(res, Err(error::Bid::AuctionExhausted)),
+            "bid on a sold-out auction must be rejected, got {res:?}"
+        );
+    }
+}
