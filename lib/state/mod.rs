@@ -1,20 +1,24 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    sync::Arc,
+};
 
 use fallible_iterator::FallibleIterator as _;
 use futures::Stream;
 use heed::types::SerdeBincode;
 use itertools::Itertools;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use sneed::{DatabaseUnique, RoDatabaseUnique, RoTxn, RwTxn, UnitKey};
 
 use crate::{
     authorization::Authorization,
     types::{
-        Address, AddressOutPointKey, AmountOverflowError, Authorized,
-        AuthorizedTransaction, BitAssetId, BlockHash, Body, FilledOutput,
-        FilledTransaction, GetAddress as _, GetBitcoinValue as _, Header,
-        InPoint, M6id, OutPoint, OutPointKey, SpentOutput, Transaction, TxData,
-        VERSION, Verify as _, Version, WithdrawalBundle,
+        Accumulator, Address, AddressOutPointKey, AmountOverflowError,
+        Authorized, AuthorizedTransaction, BitAssetId, BlockHash, Body,
+        FilledOutput, FilledTransaction, GetAddress as _, GetBitcoinValue as _,
+        Header, InPoint, M6id, OutPoint, OutPointKey, SpentOutput, Transaction,
+        TxData, VERSION, Verify as _, Version, WithdrawalBundle,
         WithdrawalBundleStatus, proto::mainchain::TwoWayPegData,
     },
     util::Watchable,
@@ -114,13 +118,17 @@ pub struct State {
         SerdeBincode<u32>,
         SerdeBincode<(bitcoin::BlockHash, u32)>,
     >,
+    pub utreexo_accumulator: Arc<Mutex<Accumulator>>,
     _version: DatabaseUnique<UnitKey, SerdeBincode<Version>>,
 }
 
 impl State {
     pub const NUM_DBS: u32 = bitassets::Dbs::NUM_DBS + 12 + 1;
 
-    pub fn new(env: &sneed::Env) -> Result<Self, Error> {
+    pub fn new(
+        env: &sneed::Env,
+        utreexo_accumulator: Accumulator,
+    ) -> Result<Self, Error> {
         let mut rwtxn = env.write_txn()?;
         let tip = DatabaseUnique::create(env, &mut rwtxn, "tip")?;
         let height = DatabaseUnique::create(env, &mut rwtxn, "height")?;
@@ -170,6 +178,7 @@ impl State {
             withdrawal_bundles,
             withdrawal_bundle_event_blocks,
             deposit_blocks,
+            utreexo_accumulator: Arc::new(Mutex::new(utreexo_accumulator)),
             _version: version,
         })
     }
@@ -890,10 +899,10 @@ mod test {
         authorization,
         state::{Error, State, error},
         types::{
-            Address, AuthorizedTransaction, BitAssetData, BitAssetId,
-            FilledOutput, FilledOutputContent, FilledTransaction, Hash,
-            InPoint, OutPoint, OutPointKey, Output, OutputContent, SpentOutput,
-            Transaction, TxData, Txid, VerifyingKey,
+            Accumulator, Address, AuthorizedTransaction, BitAssetData,
+            BitAssetId, FilledOutput, FilledOutputContent, FilledTransaction,
+            Hash, InPoint, OutPoint, OutPointKey, Output, OutputContent,
+            SpentOutput, Transaction, TxData, Txid, VerifyingKey,
         },
     };
 
@@ -923,7 +932,7 @@ mod test {
 
     pub fn fresh_state(test_name: &str) -> anyhow::Result<(sneed::Env, State)> {
         let env = temp_env(test_name)?;
-        let state = State::new(&env)?;
+        let state = State::new(&env, Accumulator::default())?;
         Ok((env, state))
     }
 

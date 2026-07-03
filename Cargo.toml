@@ -102,6 +102,10 @@ rev = "1100b6085d9ed64eeaf1b57b3c44609626bd4b23"
 git = "https://github.com/Ash-L2L/l2l-openapi"
 rev = "5f8fb2237c95725731d5fb10542098303d82e215"
 
+[workspace.dependencies.rustreexo]
+git = "https://github.com/mit-dci/rustreexo"
+rev = "6da503b598470f6e87aa9d769b94df64df7ff3ae"
+
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 assertions_on_result_states = "allow"

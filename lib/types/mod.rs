@@ -5,7 +5,11 @@ use std::{
 };
 
 use bitcoin::amount::CheckedSum as _;
-use borsh::BorshSerialize;
+
+use hashlink::{LinkedHashMap, linked_hash_map::Entry};
+use rustreexo::accumulator::{
+    mem_forest::MemForest, node_hash::BitcoinNodeHash, proof::Proof,
+};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use thiserror::Error;
@@ -147,7 +151,7 @@ where
 }
 
 #[derive(
-    BorshSerialize,
+    borsh::BorshSerialize,
     Clone,
     Debug,
     Deserialize,
@@ -433,7 +437,9 @@ pub struct TwoWayPegData {
     pub bundle_statuses: HashMap<M6id, WithdrawalBundleEvent>,
 }
 
-#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize, ToSchema)]
+#[derive(
+    borsh::BorshSerialize, Clone, Debug, Deserialize, Serialize, ToSchema,
+)]
 pub struct Body {
     pub coinbase: Vec<Output>,
     pub transactions: Vec<Transaction>,
@@ -644,6 +650,229 @@ impl PartialOrd for AggregatedWithdrawal {
     }
 }
 
+/// Manage accumulator diffs.
+/// Insertions and removals 'cancel out' exactly once.
+/// Inserting twice will cause one insertion.
+/// Removing twice will cause one deletion.
+/// Inserting and then removing will have no overall effect,
+/// but a second removal will still cause a deletion.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct AccumulatorDiff {
+    /// `true` indicates insertion, `false` indicates removal.
+    diff: LinkedHashMap<BitcoinNodeHash, bool>,
+    /// Total number of insertions still represented in `diff`.
+    insertions: usize,
+    /// Total number of deletions still represented in `diff`.
+    deletions: usize,
+}
+
+impl AccumulatorDiff {
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            diff: LinkedHashMap::with_capacity(capacity),
+            insertions: 0,
+            deletions: 0,
+        }
+    }
+
+    pub fn insert(&mut self, utxo_hash: BitcoinNodeHash) {
+        match self.diff.entry(utxo_hash) {
+            Entry::Occupied(entry) => {
+                if !entry.get() {
+                    entry.remove();
+                    debug_assert!(self.deletions > 0);
+                    self.deletions -= 1;
+                }
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(true);
+                self.insertions += 1;
+            }
+        }
+    }
+
+    pub fn remove(&mut self, utxo_hash: BitcoinNodeHash) {
+        match self.diff.entry(utxo_hash) {
+            Entry::Occupied(entry) => {
+                if *entry.get() {
+                    entry.remove();
+                    debug_assert!(self.insertions > 0);
+                    self.insertions -= 1;
+                }
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(false);
+                self.deletions += 1;
+            }
+        }
+    }
+
+    pub fn counts(&self) -> (usize, usize) {
+        (self.insertions, self.deletions)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.diff.is_empty()
+    }
+}
+
+impl Serialize for AccumulatorDiff {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut insertions = Vec::with_capacity(self.insertions);
+        let mut deletions = Vec::with_capacity(self.deletions);
+
+        for (hash, insert) in &self.diff {
+            let bytes = match hash {
+                BitcoinNodeHash::Some(bytes) => *bytes,
+                BitcoinNodeHash::Empty | BitcoinNodeHash::Placeholder => {
+                    return Err(serde::ser::Error::custom(
+                        "accumulator diff contains non-concrete node hash",
+                    ));
+                }
+            };
+
+            if *insert {
+                insertions.push(bytes);
+            } else {
+                deletions.push(bytes);
+            }
+        }
+
+        (insertions, deletions).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for AccumulatorDiff {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let (insertions, deletions): (Vec<[u8; 32]>, Vec<[u8; 32]>) =
+            Deserialize::deserialize(deserializer)?;
+
+        let mut diff =
+            AccumulatorDiff::with_capacity(insertions.len() + deletions.len());
+
+        for hash in insertions {
+            diff.insert(BitcoinNodeHash::Some(hash));
+        }
+
+        for hash in deletions {
+            diff.remove(BitcoinNodeHash::Some(hash));
+        }
+
+        Ok(diff)
+    }
+}
+
+#[derive(Debug, Error)]
+#[error("utreexo error: {0}")]
+#[repr(transparent)]
+pub struct UtreexoError(String);
+
+#[derive(Debug, Default)]
+#[repr(transparent)]
+pub struct Accumulator(pub MemForest<BitcoinNodeHash>);
+
+unsafe impl Send for Accumulator {}
+unsafe impl Sync for Accumulator {}
+
+impl Accumulator {
+    pub fn apply_diff(
+        &mut self,
+        diff: AccumulatorDiff,
+    ) -> Result<(), UtreexoError> {
+        let AccumulatorDiff {
+            diff,
+            insertions: n_insertions,
+            deletions: n_deletions,
+        } = diff;
+        let (mut insertions, mut deletions) = (
+            Vec::with_capacity(n_insertions),
+            Vec::with_capacity(n_deletions),
+        );
+        for (utxo_hash, insert) in diff {
+            if insert {
+                insertions.push(utxo_hash);
+            } else {
+                deletions.push(utxo_hash);
+            }
+        }
+        tracing::trace!(
+            leaves = %self.0.leaves,
+            roots = ?self.get_roots(),
+            insertions = ?insertions,
+            deletions = ?deletions,
+            "Applying diff"
+        );
+        let () = self
+            .0
+            .modify(&insertions, &deletions)
+            .map_err(UtreexoError)?;
+        tracing::debug!(
+            leaves = %self.0.leaves,
+            roots = ?self.get_roots(),
+            "Applied diff"
+        );
+        Ok(())
+    }
+
+    pub fn get_roots(&self) -> Vec<BitcoinNodeHash> {
+        self.0
+            .get_roots()
+            .iter()
+            .map(|node| node.get_data())
+            .collect()
+    }
+
+    pub fn prove(
+        &self,
+        targets: &[BitcoinNodeHash],
+    ) -> Result<Proof<BitcoinNodeHash>, UtreexoError> {
+        self.0.prove(targets).map_err(UtreexoError)
+    }
+
+    pub fn verify(
+        &self,
+        proof: &Proof<BitcoinNodeHash>,
+        del_hashes: &[BitcoinNodeHash],
+    ) -> Result<bool, UtreexoError> {
+        self.0.verify(proof, del_hashes).map_err(UtreexoError)
+    }
+}
+
+impl<'de> Deserialize<'de> for Accumulator {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let bytes: Vec<u8> =
+            <Vec<_> as Deserialize>::deserialize(deserializer)?;
+        let mem_forest = MemForest::deserialize(&*bytes)
+            .inspect_err(|err| {
+                tracing::debug!("deserialize err: {err}\n bytes: {bytes:?}")
+            })
+            .map_err(<D::Error as serde::de::Error>::custom)?;
+        Ok(Self(mem_forest))
+    }
+}
+
+impl Serialize for Accumulator {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut bytes = Vec::new();
+        self.0
+            .serialize(&mut bytes)
+            .map_err(<S::Error as serde::ser::Error>::custom)?;
+        <Vec<_> as Serialize>::serialize(&bytes, serializer)
+    }
+}
+
 /// Transaction index
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, ToSchema)]
 pub struct TxIn {
@@ -660,7 +889,7 @@ pub enum BmmResult {
 /// A tip refers to both a sidechain block AND the mainchain block that commits
 /// to it.
 #[derive(
-    BorshSerialize,
+    borsh::BorshSerialize,
     Clone,
     Copy,
     Debug,
@@ -691,7 +920,7 @@ pub enum Network {
 
 /// Semver-compatible version
 #[derive(
-    BorshSerialize,
+    borsh::BorshSerialize,
     Clone,
     Copy,
     Debug,

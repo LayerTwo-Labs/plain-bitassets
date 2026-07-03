@@ -5,8 +5,9 @@ use std::{
 };
 
 use bitcoin::{self, hashes::Hash as _};
+use byteorder::BigEndian;
 use fallible_iterator::{FallibleIterator, IteratorExt};
-use heed::types::SerdeBincode;
+use heed::types::{SerdeBincode, U32};
 use serde::{Deserialize, Serialize};
 use sneed::{
     DatabaseUnique, EnvError, RoTxn, RwTxn, RwTxnError, UnitKey,
@@ -15,16 +16,23 @@ use sneed::{
 };
 
 use crate::types::{
-    Address, AddressTxidKey, Block, BlockHash, BmmResult, Body,
-    FilledTransaction, Header, MerkleProof, Tip, Txid, VERSION, Version,
-    proto::mainchain,
+    Accumulator, AccumulatorDiff, Address, AddressTxidKey, Block, BlockHash,
+    BmmResult, Body, FilledTransaction, Header, MerkleProof, Tip, Txid,
+    VERSION, Version, proto::mainchain,
 };
+
+pub const TXDB_PRUNE_INTERVAL_BLOCKS: u32 = 144 * 7;
+pub const TXDB_RETENTION_SECS: u64 = 28 * 24 * 60 * 60;
+
+pub const ACCUMULATOR_PRUNE_INTERVAL_BLOCKS: u32 = 144 * 7 * 4;
+pub const ACCUMULATOR_SNAPSHOT_INTERVAL_BLOCKS: u32 = 144;
 
 #[allow(clippy::duplicated_attributes)]
 #[derive(thiserror::Error, transitive::Transitive, Debug)]
 #[transitive(from(db::error::Delete, DbError))]
 #[transitive(from(db::error::IterInit, DbError))]
 #[transitive(from(db::error::IterItem, DbError))]
+#[transitive(from(db::error::Last, DbError))]
 #[transitive(from(db::error::Put, DbError))]
 #[transitive(from(db::error::TryGet, DbError))]
 #[transitive(from(env::error::CreateDb, EnvError))]
@@ -78,6 +86,8 @@ pub enum Error {
     NoMainHeight(bitcoin::BlockHash),
     #[error("no tx with txid {0}")]
     NoTx(Txid),
+    #[error("no accumulator diff for block {0}")]
+    NoAccumulatorDiff(BlockHash),
     #[error(
         "txdb filled transaction length mismatch: expected {expected}, actual {actual}"
     )]
@@ -95,6 +105,9 @@ pub struct FilledTxEntry {
 
 #[derive(Clone)]
 pub struct Archive {
+    accumulators: DatabaseUnique<U32<BigEndian>, SerdeBincode<Accumulator>>,
+    accumulator_diffs:
+        DatabaseUnique<SerdeBincode<BlockHash>, SerdeBincode<AccumulatorDiff>>,
     block_hash_to_height:
         DatabaseUnique<SerdeBincode<BlockHash>, SerdeBincode<u32>>,
     /// BMM results for each header.
@@ -172,7 +185,7 @@ pub struct Archive {
 }
 
 impl Archive {
-    pub const NUM_DBS: u32 = 15;
+    pub const NUM_DBS: u32 = 15 + 2;
 
     pub fn new(env: &sneed::Env) -> Result<Self, Error> {
         let mut rwtxn = env.write_txn()?;
@@ -197,6 +210,11 @@ impl Archive {
             Some(_) => (),
             None => version.put(&mut rwtxn, &(), &*VERSION)?,
         }
+        let accumulators =
+            DatabaseUnique::create(env, &mut rwtxn, "accumulators")
+                .map_err(EnvError::from)?;
+        let accumulator_diffs =
+            DatabaseUnique::create(env, &mut rwtxn, "accumulator_diffs")?;
         let block_hash_to_height =
             DatabaseUnique::create(env, &mut rwtxn, "hash_to_height")?;
         let bmm_results =
@@ -247,6 +265,8 @@ impl Archive {
         let txdb = DatabaseUnique::create(env, &mut rwtxn, "txdb")?;
         rwtxn.commit()?;
         Ok(Self {
+            accumulators,
+            accumulator_diffs,
             block_hash_to_height,
             bmm_results,
             bodies,
@@ -622,6 +642,114 @@ impl Archive {
         Ok(res)
     }
 
+    /// Accumulator
+    pub fn latest_accumulator(
+        &self,
+        rotxn: &RoTxn,
+    ) -> Result<Option<(u32, Accumulator)>, Error> {
+        let snapshot = self.accumulators.last(rotxn).map_err(DbError::from)?;
+        Ok(snapshot)
+    }
+
+    pub fn put_accumulator(
+        &self,
+        rwtxn: &mut RwTxn,
+        block_height: u32,
+        accumulator: &Accumulator,
+    ) -> Result<(), Error> {
+        self.accumulators
+            .put(rwtxn, &block_height, accumulator)
+            .map_err(DbError::from)?;
+        Ok(())
+    }
+
+    pub fn prune_accumulator_older_than(
+        &self,
+        rwtxn: &mut RwTxn,
+        threshold_block_height: u32,
+    ) -> Result<(), Error> {
+        let keys = {
+            let mut keys = Vec::new();
+            let mut iter = self
+                .accumulators
+                .range(rwtxn, &(..threshold_block_height))
+                .map_err(DbError::from)?;
+            while let Some((block_height, _accumulator)) =
+                iter.next().map_err(DbError::from)?
+            {
+                keys.push(block_height);
+            }
+            keys
+        };
+        for key in &keys {
+            let _ = self.accumulators.delete(rwtxn, key)?;
+        }
+        Ok(())
+    }
+
+    /// AccumulatorDiff
+    pub fn put_accumulator_diff(
+        &self,
+        rwtxn: &mut RwTxn,
+        block_hash: BlockHash,
+        diff: &AccumulatorDiff,
+    ) -> Result<(), Error> {
+        self.accumulator_diffs
+            .put(rwtxn, &block_hash, diff)
+            .map_err(DbError::from)?;
+        Ok(())
+    }
+
+    pub fn try_get_accumulator_diff(
+        &self,
+        rotxn: &RoTxn,
+        block_hash: BlockHash,
+    ) -> Result<Option<AccumulatorDiff>, Error> {
+        let diff = self
+            .accumulator_diffs
+            .try_get(rotxn, &block_hash)
+            .map_err(DbError::from)?;
+        Ok(diff)
+    }
+
+    pub fn get_accumulator_diff(
+        &self,
+        rotxn: &RoTxn,
+        block_hash: BlockHash,
+    ) -> Result<AccumulatorDiff, Error> {
+        self.try_get_accumulator_diff(rotxn, block_hash)?
+            .ok_or(Error::NoAccumulatorDiff(block_hash))
+    }
+
+    pub fn prune_accumulator_diffs_older_than(
+        &self,
+        rwtxn: &mut RwTxn,
+        threshold_block_height: u32,
+    ) -> Result<(), Error> {
+        let keys = {
+            let mut keys = Vec::new();
+            let mut iter =
+                self.accumulator_diffs.iter(rwtxn).map_err(DbError::from)?;
+
+            while let Some((block_hash, _diff)) =
+                iter.next().map_err(DbError::from)?
+            {
+                let height = self.get_height(rwtxn, block_hash)?;
+                if height < threshold_block_height {
+                    keys.push(block_hash);
+                }
+            }
+
+            keys
+        };
+
+        for key in &keys {
+            let _ = self.accumulator_diffs.delete(rwtxn, key)?;
+        }
+
+        Ok(())
+    }
+
     pub fn try_get_main_successors(
         &self,
         rotxn: &RoTxn,
@@ -698,7 +826,7 @@ impl Archive {
         &self,
         rwtxn: &mut RwTxn,
         block_hash: BlockHash,
-    ) -> Result<usize, Error> {
+    ) -> Result<(), Error> {
         let keys = {
             let mut keys = Vec::new();
             let mut iter = self.txdb.iter(rwtxn).map_err(DbError::from)?;
@@ -712,14 +840,14 @@ impl Archive {
         for key in &keys {
             let _ = self.txdb.delete(rwtxn, key)?;
         }
-        Ok(keys.len())
+        Ok(())
     }
 
     pub fn prune_txdb_older_than(
         &self,
         rwtxn: &mut RwTxn,
         cutoff_unix: u64,
-    ) -> Result<usize, Error> {
+    ) -> Result<(), Error> {
         let keys = {
             let mut keys = Vec::new();
             let mut iter = self.txdb.iter(rwtxn).map_err(DbError::from)?;
@@ -733,7 +861,7 @@ impl Archive {
         for key in &keys {
             let _ = self.txdb.delete(rwtxn, key)?;
         }
-        Ok(keys.len())
+        Ok(())
     }
 
     pub fn put_txdb_for_connected_block(
@@ -1128,6 +1256,29 @@ impl Archive {
         Ancestors {
             inner: self.ancestor_headers(rotxn, block_hash),
         }
+    }
+
+    pub fn ancestor_hashes_after_height(
+        &self,
+        rotxn: &RoTxn,
+        tip_hash: BlockHash,
+        height: u32,
+    ) -> Result<Vec<BlockHash>, Error> {
+        let mut blocks = Vec::new();
+        let mut ancestors = self.ancestors(rotxn, tip_hash);
+
+        while let Some(block_hash) = ancestors.next()? {
+            let block_height = self.get_height(rotxn, block_hash)?;
+
+            if block_height <= height {
+                break;
+            }
+
+            blocks.push(block_hash);
+        }
+
+        blocks.reverse();
+        Ok(blocks)
     }
 
     /// Get missing bodies in the ancestry of the specified block, up to the

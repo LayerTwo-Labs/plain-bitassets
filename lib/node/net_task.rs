@@ -25,7 +25,7 @@ use tokio_stream::StreamNotifyClose;
 
 use super::mainchain_task::{self, MainchainTaskHandle};
 use crate::{
-    archive::{self, Archive},
+    archive::{self, Archive, TXDB_PRUNE_INTERVAL_BLOCKS, TXDB_RETENTION_SECS},
     mempool::{self, MemPool},
     net::{
         self, Net, PeerConnectionError, PeerConnectionInfo,
@@ -129,9 +129,6 @@ impl From<net::Error> for Error {
     }
 }
 
-const TXDB_PRUNE_INTERVAL_BLOCKS: u32 = 144 * 7;
-const TXDB_RETENTION_SECS: u64 = 28 * 24 * 60 * 60;
-
 fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -170,7 +167,7 @@ fn connect_tip_(
     )?;
     if block_height > 0 && block_height % TXDB_PRUNE_INTERVAL_BLOCKS == 0 {
         let cutoff_unix = unix_stamp.saturating_sub(TXDB_RETENTION_SECS);
-        let _ = archive.prune_txdb_older_than(rwtxn, cutoff_unix)?;
+        archive.prune_txdb_older_than(rwtxn, cutoff_unix)?;
     }
     for transaction in &body.transactions {
         let () = mempool.delete(rwtxn, transaction.txid())?;
@@ -271,7 +268,7 @@ fn disconnect_tip_(
         }
     };
     let () = state.disconnect_two_way_peg_data(rwtxn, &two_way_peg_data)?;
-    let _ = archive.prune_txdb_block(rwtxn, tip_block_hash)?;
+    archive.prune_txdb_block(rwtxn, tip_block_hash)?;
     let () = state.disconnect_tip(rwtxn, &tip_header, &tip_body)?;
     for transaction in tip_body.authorized_transactions().iter().rev() {
         mempool.put(rwtxn, transaction)?;

@@ -190,10 +190,40 @@ where
             unsafe { env_open_opts.flags(fast_flags) };
             unsafe { Env::open(&env_open_opts, &env_path) }?
         };
-        let state = State::new(&env)?;
+        let archive = Archive::new(&env)?;
+        let latest_accumulator = {
+            let rotxn = env.read_txn()?;
+            archive.latest_accumulator(&rotxn)?
+        };
+        let snapshot_height =
+            latest_accumulator.as_ref().map(|(height, _)| *height);
+        let utreexo_accumulator = latest_accumulator
+            .map(|(_height, accumulator)| accumulator)
+            .unwrap_or_default();
+        let state = State::new(&env, utreexo_accumulator)?;
+
+        {
+            // Replay accumulator from last snapshot to sidechain tip
+            let rotxn = env.read_txn()?;
+            if let Some(tip_hash) = state.try_get_tip(&rotxn)? {
+                let blocks = archive.ancestor_hashes_after_height(
+                    &rotxn,
+                    tip_hash,
+                    snapshot_height.unwrap_or(0),
+                )?;
+                let mut accumulator = state.utreexo_accumulator.lock();
+                for block_hash in blocks {
+                    let diff =
+                        archive.get_accumulator_diff(&rotxn, block_hash)?;
+                    accumulator
+                        .apply_diff(diff)
+                        .map_err(|err| Error::Utreexo(err.to_string()))?;
+                }
+            }
+        }
+
         #[cfg(feature = "zmq")]
         let zmq_pub_handler = Arc::new(ZmqPubHandler::new(zmq_addr).await?);
-        let archive = Archive::new(&env)?;
         let mempool = MemPool::new(&env)?;
         let (mainchain_task, mainchain_task_response_rx) =
             MainchainTaskHandle::new(
