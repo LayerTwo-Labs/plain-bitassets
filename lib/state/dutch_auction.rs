@@ -107,6 +107,11 @@ impl DutchAuctionState {
         if price == 0 {
             do yeet error::Bid::InvalidPrice
         };
+        // A sold-out auction offers no base; the end-price calculation below
+        // divides by the remaining base amount, so reject before that division.
+        if base_amount_remaining.latest().data == 0 {
+            do yeet error::Bid::AuctionExhausted
+        };
         // Calculate order quantity for this bid, in terms of the base
         let order_quantity: u128 = {
             /* bid_amount / (price / base_amount_remaining)
