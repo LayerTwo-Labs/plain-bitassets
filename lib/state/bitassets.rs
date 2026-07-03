@@ -672,3 +672,106 @@ impl Dbs {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{BitAssetData, Dbs};
+    use crate::types::{
+        Address, BitAssetId, FilledOutput, FilledOutputContent,
+        FilledTransaction, OutPoint, Transaction, Txid,
+    };
+
+    fn temp_env() -> sneed::Env {
+        let mut path = std::env::temp_dir();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        path.push(format!("bitassets-mint-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&path).unwrap();
+        let mut opts = heed::EnvOpenOptions::new();
+        opts.map_size(16 * 1024 * 1024).max_dbs(Dbs::NUM_DBS);
+        unsafe { sneed::Env::open(&opts, &path) }.unwrap()
+    }
+
+    /// A tx that spends a single BitAsset control coin for `bitasset`, so that
+    /// `apply_mint`/`revert_mint` resolve it as the minted BitAsset. `vout`
+    /// varies the input outpoint so successive mints have distinct txids.
+    fn mint_tx(bitasset: BitAssetId, vout: u32) -> FilledTransaction {
+        let transaction = Transaction::new(
+            vec![OutPoint::Regular {
+                txid: Txid([0; 32]),
+                vout,
+            }],
+            vec![],
+        );
+        let control = FilledOutput::new(
+            Address([0; 20]),
+            FilledOutputContent::BitAssetControl(bitasset),
+        );
+        FilledTransaction {
+            transaction,
+            spent_utxos: vec![control],
+        }
+    }
+
+    fn supply(dbs: &Dbs, env: &sneed::Env, bitasset: BitAssetId) -> u64 {
+        let rotxn = env.read_txn().unwrap();
+        dbs.bitassets
+            .try_get(&rotxn, &bitasset)
+            .unwrap()
+            .unwrap()
+            .total_supply
+            .latest()
+            .data
+    }
+
+    /// Successive mints must accumulate against the latest recorded supply, and
+    /// reverting the mints (as a reorg disconnect does) must undo them exactly.
+    /// Previously both handlers read the earliest rollback entry, so the second
+    /// mint undercounted and `revert_mint`'s `assert_eq!` panicked on the
+    /// consensus disconnect path.
+    #[test]
+    fn mint_supply_accumulates_and_reverts_across_reorg() {
+        let env = temp_env();
+        let bitasset = BitAssetId([9; 32]);
+
+        // Register the BitAsset with an initial supply of 100.
+        let mut rwtxn = env.write_txn().unwrap();
+        let dbs = Dbs::new(&env, &mut rwtxn).unwrap();
+        let data = BitAssetData::init(
+            crate::types::BitAssetData::default(),
+            100,
+            Txid([0; 32]),
+            0,
+        );
+        dbs.bitassets.put(&mut rwtxn, &bitasset, &data).unwrap();
+        rwtxn.commit().unwrap();
+
+        let mint1 = mint_tx(bitasset, 0);
+        let mint2 = mint_tx(bitasset, 1);
+
+        // Two mints: 100 -> 150 -> 180.
+        let mut rwtxn = env.write_txn().unwrap();
+        dbs.apply_mint(&mut rwtxn, &mint1, 50, 1).unwrap();
+        rwtxn.commit().unwrap();
+        assert_eq!(supply(&dbs, &env, bitasset), 150);
+
+        let mut rwtxn = env.write_txn().unwrap();
+        dbs.apply_mint(&mut rwtxn, &mint2, 30, 2).unwrap();
+        rwtxn.commit().unwrap();
+        assert_eq!(supply(&dbs, &env, bitasset), 180);
+
+        // Reorg disconnect reverts most-recent first: 180 -> 150 -> 100.
+        // This is the call that previously panicked in `assert_eq!`.
+        let mut rwtxn = env.write_txn().unwrap();
+        dbs.revert_mint(&mut rwtxn, &mint2, 30).unwrap();
+        rwtxn.commit().unwrap();
+        assert_eq!(supply(&dbs, &env, bitasset), 150);
+
+        let mut rwtxn = env.write_txn().unwrap();
+        dbs.revert_mint(&mut rwtxn, &mint1, 50).unwrap();
+        rwtxn.commit().unwrap();
+        assert_eq!(supply(&dbs, &env, bitasset), 100);
+    }
+}
