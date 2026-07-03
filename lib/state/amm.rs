@@ -417,7 +417,7 @@ pub(in crate::state) fn apply_mint(
     let new_amm_pool_state = amm_pool_state.mint(amount0, amount1)?;
     let lp_tokens_minted = new_amm_pool_state
         .outstanding_lp_tokens
-        .checked_sub(lp_token_mint)
+        .checked_sub(amm_pool_state.outstanding_lp_tokens)
         .ok_or(Error::InvalidMint)?;
     if lp_tokens_minted != lp_token_mint {
         do yeet Error::InvalidMint;
