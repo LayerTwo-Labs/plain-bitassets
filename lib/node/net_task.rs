@@ -391,7 +391,7 @@ fn reorg_to_tip(
             }
             two_way_peg_data
         };
-        let () = connect_tip_(
+        if let Err(err) = connect_tip_(
             &mut rwtxn,
             archive,
             mempool,
@@ -399,7 +399,18 @@ fn reorg_to_tip(
             header,
             body,
             &two_way_peg_data,
-        )?;
+        ) {
+            // The stored body for this block failed validation (e.g. a peer
+            // supplied a body whose contents do not match the header's merkle
+            // root). Abort the reorg and discard the invalid body from the
+            // archive so that the block is reported missing again and the real
+            // body is re-requested, instead of the archive staying poisoned.
+            drop(rwtxn);
+            let mut rwtxn = env.write_txn().map_err(EnvError::from)?;
+            let () = archive.delete_body(&mut rwtxn, header.hash(), &body)?;
+            rwtxn.commit().map_err(RwTxnError::from)?;
+            return Err(err);
+        }
         let new_tip_hash = state.try_get_tip(&rwtxn)?.unwrap();
         let bmm_verification =
             archive.get_best_main_verification(&rwtxn, new_tip_hash)?;
@@ -1023,8 +1034,8 @@ impl NetTask {
                         }
                     }
                 }
-                MailboxItem::NewTipReady(new_tip, _addr, resp_tx) => {
-                    let reorg_applied = task::block_in_place(|| {
+                MailboxItem::NewTipReady(new_tip, addr, resp_tx) => {
+                    let reorg_result = task::block_in_place(|| {
                         reorg_to_tip(
                             &self.ctxt.env,
                             &self.ctxt.archive,
@@ -1034,7 +1045,26 @@ impl NetTask {
                             &self.ctxt.zmq_pub_handler,
                             new_tip,
                         )
-                    })?;
+                    });
+                    // A tip supplied by a peer may carry a body that fails
+                    // validation. Do not let that error propagate out of `run`
+                    // and halt the whole net task: log it and drop the
+                    // offending peer instead. `reorg_to_tip` has already
+                    // discarded the invalid body so it will be re-requested.
+                    let reorg_applied = match reorg_result {
+                        Ok(reorg_applied) => reorg_applied,
+                        Err(err) => {
+                            tracing::warn!(
+                                ?addr,
+                                %err,
+                                "Failed to reorg to new tip; dropping peer"
+                            );
+                            if let Some(addr) = addr {
+                                let () = self.ctxt.net.remove_active_peer(addr);
+                            }
+                            false
+                        }
+                    };
                     if let Some(resp_tx) = resp_tx {
                         let () = resp_tx
                             .send(reorg_applied)

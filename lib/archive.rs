@@ -693,6 +693,36 @@ impl Archive {
             })
     }
 
+    /// Delete a stored body, reversing the effects of [`Self::put_body`].
+    ///
+    /// Used to discard a body that was stored before its contents could be
+    /// validated (e.g. a body received from a peer) and later turned out to be
+    /// invalid, so that the block is reported missing again by
+    /// [`Self::iter_missing_bodies`] and the real body is re-requested.
+    pub fn delete_body(
+        &self,
+        rwtxn: &mut RwTxn,
+        block_hash: BlockHash,
+        body: &Body,
+    ) -> Result<(), Error> {
+        self.bodies
+            .delete(rwtxn, &block_hash)
+            .map_err(DbError::from)?;
+        body.transactions.iter().try_for_each(|tx| {
+            let txid = tx.txid();
+            let mut inclusions = self.get_tx_inclusions(rwtxn, txid)?;
+            inclusions.remove(&block_hash);
+            if inclusions.is_empty() {
+                self.txid_to_inclusions
+                    .delete(rwtxn, &txid)
+                    .map_err(DbError::from)?;
+            } else {
+                self.txid_to_inclusions.put(rwtxn, &txid, &inclusions)?;
+            }
+            Ok(())
+        })
+    }
+
     /// Store a header.
     ///
     /// The following predicates MUST be met before calling this function:
