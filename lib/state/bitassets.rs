@@ -672,3 +672,105 @@ impl Dbs {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::{
+        state::test::fresh_state,
+        types::{
+            Address, FilledOutput, FilledOutputContent, OutPoint, Transaction,
+            TxData,
+        },
+    };
+
+    /// Build a mint transaction of `mint_amount` that spends the BitAsset
+    /// control coin for `bitasset_id`. `nonce` distinguishes the txids so that
+    /// successive mints produce distinct rollback entries.
+    fn mint_tx(
+        bitasset_id: BitAssetId,
+        mint_amount: u64,
+        nonce: u8,
+    ) -> FilledTransaction {
+        let address = Address([0; 20]);
+        let mut transaction = Transaction::new(
+            vec![OutPoint::Regular {
+                txid: Txid([nonce; 32]),
+                vout: 0,
+            }],
+            Vec::new(),
+        );
+        transaction.data = Some(TxData::BitAssetMint(mint_amount));
+        FilledTransaction {
+            transaction,
+            spent_utxos: vec![FilledOutput {
+                address,
+                content: FilledOutputContent::BitAssetControl(bitasset_id),
+                memo: Vec::new(),
+            }],
+        }
+    }
+
+    /// A second mint must accumulate on top of the latest supply, and reverting
+    /// a mint must restore the previous running total rather than reading the
+    /// earliest rollback entry (which panics the disconnect path on reorg).
+    #[test]
+    fn mint_accumulates_latest_supply_and_reverts_cleanly() -> anyhow::Result<()>
+    {
+        let (env, state) = fresh_state("bitasset_mint_supply")?;
+        let dbs = state.bitassets();
+        let bitasset_id = BitAssetId([1; 32]);
+
+        // Seed the BitAsset with an initial supply of 100.
+        {
+            let mut rwtxn = env.write_txn()?;
+            let bitasset_data = BitAssetData::init(
+                crate::types::BitAssetData::default(),
+                100,
+                Txid([0; 32]),
+                0,
+            );
+            dbs.bitassets
+                .put(&mut rwtxn, &bitasset_id, &bitasset_data)?;
+            rwtxn.commit()?;
+        }
+
+        // Two positive mints: 100 -> 150 -> 180.
+        {
+            let mut rwtxn = env.write_txn()?;
+            dbs.apply_mint(&mut rwtxn, &mint_tx(bitasset_id, 50, 1), 50, 1)?;
+            dbs.apply_mint(&mut rwtxn, &mint_tx(bitasset_id, 30, 2), 30, 2)?;
+            rwtxn.commit()?;
+        }
+        {
+            let rotxn = env.read_txn()?;
+            let total_supply =
+                dbs.get_bitasset(&rotxn, &bitasset_id)?.total_supply;
+            anyhow::ensure!(
+                total_supply.latest().data == 180,
+                "second mint must accumulate on the latest supply, got {}",
+                total_supply.latest().data
+            );
+        }
+
+        // Reverting the most recent mint must not panic and must restore 150.
+        {
+            let mut rwtxn = env.write_txn()?;
+            dbs.revert_mint(&mut rwtxn, &mint_tx(bitasset_id, 30, 2), 30)?;
+            rwtxn.commit()?;
+        }
+        {
+            let rotxn = env.read_txn()?;
+            let total_supply =
+                dbs.get_bitasset(&rotxn, &bitasset_id)?.total_supply;
+            anyhow::ensure!(
+                total_supply.latest().data == 150,
+                "revert must restore the pre-mint supply, got {}",
+                total_supply.latest().data
+            );
+        }
+
+        Ok(())
+    }
+}
