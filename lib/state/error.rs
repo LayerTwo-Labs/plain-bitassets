@@ -110,6 +110,8 @@ pub mod dutch_auction {
     pub enum Bid {
         #[error("Auction has already ended")]
         AuctionEnded,
+        #[error("Auction is sold out; no base amount remaining")]
+        AuctionExhausted,
         #[error("Auction has not started yet")]
         AuctionNotStarted,
         #[error("Incorrect receive asset specified")]

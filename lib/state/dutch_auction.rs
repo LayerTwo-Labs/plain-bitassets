@@ -75,7 +75,11 @@ impl DutchAuctionState {
         if height > end_block || base_amount_remaining.latest().data == 0 {
             do yeet error::Bid::AuctionEnded
         };
-
+        // A sold-out auction has no base amount remaining to price against;
+        // dividing by it below (next end price) would panic.
+        if base_amount_remaining.latest().data == 0 {
+            do yeet error::Bid::AuctionExhausted
+        };
         let remaining_duration_at_most_recent_bid =
             end_block - most_recent_bid_block.latest().data;
         // Calculate current price
@@ -447,29 +451,29 @@ pub(in crate::state) fn revert_collect(
 }
 
 #[cfg(test)]
-mod test {
-    use crate::{
-        state::{
-            dutch_auction::DutchAuctionState,
-            rollback::{RollBack, TxidStamped},
-        },
-        types::{AssetId, BitAssetId, Txid},
-    };
+mod tests {
+    use super::*;
 
-    fn test_asset(byte: u8) -> AssetId {
-        AssetId::BitAsset(BitAssetId([byte; blake3::OUT_LEN]))
-    }
-
-    fn test_auction() -> DutchAuctionState {
-        let txid = Txid::default();
+    /// Builds an active Dutch auction with the given base amount to offer.
+    fn make_auction(base_amount: u64) -> DutchAuctionState {
+        let txid = Txid([0; 32]);
+        let start_block = 0;
         DutchAuctionState {
-            start_block: 1,
-            most_recent_bid_block: RollBack::<TxidStamped<_>>::new(1, txid, 0),
+            start_block,
+            most_recent_bid_block: RollBack::<TxidStamped<_>>::new(
+                start_block,
+                txid,
+                0,
+            ),
             duration: 10,
-            base_asset: test_asset(1),
-            initial_base_amount: 2,
-            base_amount_remaining: RollBack::<TxidStamped<_>>::new(2, txid, 0),
-            quote_asset: test_asset(2),
+            base_asset: AssetId::Bitcoin,
+            initial_base_amount: base_amount,
+            base_amount_remaining: RollBack::<TxidStamped<_>>::new(
+                base_amount,
+                txid,
+                0,
+            ),
+            quote_asset: AssetId::Bitcoin,
             quote_amount: RollBack::<TxidStamped<_>>::new(0, txid, 0),
             initial_price: 1_000,
             price_after_most_recent_bid: RollBack::<TxidStamped<_>>::new(
@@ -482,12 +486,23 @@ mod test {
         }
     }
 
+    /// A bid that sells out an auction must not leave a state on which a later
+    /// bid panics via divide-by-zero; the follow-up bid must be cleanly
+    /// rejected instead.
     #[test]
-    fn bid_on_sold_out_auction_fails() -> anyhow::Result<()> {
-        let sold_out = test_auction().bid(Txid::default(), 501, 1)?;
-        anyhow::ensure!(sold_out.base_amount_remaining.latest().data == 0);
-        anyhow::ensure!(sold_out.price_after_most_recent_bid.latest().data > 0);
-        anyhow::ensure!(sold_out.bid(Txid::default(), 1, 2).is_err());
-        Ok(())
+    fn sold_out_auction_rejects_further_bids() {
+        let txid = Txid([0; 32]);
+        let auction = make_auction(2);
+        // First bid legitimately sells the auction out.
+        let sold_out =
+            auction.bid(txid, 501, 1).expect("first bid should succeed");
+        assert_eq!(sold_out.base_amount_remaining.latest().data, 0);
+        assert!(sold_out.price_after_most_recent_bid.latest().data > 0);
+        // A further bid on the sold-out auction must be rejected cleanly,
+        // rather than panicking on the next-end-price division.
+        assert!(matches!(
+            sold_out.bid(txid, 1, 2),
+            Err(error::Bid::AuctionExhausted)
+        ));
     }
 }
