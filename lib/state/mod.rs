@@ -73,12 +73,6 @@ type WithdrawalBundlesDb = DatabaseUnique<
 >;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct UtxoEntry {
-    pub created_height: u32,
-    pub output: FilledOutput,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SpentUtxoEntry {
     pub created_height: u32,
     pub output: SpentOutput,
@@ -96,8 +90,8 @@ pub struct State {
     /// Associates Dutch auction sequence numbers with auction state
     dutch_auctions: dutch_auction::Db,
     utxos: DatabaseUnique<OutPointKey, SerdeBincode<FilledOutput>>,
-    utxos_by_address:
-        DatabaseUnique<AddressOutPointKey, SerdeBincode<UtxoEntry>>,
+    utxo_heights_by_address:
+        DatabaseUnique<AddressOutPointKey, SerdeBincode<u32>>,
     stxos: DatabaseUnique<OutPointKey, SerdeBincode<SpentUtxoEntry>>,
     /// Pending withdrawal bundle. MUST exist in withdrawal_bundles
     pending_withdrawal_bundle: DatabaseUnique<UnitKey, SerdeBincode<M6id>>,
@@ -137,8 +131,8 @@ impl State {
         let dutch_auctions =
             DatabaseUnique::create(env, &mut rwtxn, "dutch_auctions")?;
         let utxos = DatabaseUnique::create(env, &mut rwtxn, "utxos")?;
-        let utxos_by_address =
-            DatabaseUnique::create(env, &mut rwtxn, "utxos_by_address")?;
+        let utxo_heights_by_address =
+            DatabaseUnique::create(env, &mut rwtxn, "utxo_heights_by_address")?;
         let stxos = DatabaseUnique::create(env, &mut rwtxn, "stxos")?;
         let pending_withdrawal_bundle = DatabaseUnique::create(
             env,
@@ -171,7 +165,7 @@ impl State {
             bitassets,
             dutch_auctions,
             utxos,
-            utxos_by_address,
+            utxo_heights_by_address,
             stxos,
             pending_withdrawal_bundle,
             latest_failed_withdrawal_bundle,
@@ -217,14 +211,13 @@ impl State {
         output: FilledOutput,
         created_height: u32,
     ) -> Result<AddressOutPointKey, sneed::db::Error> {
-        let entry = UtxoEntry {
-            created_height,
-            output,
-        };
-        let address_key =
-            AddressOutPointKey::new(entry.output.address, outpoint_key);
-        self.utxos_by_address.put(rwtxn, &address_key, &entry)?;
-        self.utxos.put(rwtxn, &outpoint_key, &entry.output)?;
+        let address_key = AddressOutPointKey::new(output.address, outpoint_key);
+        self.utxo_heights_by_address.put(
+            rwtxn,
+            &address_key,
+            &created_height,
+        )?;
+        self.utxos.put(rwtxn, &outpoint_key, &output)?;
         Ok(address_key)
     }
 
@@ -233,7 +226,7 @@ impl State {
         rwtxn: &mut RwTxn,
         address_key: &AddressOutPointKey,
     ) -> Result<bool, sneed::db::Error> {
-        self.utxos_by_address.delete(rwtxn, &address_key)?;
+        self.utxo_heights_by_address.delete(rwtxn, &address_key)?;
         Ok(self.utxos.delete(rwtxn, &address_key.outpoint_key())?)
     }
 
@@ -245,13 +238,14 @@ impl State {
     ) -> Result<bool, sneed::db::Error> {
         let address_key =
             AddressOutPointKey::new(spent_output.output.address, outpoint_key);
-        let Some(entry) = self.utxos_by_address.try_get(rwtxn, &address_key)?
+        let Some(created_height) =
+            self.utxo_heights_by_address.try_get(rwtxn, &address_key)?
         else {
             return Ok(false);
         };
 
         let entry = SpentUtxoEntry {
-            created_height: entry.created_height,
+            created_height,
             output: spent_output,
         };
 
@@ -323,13 +317,15 @@ impl State {
             let start = AddressOutPointKey::start(*address);
             let end = AddressOutPointKey::end(*address);
             let mut iter = self
-                .utxos_by_address
+                .utxo_heights_by_address
                 .range(rotxn, &(start..=end))
                 .map_err(sneed::db::Error::from)?;
-            while let Some((key, entry)) = iter.next()? {
-                if entry.created_height >= height_threshold {
-                    let outpoint = key.outpoint_key().to_outpoint();
-                    utxos.insert(outpoint, entry.output);
+            while let Some((key, created_height)) = iter.next()? {
+                if created_height >= height_threshold {
+                    let outpoint_key = key.outpoint_key();
+                    let outpoint = outpoint_key.to_outpoint();
+                    let output = self.utxos.get(rotxn, &outpoint_key)?;
+                    utxos.insert(outpoint, output);
                 }
             }
         }
@@ -1187,6 +1183,79 @@ mod test {
             expected_sidechain_wealth,
             sidechain_wealth,
         );
+        Ok(())
+    }
+
+    #[test]
+    fn address_utxo_index_stores_height_and_restores_on_unspend()
+    -> anyhow::Result<()> {
+        use std::collections::HashSet;
+
+        let (env, state) = fresh_state(
+            "address_utxo_index_stores_height_and_restores_on_unspend",
+        )?;
+        let address = Address([1; 20]);
+        let outpoint = OutPoint::Regular {
+            txid: Txid([2; 32]),
+            vout: 0,
+        };
+        let key = OutPointKey::from_outpoint(&outpoint);
+        let output = bitcoin_filled_output(address, 42);
+        let created_height = 7;
+        let addresses = HashSet::from([address]);
+
+        {
+            let mut rwtxn = env.write_txn()?;
+            let address_key = state.put_utxo(
+                &mut rwtxn,
+                key,
+                output.clone(),
+                created_height,
+            )?;
+            anyhow::ensure!(
+                state.utxo_heights_by_address.get(&rwtxn, &address_key)?
+                    == created_height
+            );
+            rwtxn.commit()?;
+        }
+
+        {
+            let rotxn = env.read_txn()?;
+            let indexed =
+                state.get_utxos_by_addresses(&rotxn, &addresses, 0)?;
+            anyhow::ensure!(indexed.get(&outpoint) == Some(&output));
+            let above_height = state.get_utxos_by_addresses(
+                &rotxn,
+                &addresses,
+                created_height + 1,
+            )?;
+            anyhow::ensure!(above_height.is_empty());
+        }
+
+        {
+            let mut rwtxn = env.write_txn()?;
+            let spent_output = SpentOutput {
+                output: output.clone(),
+                inpoint: InPoint::Regular {
+                    txid: Txid([3; 32]),
+                    vin: 0,
+                },
+            };
+            anyhow::ensure!(state.spend_utxo(&mut rwtxn, key, spent_output)?);
+            anyhow::ensure!(state.unspend_utxo(&mut rwtxn, &key)?);
+            rwtxn.commit()?;
+        }
+
+        let rotxn = env.read_txn()?;
+        let restored =
+            state.get_utxos_by_addresses(&rotxn, &addresses, created_height)?;
+        anyhow::ensure!(restored.get(&outpoint) == Some(&output));
+        let above_height = state.get_utxos_by_addresses(
+            &rotxn,
+            &addresses,
+            created_height + 1,
+        )?;
+        anyhow::ensure!(above_height.is_empty());
         Ok(())
     }
 }
