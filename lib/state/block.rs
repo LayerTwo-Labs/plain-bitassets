@@ -755,7 +755,8 @@ mod test {
 
     #[test]
     fn disconnect_bitasset_data_update() -> anyhow::Result<()> {
-        let (env, state) = fresh_state("disconnect_bitasset_data_update")?;
+        let (_temp_dir, env, state) =
+            fresh_state("disconnect_bitasset_data_update")?;
         let signing_key = SigningKey::from_bytes(&[7; 32]);
         let verifying_key = signing_key.verifying_key().into();
         let address = authorization::get_address(&verifying_key);

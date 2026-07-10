@@ -19,7 +19,11 @@ use futures::{
     stream,
 };
 use nonempty::NonEmpty;
-use sneed::{DbError, EnvError, RwTxn, RwTxnError, db};
+use sneed::{
+    DbError, EnvError, RwTxn, RwTxnError, db, env::error as env_error,
+    rwtxn::error as rwtxn_error,
+};
+use thiserror::Error;
 use tokio::task::{self, JoinHandle};
 use tokio_stream::StreamNotifyClose;
 
@@ -37,13 +41,17 @@ use crate::{
         BmmResult, Body, Header, Tip,
         proto::{self, mainchain},
     },
-    util::join_set,
+    util::{ErrorChain, join_set},
 };
 
 #[allow(clippy::duplicated_attributes)]
-#[derive(thiserror::Error, transitive::Transitive, Debug)]
-#[transitive(from(db::error::IterInit, DbError))]
-#[transitive(from(db::error::IterItem, DbError))]
+#[derive(transitive::Transitive, Debug, Error)]
+#[transitive(
+    from(db::error::IterInit, DbError),
+    from(db::error::IterItem, DbError),
+    from(env_error::WriteTxn, EnvError),
+    from(rwtxn_error::Commit, RwTxnError)
+)]
 pub enum Error {
     #[error("archive error")]
     Archive(#[from] archive::Error),
@@ -261,6 +269,11 @@ fn disconnect_tip_(
 /// The new tip block and all ancestor blocks must exist in the node's archive.
 /// A result of `Ok(true)` indicates a successful re-org.
 /// A result of `Ok(false)` indicates that no re-org was attempted.
+// a state error means a peer sent an invalid block; it must not be fatal
+fn is_fatal_reorg_error(err: &Error) -> bool {
+    !matches!(err, Error::State(_))
+}
+
 fn reorg_to_tip(
     env: &sneed::Env,
     archive: &Archive,
@@ -391,7 +404,7 @@ fn reorg_to_tip(
             }
             two_way_peg_data
         };
-        let () = connect_tip_(
+        let () = match connect_tip_(
             &mut rwtxn,
             archive,
             mempool,
@@ -399,7 +412,24 @@ fn reorg_to_tip(
             header,
             body,
             &two_way_peg_data,
-        )?;
+        ) {
+            Ok(()) => (),
+            Err(err) => {
+                if is_fatal_reorg_error(&err) {
+                    // The stored body for this block failed validation (e.g. a peer
+                    // supplied a body whose contents do not match the header's merkle
+                    // root). Abort the reorg and discard the invalid body from the
+                    // archive so that the block is reported missing again and the real
+                    // body is re-requested, instead of the archive staying poisoned.
+                    drop(rwtxn);
+                    let mut rwtxn = env.write_txn()?;
+                    let () =
+                        archive.delete_body(&mut rwtxn, header.hash(), body)?;
+                    rwtxn.commit()?;
+                }
+                return Err(err);
+            }
+        };
         let new_tip_hash = state.try_get_tip(&rwtxn)?.unwrap();
         let bmm_verification =
             archive.get_best_main_verification(&rwtxn, new_tip_hash)?;
@@ -1023,8 +1053,8 @@ impl NetTask {
                         }
                     }
                 }
-                MailboxItem::NewTipReady(new_tip, _addr, resp_tx) => {
-                    let reorg_applied = task::block_in_place(|| {
+                MailboxItem::NewTipReady(new_tip, addr, resp_tx) => {
+                    let reorg_result = task::block_in_place(|| {
                         reorg_to_tip(
                             &self.ctxt.env,
                             &self.ctxt.archive,
@@ -1034,7 +1064,27 @@ impl NetTask {
                             &self.ctxt.zmq_pub_handler,
                             new_tip,
                         )
-                    })?;
+                    });
+                    let reorg_applied = match reorg_result {
+                        Ok(applied) => applied,
+                        Err(err) if is_fatal_reorg_error(&err) => {
+                            return Err(err);
+                        }
+                        // an invalid block must not kill the net task; drop the
+                        // peer and keep running
+                        Err(err) => {
+                            tracing::warn!(
+                                ?new_tip,
+                                ?addr,
+                                err = format!("{:#}", ErrorChain::new(&err)),
+                                "rejecting invalid tip from peer"
+                            );
+                            if let Some(addr) = addr {
+                                let () = self.ctxt.net.remove_active_peer(addr);
+                            }
+                            false
+                        }
+                    };
                     if let Some(resp_tx) = resp_tx {
                         let () = resp_tx
                             .send(reorg_applied)
@@ -1258,5 +1308,26 @@ impl Drop for NetTaskHandle {
             tracing::debug!("dropping net task handle, aborting task");
             task.abort()
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{
+        node::net_task::{Error, is_fatal_reorg_error},
+        state,
+    };
+
+    // a peer's invalid block (value out > value in) must not be fatal
+    #[test]
+    fn invalid_peer_block_is_not_fatal() {
+        let err = Error::State(Box::new(state::Error::NotEnoughFees));
+        assert!(!is_fatal_reorg_error(&err));
+    }
+
+    // local infrastructure errors stay fatal
+    #[test]
+    fn infrastructure_error_is_fatal() {
+        assert!(is_fatal_reorg_error(&Error::PeerInfoRxClosed));
     }
 }
