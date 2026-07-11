@@ -72,9 +72,10 @@ impl DutchAuctionState {
         // Blocks elapsed since last bid
         let elapsed_blocks = height - most_recent_bid_block.latest().data;
         let end_block = start_block.saturating_add(*duration - 1);
-        if height > end_block {
+        if height > end_block || base_amount_remaining.latest().data == 0 {
             do yeet error::Bid::AuctionEnded
         };
+
         let remaining_duration_at_most_recent_bid =
             end_block - most_recent_bid_block.latest().data;
         // Calculate current price
@@ -443,4 +444,50 @@ pub(in crate::state) fn revert_collect(
     assert_eq!(auction_state.quote_amount.latest().data, amount_received);
     db.put(rwtxn, &auction_id, &auction_state)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{
+        state::{
+            dutch_auction::DutchAuctionState,
+            rollback::{RollBack, TxidStamped},
+        },
+        types::{AssetId, BitAssetId, Txid},
+    };
+
+    fn test_asset(byte: u8) -> AssetId {
+        AssetId::BitAsset(BitAssetId([byte; blake3::OUT_LEN]))
+    }
+
+    fn test_auction() -> DutchAuctionState {
+        let txid = Txid::default();
+        DutchAuctionState {
+            start_block: 1,
+            most_recent_bid_block: RollBack::<TxidStamped<_>>::new(1, txid, 0),
+            duration: 10,
+            base_asset: test_asset(1),
+            initial_base_amount: 2,
+            base_amount_remaining: RollBack::<TxidStamped<_>>::new(2, txid, 0),
+            quote_asset: test_asset(2),
+            quote_amount: RollBack::<TxidStamped<_>>::new(0, txid, 0),
+            initial_price: 1_000,
+            price_after_most_recent_bid: RollBack::<TxidStamped<_>>::new(
+                1_000, txid, 0,
+            ),
+            initial_end_price: 100,
+            end_price_after_most_recent_bid: RollBack::<TxidStamped<_>>::new(
+                100, txid, 0,
+            ),
+        }
+    }
+
+    #[test]
+    fn bid_on_sold_out_auction_fails() -> anyhow::Result<()> {
+        let sold_out = test_auction().bid(Txid::default(), 501, 1)?;
+        anyhow::ensure!(sold_out.base_amount_remaining.latest().data == 0);
+        anyhow::ensure!(sold_out.price_after_most_recent_bid.latest().data > 0);
+        anyhow::ensure!(sold_out.bid(Txid::default(), 1, 2).is_err());
+        Ok(())
+    }
 }

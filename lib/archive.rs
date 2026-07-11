@@ -28,16 +28,15 @@ pub const ACCUMULATOR_PRUNE_INTERVAL_BLOCKS: u32 = 144 * 7 * 4;
 pub const ACCUMULATOR_SNAPSHOT_INTERVAL_BLOCKS: u32 = 144;
 
 #[allow(clippy::duplicated_attributes)]
-#[derive(thiserror::Error, transitive::Transitive, Debug)]
-#[transitive(from(db::error::Delete, DbError))]
-#[transitive(from(db::error::IterInit, DbError))]
-#[transitive(from(db::error::IterItem, DbError))]
-#[transitive(from(db::error::Last, DbError))]
-#[transitive(from(db::error::Put, DbError))]
-#[transitive(from(db::error::TryGet, DbError))]
-#[transitive(from(env::error::CreateDb, EnvError))]
-#[transitive(from(env::error::WriteTxn, EnvError))]
-#[transitive(from(rwtxn::error::Commit, RwTxnError))]
+#[derive(Debug, thiserror::Error, transitive::Transitive)]
+#[transitive(
+    from(db::error::Delete, DbError),
+    from(db::error::Put, DbError),
+    from(db::error::TryGet, DbError),
+    from(env::error::CreateDb, EnvError),
+    from(env::error::WriteTxn, EnvError),
+    from(rwtxn::error::Commit, RwTxnError)
+)]
 pub enum Error {
     #[error(transparent)]
     Db(#[from] DbError),
@@ -960,6 +959,32 @@ impl Archive {
                 self.txid_to_inclusions.put(rwtxn, &txid, &inclusions)?;
                 Ok(())
             })
+    }
+
+    /// Delete a stored body, reversing the effects of [`Self::put_body`].
+    ///
+    /// Used to discard a body that was stored before its contents could be
+    /// validated (e.g. a body received from a peer) and later turned out to be
+    /// invalid, so that the block is reported missing again by
+    /// [`Self::iter_missing_bodies`] and the real body is re-requested.
+    pub fn delete_body(
+        &self,
+        rwtxn: &mut RwTxn,
+        block_hash: BlockHash,
+        body: &Body,
+    ) -> Result<(), Error> {
+        self.bodies.delete(rwtxn, &block_hash)?;
+        body.transactions.iter().try_for_each(|tx| {
+            let txid = tx.txid();
+            let mut inclusions = self.get_tx_inclusions(rwtxn, txid)?;
+            inclusions.remove(&block_hash);
+            if inclusions.is_empty() {
+                self.txid_to_inclusions.delete(rwtxn, &txid)?;
+            } else {
+                self.txid_to_inclusions.put(rwtxn, &txid, &inclusions)?;
+            }
+            Ok(())
+        })
     }
 
     /// Store a header.
