@@ -1283,11 +1283,15 @@ impl Archive {
         }
     }
 
+    /// Return the ancestry after `exclusive_height`, ordered oldest-to-newest.
+    ///
+    /// If `exclusive_height` is `None`, return the full ancestry, including the
+    /// genesis block at height zero.
     pub fn ancestor_hashes_after_height(
         &self,
         rotxn: &RoTxn,
         tip_hash: BlockHash,
-        height: u32,
+        exclusive_height: Option<u32>,
     ) -> Result<Vec<BlockHash>, Error> {
         let mut blocks = Vec::new();
         let mut ancestors = self.ancestors(rotxn, tip_hash);
@@ -1295,7 +1299,7 @@ impl Archive {
         while let Some(block_hash) = ancestors.next()? {
             let block_height = self.get_height(rotxn, block_hash)?;
 
-            if block_height <= height {
+            if exclusive_height.is_some_and(|height| block_height <= height) {
                 break;
             }
 
@@ -1884,5 +1888,98 @@ impl FallibleIterator for AncestorsRev<'_, '_> {
         } else {
             Ok(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bitcoin::hashes::Hash as _;
+
+    use super::*;
+
+    fn temp_env(
+        test_name: &str,
+    ) -> anyhow::Result<(temp_dir::TempDir, sneed::Env)> {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        let temp_dir = temp_dir::TempDir::with_prefix(format!(
+            "plain-bitassets-{test_name}-{}-{nanos}",
+            std::process::id()
+        ))?;
+        let mut opts = heed::EnvOpenOptions::new();
+        opts.map_size(64 * 1024 * 1024).max_dbs(Archive::NUM_DBS);
+        let env = unsafe { sneed::Env::open(&opts, temp_dir.path()) }?;
+        Ok((temp_dir, env))
+    }
+
+    fn header(prev_side_hash: Option<BlockHash>, body: &Body) -> Header {
+        Header {
+            merkle_root: Body::compute_merkle_root(
+                &body.coinbase,
+                &body.transactions,
+            ),
+            prev_side_hash,
+            prev_main_hash: bitcoin::BlockHash::all_zeros(),
+        }
+    }
+
+    #[test]
+    fn ancestor_hashes_without_height_include_genesis() -> anyhow::Result<()> {
+        let (_temp_dir, env) =
+            temp_env("ancestor_hashes_without_height_include_genesis")?;
+        let archive = Archive::new(&env)?;
+        let body = Body {
+            coinbase: Vec::new(),
+            transactions: Vec::new(),
+            authorizations: Vec::new(),
+        };
+        let genesis = header(None, &body);
+        let genesis_hash = genesis.hash();
+        let child = header(Some(genesis_hash), &body);
+        let child_hash = child.hash();
+        let grandchild = header(Some(child_hash), &body);
+        let grandchild_hash = grandchild.hash();
+
+        let mut rwtxn = env.write_txn()?;
+        archive.put_header(&mut rwtxn, &genesis)?;
+        archive.put_header(&mut rwtxn, &child)?;
+        archive.put_header(&mut rwtxn, &grandchild)?;
+        rwtxn.commit()?;
+
+        let rotxn = env.read_txn()?;
+        assert_eq!(
+            archive.ancestor_hashes_after_height(
+                &rotxn,
+                grandchild_hash,
+                None,
+            )?,
+            vec![genesis_hash, child_hash, grandchild_hash]
+        );
+        assert_eq!(
+            archive.ancestor_hashes_after_height(
+                &rotxn,
+                grandchild_hash,
+                Some(0),
+            )?,
+            vec![child_hash, grandchild_hash]
+        );
+        assert_eq!(
+            archive.ancestor_hashes_after_height(
+                &rotxn,
+                grandchild_hash,
+                Some(1),
+            )?,
+            vec![grandchild_hash]
+        );
+        assert_eq!(
+            archive.ancestor_hashes_after_height(
+                &rotxn,
+                grandchild_hash,
+                Some(2),
+            )?,
+            Vec::new()
+        );
+        Ok(())
     }
 }

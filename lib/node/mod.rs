@@ -196,10 +196,9 @@ where
             archive.latest_accumulator(&rotxn)?
         };
         let snapshot_height =
-            latest_accumulator.as_ref().map(|(height, _)| *height);
-        let utreexo_accumulator = latest_accumulator
-            .map(|(_height, accumulator)| accumulator)
-            .unwrap_or_default();
+            latest_accumulator.as_ref().map(|height| height.0);
+        let utreexo_accumulator =
+            latest_accumulator.map(|acc| acc.1).unwrap_or_default();
         let state = State::new(&env, utreexo_accumulator)?;
 
         {
@@ -209,7 +208,7 @@ where
                 let blocks = archive.ancestor_hashes_after_height(
                     &rotxn,
                     tip_hash,
-                    snapshot_height.unwrap_or(0),
+                    snapshot_height,
                 )?;
                 let mut accumulator = state.utreexo_accumulator.lock();
                 for block_hash in blocks {
