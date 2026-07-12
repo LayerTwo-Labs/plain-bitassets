@@ -29,7 +29,11 @@ use tokio_stream::StreamNotifyClose;
 
 use super::mainchain_task::{self, MainchainTaskHandle};
 use crate::{
-    archive::{self, Archive, TXDB_PRUNE_INTERVAL_BLOCKS, TXDB_RETENTION_SECS},
+    archive::{
+        self, ACCUMULATOR_PRUNE_INTERVAL_BLOCKS,
+        ACCUMULATOR_SNAPSHOT_INTERVAL_BLOCKS, Archive,
+        TXDB_PRUNE_INTERVAL_BLOCKS, TXDB_RETENTION_SECS,
+    },
     mempool::{self, MemPool},
     net::{
         self, Net, PeerConnectionError, PeerConnectionInfo,
@@ -176,6 +180,17 @@ fn connect_tip_(
     if block_height > 0 && block_height % TXDB_PRUNE_INTERVAL_BLOCKS == 0 {
         let cutoff_unix = unix_stamp.saturating_sub(TXDB_RETENTION_SECS);
         archive.prune_txdb_older_than(rwtxn, cutoff_unix)?;
+    }
+    if block_height > 0
+        && block_height % ACCUMULATOR_SNAPSHOT_INTERVAL_BLOCKS == 0
+    {
+        let accumulator = state.utreexo_accumulator.lock();
+        archive.put_accumulator(rwtxn, block_height, &accumulator)?;
+    }
+    if block_height > 0 && block_height % ACCUMULATOR_PRUNE_INTERVAL_BLOCKS == 0
+    {
+        archive.prune_accumulator_older_than(rwtxn, block_height)?;
+        archive.prune_accumulator_diffs_older_than(rwtxn, block_height)?;
     }
     for transaction in &body.transactions {
         let () = mempool.delete(rwtxn, transaction.txid())?;

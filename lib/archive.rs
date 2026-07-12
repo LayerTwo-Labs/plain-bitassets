@@ -24,7 +24,7 @@ use crate::types::{
 pub const TXDB_PRUNE_INTERVAL_BLOCKS: u32 = 144 * 7;
 pub const TXDB_RETENTION_SECS: u64 = 28 * 24 * 60 * 60;
 
-pub const ACCUMULATOR_PRUNE_INTERVAL_BLOCKS: u32 = 144 * 7 * 4;
+pub const ACCUMULATOR_PRUNE_INTERVAL_BLOCKS: u32 = 144 * 7 * 4 * 3;
 pub const ACCUMULATOR_SNAPSHOT_INTERVAL_BLOCKS: u32 = 144;
 
 #[allow(clippy::duplicated_attributes)]
