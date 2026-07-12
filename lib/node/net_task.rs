@@ -87,6 +87,8 @@ pub enum Error {
     SendReorgResultOneshot,
     #[error("state error")]
     State(#[from] Box<state::Error>),
+    #[error(transparent)]
+    Utreexo(#[from] crate::types::UtreexoError),
 }
 
 impl From<state::Error> for Error {
@@ -160,12 +162,16 @@ fn connect_tip_(
     let prevalidated = state.prevalidate_block(rwtxn, header, body)?;
     let block_height = prevalidated.next_height;
     let merkle_root = prevalidated.computed_merkle_root;
-    let filled_txs = prevalidated.filled_transactions.clone();
-    state.connect_prevalidated_block(rwtxn, header, body, prevalidated)?;
+    let filled_txs = &prevalidated.filled_transactions;
+    let mut accumulator_diff = prevalidated.accumulator_diff.clone();
+    state.connect_prevalidated_block(rwtxn, header, body, &prevalidated)?;
     if tracing::enabled!(tracing::Level::DEBUG) {
         tracing::debug!(height = block_height, %merkle_root, %block_hash, "connected body")
     }
-    let () = state.connect_two_way_peg_data(rwtxn, two_way_peg_data)?;
+    let peg_accumulator_diff =
+        state.connect_two_way_peg_data(rwtxn, two_way_peg_data)?;
+    accumulator_diff.merge(peg_accumulator_diff);
+    archive.put_accumulator_diff(rwtxn, block_hash, &accumulator_diff)?;
     let () = archive.put_header(rwtxn, header)?;
     let () = archive.put_body(rwtxn, block_hash, body)?;
     let unix_stamp = unix_now();
@@ -174,13 +180,17 @@ fn connect_tip_(
         block_hash,
         block_height,
         body,
-        &filled_txs,
+        filled_txs,
         unix_stamp,
     )?;
     if block_height > 0 && block_height % TXDB_PRUNE_INTERVAL_BLOCKS == 0 {
         let cutoff_unix = unix_stamp.saturating_sub(TXDB_RETENTION_SECS);
         archive.prune_txdb_older_than(rwtxn, cutoff_unix)?;
     }
+    state
+        .utreexo_accumulator
+        .lock()
+        .apply_diff(accumulator_diff)?;
     if block_height > 0
         && block_height % ACCUMULATOR_SNAPSHOT_INTERVAL_BLOCKS == 0
     {
@@ -1347,10 +1357,156 @@ impl Drop for NetTaskHandle {
 
 #[cfg(test)]
 mod test {
+    use bitcoin::hashes::Hash as _;
+
+    use super::{Error, connect_tip_, is_fatal_reorg_error};
     use crate::{
-        node::net_task::{Error, is_fatal_reorg_error},
-        state,
+        archive::Archive,
+        mempool::MemPool,
+        state::{self, State},
+        types::{
+            Accumulator, AccumulatorDiff, Address, BitcoinOutputContent, Body,
+            FilledOutput, Header, OutPoint, Output, OutputContent,
+            proto::mainchain, utreexo_leaf_hash,
+        },
     };
+
+    fn temp_env(
+        test_name: &str,
+    ) -> anyhow::Result<(temp_dir::TempDir, sneed::Env)> {
+        let temp_dir = temp_dir::TempDir::with_prefix(format!(
+            "plain-bitassets-{test_name}-{}",
+            std::process::id()
+        ))?;
+        let mut opts = heed::EnvOpenOptions::new();
+        opts.map_size(64 * 1024 * 1024)
+            .max_dbs(State::NUM_DBS + Archive::NUM_DBS + MemPool::NUM_DBS);
+        let env = unsafe { sneed::Env::open(&opts, temp_dir.path()) }?;
+        Ok((temp_dir, env))
+    }
+
+    #[test]
+    fn connect_tip_persists_and_applies_accumulator_diffs() -> anyhow::Result<()>
+    {
+        let (_temp_dir, env) =
+            temp_env("connect_tip_persists_and_applies_accumulator_diffs")?;
+        let archive = Archive::new(&env)?;
+        let state = State::new(&env, Accumulator::default())?;
+        let mempool = MemPool::new(&env)?;
+        let coinbase = Output::new(
+            Address::ALL_ZEROS,
+            OutputContent::Bitcoin(BitcoinOutputContent(bitcoin::Amount::ZERO)),
+        );
+        let body = Body {
+            coinbase: vec![coinbase],
+            transactions: Vec::new(),
+            authorizations: Vec::new(),
+        };
+        let header = Header {
+            merkle_root: Body::compute_merkle_root(
+                &body.coinbase,
+                &body.transactions,
+            ),
+            prev_side_hash: None,
+            prev_main_hash: bitcoin::BlockHash::all_zeros(),
+        };
+        let block_hash = header.hash();
+        let outpoint = OutPoint::Coinbase {
+            merkle_root: header.merkle_root,
+            vout: 0,
+        };
+        let output = FilledOutput::new_bitcoin_value(
+            Address::ALL_ZEROS,
+            bitcoin::Amount::ZERO,
+        );
+        let mut expected_diff = AccumulatorDiff::default();
+        expected_diff.insert(utreexo_leaf_hash(&outpoint, &output));
+        let deposit_outpoint = bitcoin::OutPoint {
+            txid: bitcoin::Txid::from_byte_array([2; 32]),
+            vout: 0,
+        };
+        let deposit_output = FilledOutput::new_bitcoin_value(
+            Address::ALL_ZEROS,
+            bitcoin::Amount::from_sat(100),
+        );
+        expected_diff.insert(utreexo_leaf_hash(
+            &OutPoint::Deposit(deposit_outpoint),
+            &deposit_output,
+        ));
+        let mut expected = Accumulator::default();
+        expected.apply_diff(expected_diff.clone())?;
+        let mut two_way_peg_data = mainchain::TwoWayPegData::default();
+        two_way_peg_data.block_info.insert(
+            header.prev_main_hash,
+            mainchain::BlockInfo {
+                bmm_commitment: None,
+                events: vec![mainchain::BlockEvent::Deposit(
+                    mainchain::Deposit {
+                        tx_index: 0,
+                        outpoint: deposit_outpoint,
+                        output: deposit_output,
+                    },
+                )],
+            },
+        );
+
+        let mut rwtxn = env.write_txn()?;
+        connect_tip_(
+            &mut rwtxn,
+            &archive,
+            &mempool,
+            &state,
+            &header,
+            &body,
+            &two_way_peg_data,
+        )?;
+        rwtxn.commit()?;
+
+        let rotxn = env.read_txn()?;
+        assert_eq!(
+            archive.get_accumulator_diff(&rotxn, block_hash)?,
+            expected_diff
+        );
+        assert_eq!(
+            state.utreexo_accumulator.lock().get_roots(),
+            expected.get_roots()
+        );
+
+        drop(rotxn);
+        let empty_body = Body {
+            coinbase: Vec::new(),
+            transactions: Vec::new(),
+            authorizations: Vec::new(),
+        };
+        let child_header = Header {
+            merkle_root: Body::compute_merkle_root(
+                &empty_body.coinbase,
+                &empty_body.transactions,
+            ),
+            prev_side_hash: Some(block_hash),
+            prev_main_hash: header.prev_main_hash,
+        };
+        let child_hash = child_header.hash();
+        let mut rwtxn = env.write_txn()?;
+        connect_tip_(
+            &mut rwtxn,
+            &archive,
+            &mempool,
+            &state,
+            &child_header,
+            &empty_body,
+            &mainchain::TwoWayPegData::default(),
+        )?;
+        rwtxn.commit()?;
+
+        let rotxn = env.read_txn()?;
+        assert!(archive.get_accumulator_diff(&rotxn, child_hash)?.is_empty());
+        assert_eq!(
+            state.utreexo_accumulator.lock().get_roots(),
+            expected.get_roots()
+        );
+        Ok(())
+    }
 
     // a peer's invalid block (value out > value in) must not be fatal
     #[test]

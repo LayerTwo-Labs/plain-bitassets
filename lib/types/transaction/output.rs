@@ -605,6 +605,7 @@ mod filled_content {
     FilledContent!(
         pub FilledContent,
         attrs: [derive(
+            borsh::BorshSerialize,
             Clone,
             Debug,
             Eq,

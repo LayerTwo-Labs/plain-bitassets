@@ -761,6 +761,14 @@ impl AccumulatorHash for Blake3UtxoHash {
     }
 }
 
+/// Hash a UTXO into the canonical leaf committed to by the accumulator.
+pub fn utreexo_leaf_hash(outpoint: &OutPoint, output: &FilledOutput) -> Hash {
+    hashes::hash_with_scratch_buffer(&PointedOutput {
+        outpoint: *outpoint,
+        output: output.clone(),
+    })
+}
+
 /// Manage accumulator diffs.
 /// Insertions and removals 'cancel out' exactly once.
 /// Inserting twice will cause one insertion.
@@ -814,6 +822,16 @@ impl AccumulatorDiff {
             Entry::Vacant(entry) => {
                 entry.insert(false);
                 self.deletions += 1;
+            }
+        }
+    }
+
+    pub fn merge(&mut self, other: Self) {
+        for (utxo_hash, insert) in other.diff {
+            if insert {
+                self.insert(utxo_hash);
+            } else {
+                self.remove(utxo_hash);
             }
         }
     }
@@ -954,6 +972,51 @@ impl Serialize for Accumulator {
             .serialize(&mut bytes)
             .map_err(<S::Error as serde::ser::Error>::custom)?;
         <Vec<_> as Serialize>::serialize(&bytes, serializer)
+    }
+}
+
+#[cfg(test)]
+mod accumulator_tests {
+    use super::{
+        AccumulatorDiff, Address, FilledOutput, FilledOutputContent, OutPoint,
+        utreexo_leaf_hash,
+    };
+
+    #[test]
+    fn utreexo_leaf_hash_golden_vector() {
+        let outpoint = OutPoint::Regular {
+            txid: [1; 32].into(),
+            vout: 7,
+        };
+        let output = FilledOutput {
+            address: Address::ALL_ZEROS,
+            content: FilledOutputContent::new_bitcoin_value(
+                bitcoin::Amount::from_sat(42),
+            ),
+            memo: b"utreexo".to_vec(),
+        };
+
+        assert_eq!(
+            hex::encode(utreexo_leaf_hash(&outpoint, &output)),
+            "3d6f84894a0d7586c1fdc5c7f42f3268aedef0f14a97633241bab06c66ccbb19"
+        );
+    }
+
+    #[test]
+    fn merging_diffs_preserves_net_utxo_changes() {
+        let mut diff = AccumulatorDiff::default();
+        diff.insert([1; 32]);
+        diff.remove([2; 32]);
+
+        let mut next = AccumulatorDiff::default();
+        next.remove([1; 32]);
+        next.insert([2; 32]);
+        next.insert([3; 32]);
+        diff.merge(next);
+
+        let mut expected = AccumulatorDiff::default();
+        expected.insert([3; 32]);
+        assert_eq!(diff, expected);
     }
 }
 

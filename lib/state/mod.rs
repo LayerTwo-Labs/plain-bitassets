@@ -48,6 +48,7 @@ pub struct PrevalidatedBlock {
     pub total_fees: bitcoin::Amount,
     pub coinbase_value: bitcoin::Amount,
     pub next_height: u32, // Precomputed next height to avoid DB read in write txn
+    pub accumulator_diff: crate::types::AccumulatorDiff,
 }
 
 /// Information we have regarding a withdrawal bundle
@@ -844,7 +845,7 @@ impl State {
         &self,
         rwtxn: &mut RwTxn,
         two_way_peg_data: &TwoWayPegData,
-    ) -> Result<(), Error> {
+    ) -> Result<crate::types::AccumulatorDiff, Error> {
         two_way_peg_data::connect(self, rwtxn, two_way_peg_data)
     }
 
@@ -870,7 +871,7 @@ impl State {
         rwtxn: &mut RwTxn,
         header: &Header,
         body: &Body,
-        prevalidated: PrevalidatedBlock,
+        prevalidated: &PrevalidatedBlock,
     ) -> Result<(), Error> {
         block::connect_prevalidated(self, rwtxn, header, body, prevalidated)
     }
@@ -882,7 +883,7 @@ impl State {
         body: &Body,
     ) -> Result<(), Error> {
         let prevalidated = self.prevalidate_block(rwtxn, header, body)?;
-        self.connect_prevalidated_block(rwtxn, header, body, prevalidated)?;
+        self.connect_prevalidated_block(rwtxn, header, body, &prevalidated)?;
         Ok(())
     }
 }
