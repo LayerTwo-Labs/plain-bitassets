@@ -19,7 +19,8 @@ use crate::{
         FilledOutput, FilledTransaction, GetAddress as _, GetBitcoinValue as _,
         Header, InPoint, M6id, OutPoint, OutPointKey, SpentOutput, Transaction,
         TxData, VERSION, Verify as _, Version, WithdrawalBundle,
-        WithdrawalBundleStatus, proto::mainchain::TwoWayPegData,
+        WithdrawalBundleMetadata, WithdrawalBundleStatus,
+        proto::mainchain::{BlockInfo, TwoWayPegData},
     },
     util::Watchable,
 };
@@ -103,6 +104,16 @@ pub struct State {
     /// Some withdrawal bundles may be unknown.
     /// in which case they are `None`.
     withdrawal_bundles: WithdrawalBundlesDb,
+    /// Branch-independent bundle metadata, keyed by the L1-visible m6id.
+    ///
+    /// This is an archival cache rather than rollbackable sidechain state. A
+    /// stale entry is harmless because it is only used after a matching L1
+    /// submission event, while retaining entries allows an L2-only reorg to
+    /// reapply the exact withdrawal reservation.
+    withdrawal_bundle_archive: DatabaseUnique<
+        SerdeBincode<M6id>,
+        SerdeBincode<WithdrawalBundleMetadata>,
+    >,
     /// Deposit blocks and the height at which they were applied, keyed sequentially
     deposit_blocks: DatabaseUnique<
         SerdeBincode<u32>,
@@ -118,7 +129,7 @@ pub struct State {
 }
 
 impl State {
-    pub const NUM_DBS: u32 = bitassets::Dbs::NUM_DBS + 12 + 1;
+    pub const NUM_DBS: u32 = bitassets::Dbs::NUM_DBS + 14;
 
     pub fn new(
         env: &sneed::Env,
@@ -147,6 +158,11 @@ impl State {
         )?;
         let withdrawal_bundles =
             DatabaseUnique::create(env, &mut rwtxn, "withdrawal_bundles")?;
+        let withdrawal_bundle_archive = DatabaseUnique::create(
+            env,
+            &mut rwtxn,
+            "withdrawal_bundle_archive",
+        )?;
         let deposit_blocks =
             DatabaseUnique::create(env, &mut rwtxn, "deposit_blocks")?;
         let withdrawal_bundle_event_blocks = DatabaseUnique::create(
@@ -171,6 +187,7 @@ impl State {
             pending_withdrawal_bundle,
             latest_failed_withdrawal_bundle,
             withdrawal_bundles,
+            withdrawal_bundle_archive,
             withdrawal_bundle_event_blocks,
             deposit_blocks,
             utreexo_accumulator: Arc::new(Mutex::new(utreexo_accumulator)),
@@ -227,7 +244,7 @@ impl State {
         rwtxn: &mut RwTxn,
         address_key: &AddressOutPointKey,
     ) -> Result<bool, sneed::db::Error> {
-        self.utxo_heights_by_address.delete(rwtxn, &address_key)?;
+        self.utxo_heights_by_address.delete(rwtxn, address_key)?;
         Ok(self.utxos.delete(rwtxn, &address_key.outpoint_key())?)
     }
 
@@ -450,6 +467,24 @@ impl State {
         };
         let height = bundle_status.latest().height;
         Ok(Some((bundle, height)))
+    }
+
+    pub(crate) fn try_get_withdrawal_bundle_metadata(
+        &self,
+        rotxn: &RoTxn,
+        m6id: M6id,
+    ) -> Result<Option<WithdrawalBundleMetadata>, Error> {
+        Ok(self.withdrawal_bundle_archive.try_get(rotxn, &m6id)?)
+    }
+
+    pub(crate) fn put_withdrawal_bundle_metadata(
+        &self,
+        rwtxn: &mut RwTxn,
+        metadata: &WithdrawalBundleMetadata,
+    ) -> Result<(), Error> {
+        let m6id = metadata.compute_m6id();
+        self.withdrawal_bundle_archive.put(rwtxn, &m6id, metadata)?;
+        Ok(())
     }
 
     /// Check that
@@ -849,12 +884,66 @@ impl State {
         two_way_peg_data::connect(self, rwtxn, two_way_peg_data)
     }
 
+    pub(crate) fn begin_connect_two_way_peg_data(
+        &self,
+        rwtxn: &mut RwTxn,
+    ) -> Result<two_way_peg_data::ConnectContext, Error> {
+        two_way_peg_data::begin_connect(self, rwtxn)
+    }
+
+    pub(crate) fn connect_two_way_peg_block_info(
+        &self,
+        rwtxn: &mut RwTxn,
+        block_hash: bitcoin::BlockHash,
+        block_info: &BlockInfo,
+        context: &mut two_way_peg_data::ConnectContext,
+    ) -> Result<(), Error> {
+        two_way_peg_data::connect_block_info(
+            self, rwtxn, block_hash, block_info, context,
+        )
+    }
+
+    pub(crate) fn finish_connect_two_way_peg_data(
+        &self,
+        rwtxn: &mut RwTxn,
+        context: two_way_peg_data::ConnectContext,
+    ) -> Result<crate::types::AccumulatorDiff, Error> {
+        two_way_peg_data::finish_connect(self, rwtxn, context)
+    }
+
     pub fn disconnect_two_way_peg_data(
         &self,
         rwtxn: &mut RwTxn,
         two_way_peg_data: &TwoWayPegData,
     ) -> Result<(), Error> {
         two_way_peg_data::disconnect(self, rwtxn, two_way_peg_data)
+    }
+
+    pub(crate) fn begin_disconnect_two_way_peg_data(
+        &self,
+        rwtxn: &mut RwTxn,
+    ) -> Result<two_way_peg_data::DisconnectContext, Error> {
+        two_way_peg_data::begin_disconnect(self, rwtxn)
+    }
+
+    pub(crate) fn disconnect_two_way_peg_block_info(
+        &self,
+        rwtxn: &mut RwTxn,
+        block_hash: bitcoin::BlockHash,
+        block_info: &BlockInfo,
+        context: &mut two_way_peg_data::DisconnectContext,
+    ) -> Result<(), Error> {
+        two_way_peg_data::disconnect_block_info(
+            self, rwtxn, block_hash, block_info, context,
+        )
+    }
+
+    pub(crate) fn finish_disconnect_two_way_peg_data(
+        &self,
+        rwtxn: &mut RwTxn,
+        context: two_way_peg_data::DisconnectContext,
+    ) -> Result<(), Error> {
+        two_way_peg_data::finish_disconnect(self, rwtxn, context)
     }
 
     pub fn prevalidate_block(

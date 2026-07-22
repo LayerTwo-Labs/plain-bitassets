@@ -24,6 +24,7 @@ const fn request_cost(req: &Request) -> NonZeroU32 {
     match req {
         Request::GetBlock { .. } => NonZeroU32::new(1000).unwrap(),
         Request::GetHeaders { .. } => NonZeroU32::new(10_000).unwrap(),
+        Request::GetWithdrawalBundle { .. } => NonZeroU32::new(1000).unwrap(),
         Request::PushTransaction { .. } => NonZeroU32::new(10).unwrap(),
     }
 }
@@ -35,6 +36,7 @@ const fn request_cost(req: &Request) -> NonZeroU32 {
 pub struct ErrorRx {
     heartbeat_rx: mpsc::UnboundedReceiver<Heartbeat>,
     request_rx: mpsc::UnboundedReceiver<Request>,
+    request_hashes: Arc<Mutex<HashSet<Hash>>>,
     rate_limiter: Arc<DefaultDirectRateLimiter>,
 }
 
@@ -44,6 +46,7 @@ impl ErrorRx {
         connection: Connection,
         peer_response_tx: mpsc::UnboundedSender<PeerResponseItem>,
     ) -> impl Stream<Item = error::request_queue::Error> {
+        let request_hashes = self.request_hashes;
         // Items in the combined source stream
         enum SourceItem {
             Error(error::channel_pool::SendMessage),
@@ -117,6 +120,7 @@ impl ErrorRx {
                     }
                 }
                 SourceItem::PeerResponse(peer_response) => {
+                    request_hashes.lock().remove(&hash(&peer_response.request));
                     match peer_response_tx.unbounded_send(peer_response) {
                         Ok(()) => None,
                         Err(_err) => {
@@ -170,15 +174,17 @@ impl Sender {
 pub fn new() -> (Sender, ErrorRx) {
     let (heartbeat_tx, heartbeat_rx) = mpsc::unbounded();
     let (request_tx, request_rx) = mpsc::unbounded();
+    let request_hashes = Arc::new(Mutex::new(HashSet::new()));
     let sender = Sender {
         heartbeat_tx,
         request_tx,
-        request_hashes: Arc::new(Mutex::new(HashSet::new())),
+        request_hashes: Arc::clone(&request_hashes),
     };
     let rate_limiter = DefaultDirectRateLimiter::direct(REQUEST_QUOTA);
     let error_rx = ErrorRx {
         heartbeat_rx,
         request_rx,
+        request_hashes,
         rate_limiter: Arc::new(rate_limiter),
     };
     (sender, error_rx)

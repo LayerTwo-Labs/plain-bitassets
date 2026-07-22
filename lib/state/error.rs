@@ -235,6 +235,13 @@ pub enum ConnectWithdrawalBundleSubmitted {
         "dropped withdrawal bundle {0} marked as pending in withdrawal_bundles"
     )]
     DroppedPending(M6id),
+    #[error(
+        "withdrawal bundle metadata missing for submission {m6id} in {event_block_hash}"
+    )]
+    MissingWithdrawalBundleMetadata {
+        event_block_hash: bitcoin::BlockHash,
+        m6id: M6id,
+    },
     #[error(transparent)]
     NoUtxo(#[from] NoUtxo),
     #[error(transparent)]
@@ -364,6 +371,8 @@ pub enum Error {
     ConnectWithdrawalBundleSubmitted(#[from] ConnectWithdrawalBundleSubmitted),
     #[error(transparent)]
     Db(Box<sneed::Error>),
+    #[error("{outpoint} already exists")]
+    DuplicateDeposit { outpoint: OutPoint },
     #[error(transparent)]
     DutchAuction(#[from] DutchAuction),
     #[error(transparent)]
@@ -443,6 +452,13 @@ pub enum Error {
         m6id: M6id,
         outpoint: OutPoint,
     },
+    #[error(
+        "withdrawal bundle metadata missing for event {m6id} in {event_block_hash}"
+    )]
+    MissingWithdrawalBundleMetadata {
+        event_block_hash: bitcoin::BlockHash,
+        m6id: M6id,
+    },
     #[error("Unknown withdrawal bundle: {m6id}")]
     UnknownWithdrawalBundle { m6id: M6id },
     #[error(
@@ -470,5 +486,27 @@ pub enum Error {
 impl From<sneed::Error> for Error {
     fn from(err: sneed::Error) -> Self {
         Self::Db(Box::new(err))
+    }
+}
+
+impl Error {
+    /// Return the L1 event that cannot be applied until full withdrawal bundle
+    /// metadata is recovered.
+    pub fn missing_withdrawal_bundle_metadata(
+        &self,
+    ) -> Option<(bitcoin::BlockHash, M6id)> {
+        match self {
+            Self::MissingWithdrawalBundleMetadata {
+                event_block_hash,
+                m6id,
+            }
+            | Self::ConnectWithdrawalBundleSubmitted(
+                ConnectWithdrawalBundleSubmitted::MissingWithdrawalBundleMetadata {
+                    event_block_hash,
+                    m6id,
+                },
+            ) => Some((*event_block_hash, *m6id)),
+            _ => None,
+        }
     }
 }

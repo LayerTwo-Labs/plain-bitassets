@@ -26,9 +26,9 @@ use crate::{
         Address, AmountOverflowError, AmountUnderflowError, AssetId,
         Authorized, AuthorizedTransaction, BitAssetData, BitAssetId, Block,
         BlockHash, BmmResult, Body, DutchAuctionId, FilledOutput,
-        FilledTransaction, GetBitcoinValue, Header, InPoint, Network, OutPoint,
-        OutPointKey, Output, SpentOutput, Tip, Transaction, TxIn, Txid,
-        WithdrawalBundle,
+        FilledTransaction, GetBitcoinValue, Header, InPoint, M6id, Network,
+        OutPoint, OutPointKey, Output, SpentOutput, Tip, Transaction, TxIn,
+        Txid, WithdrawalBundle,
         proto::{self, mainchain},
     },
     util::Watchable,
@@ -58,6 +58,8 @@ pub enum Error {
     Archive(#[from] archive::Error),
     #[error("CUSF mainchain proto error")]
     CusfMainchain(#[from] proto::Error),
+    #[error("canonical mainchain tip is not initialized")]
+    CanonicalMainTipUnknown,
     #[error(transparent)]
     Db(#[from] DbError),
     #[error("Database env error")]
@@ -191,40 +193,19 @@ where
             unsafe { Env::open(&env_open_opts, &env_path) }?
         };
         let archive = Archive::new(&env)?;
-        let latest_accumulator = {
-            let rotxn = env.read_txn()?;
-            archive.latest_accumulator(&rotxn)?
-        };
-        let snapshot_height =
-            latest_accumulator.as_ref().map(|height| height.0);
-        let utreexo_accumulator =
-            latest_accumulator.map(|acc| acc.1).unwrap_or_default();
-        let state = State::new(&env, utreexo_accumulator)?;
+        let state = State::new(&env, Default::default())?;
 
         {
-            // Replay accumulator from last snapshot to sidechain tip
             let rotxn = env.read_txn()?;
-            if let Some(tip_hash) = state.try_get_tip(&rotxn)? {
-                let blocks = archive.ancestor_hashes_after_height(
-                    &rotxn,
-                    tip_hash,
-                    snapshot_height,
-                )?;
-                let mut accumulator = state.utreexo_accumulator.lock();
-                for block_hash in blocks {
-                    let diff =
-                        archive.get_accumulator_diff(&rotxn, block_hash)?;
-                    accumulator
-                        .apply_diff(diff)
-                        .map_err(|err| Error::Utreexo(err.to_string()))?;
-                }
-            }
+            let tip = state.try_get_tip(&rotxn)?;
+            let accumulator = archive.accumulator_at(&rotxn, tip)?;
+            *state.utreexo_accumulator.lock() = accumulator;
         }
 
         #[cfg(feature = "zmq")]
         let zmq_pub_handler = Arc::new(ZmqPubHandler::new(zmq_addr).await?);
         let mempool = MemPool::new(&env)?;
-        let (mainchain_task, mainchain_task_response_rx) =
+        let (mainchain_task, mainchain_task_response_rx, mainchain_event_rx) =
             MainchainTaskHandle::new(
                 env.clone(),
                 archive.clone(),
@@ -240,6 +221,7 @@ where
             archive.clone(),
             mainchain_task.clone(),
             mainchain_task_response_rx,
+            mainchain_event_rx,
             mempool.clone(),
             net.clone(),
             peer_info_rx,
@@ -658,8 +640,13 @@ where
         hash: BlockHash,
     ) -> Result<bitcoin::BlockHash, Error> {
         let rotxn = self.env.read_txn()?;
-        let hash = self.archive.get_best_main_verification(&rotxn, hash)?;
-        Ok(hash)
+        let main_tip = self
+            .net
+            .canonical_main_tip()
+            .ok_or(Error::CanonicalMainTipUnknown)?;
+        self.archive
+            .try_get_best_main_verification_on_lineage(&rotxn, hash, main_tip)?
+            .ok_or_else(|| archive::Error::NoBmmResult(hash).into())
     }
 
     pub fn get_bmm_inclusions(
@@ -858,7 +845,17 @@ where
     pub fn connect_peer(&self, addr: SocketAddr) -> Result<(), Error> {
         self.net
             .connect_peer(self.env.clone(), addr)
-            .map_err(Error::from)
+            .map_err(Error::from)?;
+        for m6id in self.net_task.missing_withdrawal_bundles() {
+            self.net.request_withdrawal_bundle(m6id, Some(addr));
+        }
+        Ok(())
+    }
+
+    /// Withdrawal bundle metadata currently preventing an atomic branch
+    /// replacement from being applied.
+    pub fn missing_withdrawal_bundles(&self) -> HashSet<M6id> {
+        self.net_task.missing_withdrawal_bundles()
     }
 
     pub fn forget_peer(&self, addr: &SocketAddr) -> Result<bool, Error> {

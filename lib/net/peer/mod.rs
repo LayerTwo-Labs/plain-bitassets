@@ -10,6 +10,7 @@ use std::{
 use bitcoin::Work;
 use borsh::BorshSerialize;
 use futures::channel::mpsc;
+use parking_lot::RwLock;
 use quinn::{RecvStream, SendStream};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -370,6 +371,7 @@ impl Connection {
 pub struct ConnectionContext {
     pub env: sneed::Env,
     pub archive: Archive,
+    pub canonical_main_tip: Arc<RwLock<Option<bitcoin::BlockHash>>>,
     pub network: Network,
     pub state: State,
 }

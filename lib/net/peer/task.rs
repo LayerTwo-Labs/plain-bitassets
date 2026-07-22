@@ -444,6 +444,9 @@ impl ConnectionTask {
         };
         let tip_info = 'tip_info: {
             let rotxn = ctxt.env.read_txn()?;
+            let Some(main_tip) = *ctxt.canonical_main_tip.read() else {
+                break 'tip_info None;
+            };
             let Some(tip) = ctxt.state.try_get_tip(&rotxn)? else {
                 break 'tip_info None;
             };
@@ -451,8 +454,13 @@ impl ConnectionTask {
                 .state
                 .try_get_height(&rotxn)?
                 .expect("Height should be known for tip");
-            let bmm_verification =
-                ctxt.archive.get_best_main_verification(&rotxn, tip)?;
+            let Some(bmm_verification) =
+                ctxt.archive.try_get_best_main_verification_on_lineage(
+                    &rotxn, tip, main_tip,
+                )?
+            else {
+                break 'tip_info None;
+            };
             let total_work =
                 ctxt.archive.get_total_work(&rotxn, bmm_verification)?;
             let tip = Tip {
@@ -614,6 +622,25 @@ impl ConnectionTask {
         Ok(())
     }
 
+    async fn handle_get_withdrawal_bundle(
+        ctxt: &ConnectionContext,
+        response_tx: SendStream,
+        m6id: crate::types::M6id,
+    ) -> Result<(), Error> {
+        let metadata = {
+            let rotxn = ctxt.env.read_txn().map_err(EnvError::from)?;
+            ctxt.state
+                .try_get_withdrawal_bundle_metadata(&rotxn, m6id)?
+        };
+        let response = if let Some(metadata) = metadata {
+            ResponseMessage::WithdrawalBundle { m6id, metadata }
+        } else {
+            ResponseMessage::NoWithdrawalBundle { m6id }
+        };
+        Connection::send_response(ctxt.network, response_tx, response).await?;
+        Ok(())
+    }
+
     fn handle_get_headers(
         ctxt: &ConnectionContext,
         forward_response_spawner: &join_set::Spawner<ForwardResponseResult>,
@@ -743,6 +770,12 @@ impl ConnectionTask {
                 );
                 Ok(())
             }
+            RequestMessage::Request(Request::GetWithdrawalBundle(
+                message::GetWithdrawalBundleRequest { m6id },
+            )) => {
+                Self::handle_get_withdrawal_bundle(ctxt, response_tx, m6id)
+                    .await
+            }
             RequestMessage::Request(Request::PushTransaction(
                 message::PushTransactionRequest { transaction },
             )) => {
@@ -861,6 +894,10 @@ impl ConnectionTask {
                     let tip_info = 'tip_info: {
                         let rotxn =
                             ctxt.env.read_txn().map_err(EnvError::from)?;
+                        let Some(main_tip) = *ctxt.canonical_main_tip.read()
+                        else {
+                            break 'tip_info None;
+                        };
                         let Some(tip) = ctxt.state.try_get_tip(&rotxn)? else {
                             break 'tip_info None;
                         };
@@ -868,9 +905,14 @@ impl ConnectionTask {
                             .state
                             .try_get_height(&rotxn)?
                             .expect("Height for tip should be known");
-                        let bmm_verification = ctxt
+                        let Some(bmm_verification) = ctxt
                             .archive
-                            .get_best_main_verification(&rotxn, tip)?;
+                            .try_get_best_main_verification_on_lineage(
+                                &rotxn, tip, main_tip,
+                            )?
+                        else {
+                            break 'tip_info None;
+                        };
                         let total_work = ctxt
                             .archive
                             .get_total_work(&rotxn, bmm_verification)?;

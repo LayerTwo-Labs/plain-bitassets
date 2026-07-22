@@ -2,13 +2,15 @@
 
 use std::{collections::HashSet, num::NonZeroUsize};
 
+use bitcoin::hashes::Hash as _;
 use borsh::BorshSerialize;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     net::peer::{PeerState, PeerStateId},
     types::{
-        AuthorizedTransaction, BlockHash, Body, Header, Network, Tip, Txid,
+        AuthorizedTransaction, BlockHash, Body, Header, M6id, Network, Tip,
+        Txid, WithdrawalBundleMetadata,
     },
 };
 
@@ -59,6 +61,30 @@ impl GetBlockRequest {
     pub const fn read_response_limit(&self) -> NonZeroUsize {
         // 10MB limit for blocks
         NonZeroUsize::new(10 * 1024 * 1024).unwrap()
+    }
+}
+
+fn borsh_serialize_m6id<W>(m6id: &M6id, writer: &mut W) -> borsh::io::Result<()>
+where
+    W: borsh::io::Write,
+{
+    borsh::BorshSerialize::serialize(&m6id.0.to_byte_array(), writer)
+}
+
+#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize)]
+pub struct GetWithdrawalBundleRequest {
+    #[borsh(serialize_with = "borsh_serialize_m6id")]
+    pub m6id: M6id,
+}
+
+impl GetWithdrawalBundleRequest {
+    pub const fn read_response_limit(&self) -> NonZeroUsize {
+        const RESPONSE_ENVELOPE_HEADROOM: usize = 1024;
+        NonZeroUsize::new(
+            WithdrawalBundleMetadata::MAX_SERIALIZED_SIZE
+                + RESPONSE_ENVELOPE_HEADROOM,
+        )
+        .unwrap()
     }
 }
 
@@ -114,6 +140,7 @@ impl PushTransactionRequest {
 pub enum Request {
     GetBlock(GetBlockRequest),
     GetHeaders(GetHeadersRequest),
+    GetWithdrawalBundle(GetWithdrawalBundleRequest),
     PushTransaction(PushTransactionRequest),
 }
 
@@ -124,6 +151,7 @@ impl Request {
         match self {
             Self::GetBlock(request) => request.read_response_limit(),
             Self::GetHeaders(request) => request.read_response_limit(),
+            Self::GetWithdrawalBundle(request) => request.read_response_limit(),
             Self::PushTransaction(request) => request.read_response_limit(),
         }
     }
@@ -138,6 +166,12 @@ impl From<GetBlockRequest> for Request {
 impl From<GetHeadersRequest> for Request {
     fn from(request: GetHeadersRequest) -> Self {
         Self::GetHeaders(request)
+    }
+}
+
+impl From<GetWithdrawalBundleRequest> for Request {
+    fn from(request: GetWithdrawalBundleRequest) -> Self {
+        Self::GetWithdrawalBundle(request)
     }
 }
 
@@ -187,6 +221,7 @@ impl<'a> Serialize for RequestMessageRef<'a> {
             Heartbeat(&'b Heartbeat),
             GetBlock(&'b GetBlockRequest),
             GetHeaders(&'b GetHeadersRequest),
+            GetWithdrawalBundle(&'b GetWithdrawalBundleRequest),
             PushTransaction(&'b PushTransactionRequest),
         }
 
@@ -197,6 +232,9 @@ impl<'a> Serialize for RequestMessageRef<'a> {
             RequestMessageRef::Request(request) => match request {
                 Request::GetBlock(request) => Repr::GetBlock(request),
                 Request::GetHeaders(request) => Repr::GetHeaders(request),
+                Request::GetWithdrawalBundle(request) => {
+                    Repr::GetWithdrawalBundle(request)
+                }
                 Request::PushTransaction(request) => {
                     Repr::PushTransaction(request)
                 }
@@ -211,6 +249,7 @@ impl<'a> Serialize for RequestMessageRef<'a> {
 #[transitive(
     from(GetBlockRequest, Request),
     from(GetHeadersRequest, Request),
+    from(GetWithdrawalBundleRequest, Request),
     from(PushTransactionRequest, Request)
 )]
 pub enum RequestMessage {
@@ -257,12 +296,14 @@ impl<'de> Deserialize<'de> for RequestMessage {
             Heartbeat(Heartbeat),
             GetBlock(GetBlockRequest),
             GetHeaders(GetHeadersRequest),
+            GetWithdrawalBundle(GetWithdrawalBundleRequest),
             PushTransaction(PushTransactionRequest),
         }
         let res = match Repr::deserialize(deserializer)? {
             Repr::Heartbeat(heartbeat) => heartbeat.into(),
             Repr::GetBlock(request) => request.into(),
             Repr::GetHeaders(request) => request.into(),
+            Repr::GetWithdrawalBundle(request) => request.into(),
             Repr::PushTransaction(request) => request.into(),
         };
         Ok(res)
@@ -284,8 +325,15 @@ pub enum ResponseMessage {
     NoHeader {
         block_hash: BlockHash,
     },
+    NoWithdrawalBundle {
+        m6id: M6id,
+    },
     TransactionAccepted(Txid),
     TransactionRejected(Txid),
+    WithdrawalBundle {
+        m6id: M6id,
+        metadata: WithdrawalBundleMetadata,
+    },
 }
 
 impl ResponseMessage {

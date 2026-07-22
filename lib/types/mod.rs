@@ -1,6 +1,6 @@
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::LazyLock,
 };
 
@@ -218,6 +218,8 @@ pub static OP_DRIVECHAIN_SCRIPT: LazyLock<bitcoin::ScriptBuf> =
 enum WithdrawalBundleErrorInner {
     #[error("bundle too heavy: weight `{weight}` > max weight `{max_weight}`")]
     BundleTooHeavy { weight: u64, max_weight: u64 },
+    #[error("too many bundle inputs: `{inputs}` > max inputs `{max_inputs}`")]
+    TooManyInputs { inputs: usize, max_inputs: usize },
 }
 
 #[derive(Debug, Error)]
@@ -227,6 +229,7 @@ pub struct WithdrawalBundleError(#[from] WithdrawalBundleErrorInner);
 #[serde_as]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 pub struct WithdrawalBundle {
+    creation_height: u32,
     #[schema(value_type = Vec<(
         transaction::OutPoint,
         transaction::FilledOutput)>
@@ -237,7 +240,46 @@ pub struct WithdrawalBundle {
     tx: bitcoin::Transaction,
 }
 
+/// Branch-independent information needed to identify and reapply a withdrawal
+/// bundle. Output values are deliberately omitted: they are loaded from local
+/// state before the committed outpoints are spent.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WithdrawalBundleMetadata {
+    creation_height: u32,
+    spend_outpoints: BTreeSet<OutPoint>,
+    tx: bitcoin::Transaction,
+}
+
 impl WithdrawalBundle {
+    /// Bound bundle metadata independently of the number of withdrawal UTXOs
+    /// accumulated in the state. Remaining UTXOs are collected by later
+    /// bundles.
+    pub const MAX_INPUTS: usize = 1 << 16;
+
+    fn inputs_commitment_txout<I>(
+        block_height: u32,
+        spend_outpoints: I,
+    ) -> bitcoin::TxOut
+    where
+        I: IntoIterator<Item = OutPoint>,
+    {
+        let mut inputs: Vec<OutPoint> = spend_outpoints.into_iter().collect();
+        // Commit to the sidechain height at which the bundle was built.
+        inputs.push(OutPoint::Regular {
+            txid: [0; 32].into(),
+            vout: block_height,
+        });
+        let commitment = hashes::hash_with_scratch_buffer(&inputs);
+        let script_pubkey = bitcoin::script::Builder::new()
+            .push_opcode(bitcoin::opcodes::all::OP_RETURN)
+            .push_slice(commitment)
+            .into_script();
+        bitcoin::TxOut {
+            value: bitcoin::Amount::ZERO,
+            script_pubkey,
+        }
+    }
+
     /// Compute the size of a single txout
     pub const fn txout_size(spk_size: u32) -> Option<u32> {
         let Some(size) = (bitcoin::Amount::SIZE as u32)
@@ -365,28 +407,16 @@ impl WithdrawalBundle {
         spend_utxos: BTreeMap<OutPoint, FilledOutput>,
         bundle_outputs: Vec<bitcoin::TxOut>,
     ) -> Result<Self, WithdrawalBundleError> {
-        let inputs_commitment_txout = {
-            // Create inputs commitment.
-            let inputs: Vec<OutPoint> = [
-                // Commit to inputs.
-                spend_utxos.keys().copied().collect(),
-                // Commit to block height.
-                vec![OutPoint::Regular {
-                    txid: [0; 32].into(),
-                    vout: block_height,
-                }],
-            ]
-            .concat();
-            let commitment = hashes::hash_with_scratch_buffer(&inputs);
-            let script_pubkey = bitcoin::script::Builder::new()
-                .push_opcode(bitcoin::opcodes::all::OP_RETURN)
-                .push_slice(commitment)
-                .into_script();
-            bitcoin::TxOut {
-                value: bitcoin::Amount::ZERO,
-                script_pubkey,
-            }
-        };
+        if spend_utxos.len() > Self::MAX_INPUTS {
+            Err(WithdrawalBundleErrorInner::TooManyInputs {
+                inputs: spend_utxos.len(),
+                max_inputs: Self::MAX_INPUTS,
+            })?;
+        }
+        let inputs_commitment_txout = Self::inputs_commitment_txout(
+            block_height,
+            spend_utxos.keys().copied(),
+        );
         let mainchain_fee_txout = {
             let script_pubkey = bitcoin::script::Builder::new()
                 .push_opcode(bitcoin::opcodes::all::OP_RETURN)
@@ -415,7 +445,11 @@ impl WithdrawalBundle {
                 max_weight: bitcoin::policy::MAX_STANDARD_TX_WEIGHT as u64,
             })?;
         }
-        Ok(Self { spend_utxos, tx })
+        Ok(Self {
+            creation_height: block_height,
+            spend_utxos,
+            tx,
+        })
     }
 
     pub fn compute_m6id(&self) -> M6id {
@@ -426,8 +460,70 @@ impl WithdrawalBundle {
         &self.spend_utxos
     }
 
+    pub fn metadata(&self) -> WithdrawalBundleMetadata {
+        WithdrawalBundleMetadata {
+            creation_height: self.creation_height,
+            spend_outpoints: self.spend_utxos.keys().copied().collect(),
+            tx: self.tx.clone(),
+        }
+    }
+
+    /// Check that the archived input outpoints and creation height match the
+    /// commitment carried by the withdrawal transaction.
+    pub fn has_valid_inputs_commitment(&self) -> bool {
+        self.tx.output.get(1)
+            == Some(&Self::inputs_commitment_txout(
+                self.creation_height,
+                self.spend_utxos.keys().copied(),
+            ))
+    }
+
     pub fn tx(&self) -> &bitcoin::Transaction {
         &self.tx
+    }
+}
+
+impl WithdrawalBundleMetadata {
+    /// Leaves ample headroom above the maximum encoded outpoint set and
+    /// standard withdrawal transaction.
+    pub const MAX_SERIALIZED_SIZE: usize = 4 * 1024 * 1024;
+
+    pub fn compute_m6id(&self) -> M6id {
+        M6id(self.tx.compute_txid())
+    }
+
+    pub fn spend_outpoints(&self) -> &BTreeSet<OutPoint> {
+        &self.spend_outpoints
+    }
+
+    pub fn has_valid_inputs_commitment(&self) -> bool {
+        self.tx.output.get(1)
+            == Some(&WithdrawalBundle::inputs_commitment_txout(
+                self.creation_height,
+                self.spend_outpoints.iter().copied(),
+            ))
+    }
+
+    pub fn is_within_size_limit(&self) -> bool {
+        self.spend_outpoints.len() <= WithdrawalBundle::MAX_INPUTS
+            && bincode::serialized_size(self)
+                .is_ok_and(|size| size <= Self::MAX_SERIALIZED_SIZE as u64)
+    }
+
+    /// Hydrate committed outpoints with values loaded from the state being
+    /// connected. Metadata received from a peer cannot supply output values.
+    pub fn with_spend_utxos(
+        &self,
+        spend_utxos: BTreeMap<OutPoint, FilledOutput>,
+    ) -> Option<WithdrawalBundle> {
+        if !self.spend_outpoints.iter().eq(spend_utxos.keys()) {
+            return None;
+        }
+        Some(WithdrawalBundle {
+            creation_height: self.creation_height,
+            spend_utxos,
+            tx: self.tx.clone(),
+        })
     }
 }
 
@@ -624,7 +720,7 @@ pub struct DisconnectData {
 
 #[derive(Eq, PartialEq, Clone, Debug)]
 pub struct AggregatedWithdrawal {
-    pub spend_utxos: HashMap<OutPoint, FilledOutput>,
+    pub spend_utxos: BTreeMap<OutPoint, FilledOutput>,
     pub main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
     pub value: bitcoin::Amount,
     pub main_fee: bitcoin::Amount,
@@ -730,8 +826,12 @@ impl AccumulatorHash for Blake3UtxoHash {
         W: io::Write,
     {
         match self {
-            Self::Some(bytes) => writer.write_all(bytes),
-            Self::Placeholder | Self::Empty => writer.write_all(&[0u8; 32]),
+            Self::Empty => writer.write_all(&[0]),
+            Self::Placeholder => writer.write_all(&[1]),
+            Self::Some(bytes) => {
+                writer.write_all(&[2])?;
+                writer.write_all(bytes)
+            }
         }
     }
 
@@ -739,13 +839,20 @@ impl AccumulatorHash for Blake3UtxoHash {
     where
         R: io::Read,
     {
-        let mut bytes = [0u8; 32];
-        reader.read_exact(&mut bytes)?;
-
-        if bytes == [0u8; 32] {
-            Ok(Self::Placeholder)
-        } else {
-            Ok(Self::Some(bytes))
+        let mut tag = [0];
+        reader.read_exact(&mut tag)?;
+        match tag {
+            [0] => Ok(Self::Empty),
+            [1] => Ok(Self::Placeholder),
+            [2] => {
+                let mut bytes = [0u8; 32];
+                reader.read_exact(&mut bytes)?;
+                Ok(Self::Some(bytes))
+            }
+            [_] => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unexpected tag for Blake3UtxoHash",
+            )),
         }
     }
 
@@ -893,6 +1000,12 @@ impl<'de> Deserialize<'de> for AccumulatorDiff {
 #[error("utreexo error: {0}")]
 pub struct UtreexoError(String);
 
+impl UtreexoError {
+    pub(crate) fn custom(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+}
+
 #[derive(Default)]
 #[repr(transparent)]
 pub struct Accumulator(pub MemForest<Blake3UtxoHash>);
@@ -901,6 +1014,21 @@ unsafe impl Send for Accumulator {}
 unsafe impl Sync for Accumulator {}
 
 impl Accumulator {
+    pub fn serialize_into<W: std::io::Write>(
+        &self,
+        writer: &mut W,
+    ) -> Result<(), UtreexoError> {
+        self.0
+            .serialize(writer)
+            .map_err(|err| UtreexoError(err.to_string()))
+    }
+
+    pub fn deserialize_from(bytes: &[u8]) -> Result<Self, UtreexoError> {
+        let mem_forest = MemForest::deserialize(bytes)
+            .map_err(|err| UtreexoError(err.to_string()))?;
+        Ok(Self(mem_forest))
+    }
+
     pub fn apply_diff(
         &mut self,
         diff: AccumulatorDiff,
@@ -915,6 +1043,14 @@ impl Accumulator {
                 insertions.push(utxo_hash);
             } else {
                 deletions.push(utxo_hash);
+            }
+        }
+
+        for insertion in &insertions {
+            if self.0.prove(&[*insertion]).is_ok() {
+                return Err(UtreexoError(format!(
+                    "attempted to insert an existing accumulator leaf: {insertion}"
+                )));
             }
         }
 
@@ -956,9 +1092,8 @@ impl<'de> Deserialize<'de> for Accumulator {
     {
         let bytes: Vec<u8> =
             <Vec<_> as Deserialize>::deserialize(deserializer)?;
-        let mem_forest = MemForest::deserialize(&*bytes)
-            .map_err(<D::Error as serde::de::Error>::custom)?;
-        Ok(Self(mem_forest))
+        Self::deserialize_from(&bytes)
+            .map_err(<D::Error as serde::de::Error>::custom)
     }
 }
 
@@ -968,8 +1103,7 @@ impl Serialize for Accumulator {
         S: serde::Serializer,
     {
         let mut bytes = Vec::new();
-        self.0
-            .serialize(&mut bytes)
+        self.serialize_into(&mut bytes)
             .map_err(<S::Error as serde::ser::Error>::custom)?;
         <Vec<_> as Serialize>::serialize(&bytes, serializer)
     }
@@ -977,10 +1111,60 @@ impl Serialize for Accumulator {
 
 #[cfg(test)]
 mod accumulator_tests {
+    use rustreexo::accumulator::node_hash::AccumulatorHash as _;
+
     use super::{
-        AccumulatorDiff, Address, FilledOutput, FilledOutputContent, OutPoint,
-        utreexo_leaf_hash,
+        Accumulator, AccumulatorDiff, Address, Blake3UtxoHash, FilledOutput,
+        FilledOutputContent, OutPoint, utreexo_leaf_hash,
     };
+
+    #[test]
+    fn accumulator_hash_tags_roundtrip_distinct_sentinels() {
+        for expected in [
+            Blake3UtxoHash::Empty,
+            Blake3UtxoHash::Placeholder,
+            Blake3UtxoHash::Some([0; 32]),
+            Blake3UtxoHash::Some([42; 32]),
+        ] {
+            let mut bytes = Vec::new();
+            expected.write(&mut bytes).unwrap();
+            let actual = Blake3UtxoHash::read(&mut &*bytes).unwrap();
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn accumulator_with_deleted_root_roundtrips() {
+        let mut accumulator = Accumulator::default();
+        let mut additions = AccumulatorDiff::default();
+        additions.insert([1; 32]);
+        additions.insert([2; 32]);
+        accumulator.apply_diff(additions).unwrap();
+
+        let mut deletions = AccumulatorDiff::default();
+        deletions.remove([1; 32]);
+        deletions.remove([2; 32]);
+        accumulator.apply_diff(deletions).unwrap();
+        assert_eq!(accumulator.get_roots(), vec![Blake3UtxoHash::Empty]);
+
+        let encoded = bincode::serialize(&accumulator).unwrap();
+        let decoded: Accumulator = bincode::deserialize(&encoded).unwrap();
+        assert_eq!(decoded.get_roots(), accumulator.get_roots());
+        assert_eq!(decoded.0.leaves, accumulator.0.leaves);
+        assert_eq!(bincode::serialize(&decoded).unwrap(), encoded);
+    }
+
+    #[test]
+    fn accumulator_rejects_duplicate_leaf_insertions() {
+        let mut accumulator = Accumulator::default();
+        let mut insertion = AccumulatorDiff::default();
+        insertion.insert([7; 32]);
+        accumulator.apply_diff(insertion.clone()).unwrap();
+        let before = bincode::serialize(&accumulator).unwrap();
+
+        assert!(accumulator.apply_diff(insertion).is_err());
+        assert_eq!(bincode::serialize(&accumulator).unwrap(), before);
+    }
 
     #[test]
     fn utreexo_leaf_hash_golden_vector() {
@@ -1118,9 +1302,10 @@ mod merkle_tests {
     use super::*;
 
     fn tx(memo: &[u8]) -> Transaction {
-        let mut tx = Transaction::default();
-        tx.memo = memo.to_vec();
-        tx
+        Transaction {
+            memo: memo.to_vec(),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -1164,7 +1349,7 @@ mod merkle_tests {
 #[cfg(test)]
 mod withdrawal_bundle_order_regression {
     use super::*;
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::BTreeMap;
 
     use bitcoin::{Address, Amount, address::NetworkUnchecked};
 
@@ -1175,15 +1360,15 @@ mod withdrawal_bundle_order_regression {
                 .parse()
                 .unwrap();
         AggregatedWithdrawal {
-            spend_utxos: HashMap::new(),
+            spend_utxos: BTreeMap::new(),
             main_address: addr,
             value: Amount::from_sat(value),
             main_fee: Amount::from_sat(main_fee),
         }
     }
 
-    // Build the bundle m6id exactly as `collect_withdrawal_bundle` does, for a given
-    // (HashMap-determined) input order.
+    // Build the bundle m6id exactly as `collect_withdrawal_bundle` does, for a
+    // given input order.
     fn bundle_m6id(mut aggregated: Vec<AggregatedWithdrawal>) -> M6id {
         aggregated.sort_by_key(|a| std::cmp::Reverse(a.clone()));
         let outputs: Vec<bitcoin::TxOut> = aggregated
