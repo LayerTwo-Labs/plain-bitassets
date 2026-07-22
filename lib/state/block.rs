@@ -6,16 +6,89 @@ use sneed::{RoTxn, RwTxn};
 use crate::{
     state::{Error, PrevalidatedBlock, State, amm, dutch_auction, error},
     types::{
-        AmountOverflowError, Authorization, BitAssetId, Body, FilledOutput,
-        FilledOutputContent, GetAddress as _, GetBitcoinValue as _, Header,
-        InPoint, OutPoint, OutPointKey, OutputContent, SpentOutput, TxData,
-        Verify as _,
+        AccumulatorDiff, AddressOutPointKey, AmountOverflowError,
+        Authorization, BitAssetId, Body, FilledOutput, FilledOutputContent,
+        GetAddress as _, GetBitcoinValue as _, Header, InPoint, MerkleRoot,
+        OutPoint, OutPointKey, Output, OutputContent, SpentOutput, TxData,
+        Verify as _, utreexo_leaf_hash,
     },
 };
 
 /// Calculate total number of inputs across all transactions in a block body
 fn calculate_total_inputs(body: &Body) -> usize {
     body.transactions.iter().map(|t| t.inputs.len()).sum()
+}
+
+fn fill_coinbase_output(output: &Output) -> Result<FilledOutput, Error> {
+    let filled_content = match output.content.clone() {
+        OutputContent::Bitcoin(value) => FilledOutputContent::Bitcoin(value),
+        OutputContent::Withdrawal(withdrawal) => {
+            FilledOutputContent::BitcoinWithdrawal(withdrawal)
+        }
+        OutputContent::AmmLpToken(_)
+        | OutputContent::BitAsset(_)
+        | OutputContent::BitAssetControl
+        | OutputContent::BitAssetReservation
+        | OutputContent::DutchAuctionReceipt => {
+            return Err(Error::BadCoinbaseOutputContent);
+        }
+    };
+    Ok(FilledOutput {
+        address: output.address,
+        content: filled_content,
+        memo: output.memo.clone(),
+    })
+}
+
+fn filled_coinbase_outputs(
+    merkle_root: MerkleRoot,
+    coinbase: &[Output],
+) -> Result<Vec<(OutPoint, FilledOutput)>, Error> {
+    coinbase
+        .iter()
+        .enumerate()
+        .map(|(vout, output)| {
+            let outpoint = OutPoint::Coinbase {
+                merkle_root,
+                vout: vout as u32,
+            };
+            Ok((outpoint, fill_coinbase_output(output)?))
+        })
+        .collect()
+}
+
+fn build_accumulator_diff(
+    merkle_root: MerkleRoot,
+    body: &Body,
+    filled_transactions: &[crate::types::FilledTransaction],
+) -> Result<AccumulatorDiff, Error> {
+    let mut accumulator_diff = AccumulatorDiff::default();
+    for filled_tx in filled_transactions {
+        for (outpoint, output) in filled_tx.spent_inputs() {
+            accumulator_diff.remove(utreexo_leaf_hash(outpoint, output));
+        }
+    }
+    for (outpoint, output) in
+        filled_coinbase_outputs(merkle_root, &body.coinbase)?
+    {
+        accumulator_diff.insert(utreexo_leaf_hash(&outpoint, &output));
+    }
+    for filled_tx in filled_transactions {
+        let txid = filled_tx.txid();
+        let Some(filled_outputs) = filled_tx.filled_outputs() else {
+            let err = error::FillTxOutputContents(Box::new(filled_tx.clone()));
+            return Err(err.into());
+        };
+        for (vout, filled_output) in filled_outputs.iter().enumerate() {
+            let outpoint = OutPoint::Regular {
+                txid,
+                vout: vout as u32,
+            };
+            accumulator_diff
+                .insert(utreexo_leaf_hash(&outpoint, filled_output));
+        }
+    }
+    Ok(accumulator_diff)
 }
 
 /// Validate a block, returning fees
@@ -181,6 +254,12 @@ pub fn prevalidate(
 
     let () = Authorization::verify_body(body).map_err(Error::Authorization)?;
 
+    let accumulator_diff = build_accumulator_diff(
+        computed_merkle_root,
+        body,
+        &filled_transactions,
+    )?;
+
     let height = state.try_get_height(rotxn)?.map_or(0, |height| height + 1);
 
     Ok(PrevalidatedBlock {
@@ -189,6 +268,7 @@ pub fn prevalidate(
         total_fees,
         coinbase_value,
         next_height: height,
+        accumulator_diff,
     })
 }
 
@@ -197,7 +277,7 @@ pub fn connect_prevalidated(
     rwtxn: &mut RwTxn,
     header: &Header,
     body: &Body,
-    prevalidated: PrevalidatedBlock,
+    prevalidated: &PrevalidatedBlock,
 ) -> Result<(), Error> {
     // Skip validation - already done in prevalidate
     // Use precomputed values to avoid redundant DB reads
@@ -215,39 +295,15 @@ pub fn connect_prevalidated(
         .sum::<usize>()
         + body.coinbase.len();
 
-    // Use Vec + sort_unstable instead of individual DB operations for better performance
-    let mut utxo_deletes: Vec<OutPointKey> = Vec::with_capacity(total_inputs);
     let mut stxo_puts: Vec<(OutPointKey, SpentOutput)> =
         Vec::with_capacity(total_inputs);
     let mut utxo_puts: Vec<(OutPointKey, FilledOutput)> =
         Vec::with_capacity(total_outputs);
 
     // Collect coinbase outputs
-    for (vout, output) in body.coinbase.iter().enumerate() {
-        let outpoint = OutPoint::Coinbase {
-            merkle_root: header.merkle_root,
-            vout: vout as u32,
-        };
-        let filled_content = match output.content.clone() {
-            OutputContent::Bitcoin(value) => {
-                FilledOutputContent::Bitcoin(value)
-            }
-            OutputContent::Withdrawal(withdrawal) => {
-                FilledOutputContent::BitcoinWithdrawal(withdrawal)
-            }
-            OutputContent::AmmLpToken(_)
-            | OutputContent::BitAsset(_)
-            | OutputContent::BitAssetControl
-            | OutputContent::BitAssetReservation
-            | OutputContent::DutchAuctionReceipt => {
-                return Err(Error::BadCoinbaseOutputContent);
-            }
-        };
-        let filled_output = FilledOutput {
-            address: output.address,
-            content: filled_content,
-            memo: output.memo.clone(),
-        };
+    for (outpoint, filled_output) in
+        filled_coinbase_outputs(header.merkle_root, &body.coinbase)?
+    {
         utxo_puts.push((OutPointKey::from_outpoint(&outpoint), filled_output));
     }
 
@@ -271,7 +327,6 @@ pub fn connect_prevalidated(
                     vin: vin as u32,
                 },
             };
-            utxo_deletes.push(key);
             stxo_puts.push((key, spent_output));
         }
 
@@ -366,21 +421,20 @@ pub fn connect_prevalidated(
     }
 
     // Sort all vectors in parallel for optimal cursor access
-    utxo_deletes.par_sort_unstable();
     stxo_puts.par_sort_unstable_by_key(|(key, _)| *key);
     utxo_puts.par_sort_unstable_by_key(|(key, _)| *key);
 
-    // Apply all database operations using pre-sorted keys for optimal B-tree access
-    for key in &utxo_deletes {
-        state.utxos.delete(rwtxn, key)?;
+    for (key, output) in stxo_puts {
+        if !state.spend_utxo(rwtxn, key, output)? {
+            return Err(error::NoUtxo {
+                outpoint: key.to_outpoint(),
+            }
+            .into());
+        }
     }
 
-    for (key, spent_output) in &stxo_puts {
-        state.stxos.put(rwtxn, key, spent_output)?;
-    }
-
-    for (key, filled_output) in &utxo_puts {
-        state.utxos.put(rwtxn, key, filled_output)?;
+    for (key, filled_output) in utxo_puts {
+        state.put_utxo(rwtxn, key, filled_output, prevalidated.next_height)?;
     }
 
     // Update tip and height using precomputed values
@@ -441,7 +495,7 @@ pub fn connect(
             content: filled_content,
             memo: output.memo.clone(),
         };
-        state.utxos.put(rwtxn, &outpoint_key, &filled_output)?;
+        state.put_utxo(rwtxn, outpoint_key, filled_output, height)?;
     }
     for transaction in &body.transactions {
         let filled_tx = state.fill_transaction(rwtxn, transaction)?;
@@ -459,20 +513,21 @@ pub fn connect(
                     vin: vin as u32,
                 },
             };
-            state.utxos.delete(rwtxn, &input_key)?;
-            state.stxos.put(rwtxn, &input_key, &spent_output)?;
+            if !state.spend_utxo(rwtxn, input_key, spent_output)? {
+                return Err(error::NoUtxo { outpoint: *input }.into());
+            }
         }
         let Some(filled_outputs) = filled_tx.filled_outputs() else {
             let err = error::FillTxOutputContents(Box::new(filled_tx));
             return Err(err.into());
         };
-        for (vout, filled_output) in filled_outputs.iter().enumerate() {
+        for (vout, filled_output) in filled_outputs.into_iter().enumerate() {
             let outpoint = OutPoint::Regular {
                 txid,
                 vout: vout as u32,
             };
             let outpoint_key = OutPointKey::from_outpoint(&outpoint);
-            state.utxos.put(rwtxn, &outpoint_key, filled_output)?;
+            state.put_utxo(rwtxn, outpoint_key, filled_output, height)?;
         }
         match &transaction.data {
             None => (),
@@ -654,13 +709,15 @@ pub fn disconnect_tip(
         }
         // delete UTXOs, last-to-first
         tx.outputs.iter().enumerate().rev().try_for_each(
-            |(vout, _output)| {
+            |(vout, output)| {
                 let outpoint = OutPoint::Regular {
                     txid,
                     vout: vout as u32,
                 };
                 let outpoint_key = OutPointKey::from_outpoint(&outpoint);
-                if state.utxos.delete(rwtxn, &outpoint_key)? {
+                let address_key =
+                    AddressOutPointKey::new(output.address, outpoint_key);
+                if state.delete_utxo(rwtxn, &address_key)? {
                     Ok::<_, Error>(())
                 } else {
                     Err(error::NoUtxo { outpoint }.into())
@@ -670,13 +727,7 @@ pub fn disconnect_tip(
         // unspend STXOs, last-to-first
         tx.inputs.iter().rev().try_for_each(|outpoint| {
             let outpoint_key = OutPointKey::from_outpoint(outpoint);
-            if let Some(spent_output) =
-                state.stxos.try_get(rwtxn, &outpoint_key)?
-            {
-                state.stxos.delete(rwtxn, &outpoint_key)?;
-                state
-                    .utxos
-                    .put(rwtxn, &outpoint_key, &spent_output.output)?;
+            if state.unspend_utxo(rwtxn, &outpoint_key)? {
                 Ok(())
             } else {
                 Err(Error::NoStxo {
@@ -686,20 +737,24 @@ pub fn disconnect_tip(
         })
     })?;
     // delete coinbase UTXOs, last-to-first
-    body.coinbase.iter().enumerate().rev().try_for_each(
-        |(vout, _output)| {
+    body.coinbase
+        .iter()
+        .enumerate()
+        .rev()
+        .try_for_each(|(vout, output)| {
             let outpoint = OutPoint::Coinbase {
                 merkle_root: header.merkle_root,
                 vout: vout as u32,
             };
             let outpoint_key = OutPointKey::from_outpoint(&outpoint);
-            if state.utxos.delete(rwtxn, &outpoint_key)? {
+            let address_key =
+                AddressOutPointKey::new(output.address, outpoint_key);
+            if state.delete_utxo(rwtxn, &address_key)? {
                 Ok::<_, Error>(())
             } else {
                 Err(error::NoUtxo { outpoint }.into())
             }
-        },
-    )?;
+        })?;
     match (header.prev_side_hash, height) {
         (None, 0) => {
             state.tip.delete(rwtxn, &())?;
@@ -722,13 +777,17 @@ mod test {
         authorization::{self, SigningKey},
         state::{
             BitAssetSeqId,
-            block::{connect, disconnect_tip, validate},
+            block::{
+                build_accumulator_diff, connect, disconnect_tip, validate,
+            },
             test::fresh_state,
         },
         types::{
-            BitAssetData, BitAssetDataUpdates, BitAssetId, BlockHash, Body,
-            FilledOutput, FilledOutputContent, Hash, Header, OutPoint,
+            AccumulatorDiff, Address, BitAssetData, BitAssetDataUpdates,
+            BitAssetId, BitcoinOutputContent, BlockHash, Body, FilledOutput,
+            FilledOutputContent, FilledTransaction, Hash, Header, OutPoint,
             OutPointKey, Output, OutputContent, Transaction, TxData, Update,
+            utreexo_leaf_hash,
         },
     };
 
@@ -751,6 +810,76 @@ mod test {
             encryption_pubkey: Update::Retain,
             signing_pubkey: Update::Retain,
         }
+    }
+
+    #[test]
+    fn accumulator_diff_tracks_body_utxo_changes() -> anyhow::Result<()> {
+        let spent_outpoint = OutPoint::Regular {
+            txid: [1; 32].into(),
+            vout: 0,
+        };
+        let spent_output = FilledOutput::new_bitcoin_value(
+            Address::ALL_ZEROS,
+            bitcoin::Amount::from_sat(10),
+        );
+        let transaction = Transaction {
+            inputs: vec![spent_outpoint],
+            outputs: vec![Output::new(
+                Address::ALL_ZEROS,
+                OutputContent::Bitcoin(BitcoinOutputContent(
+                    bitcoin::Amount::from_sat(10),
+                )),
+            )],
+            ..Default::default()
+        };
+        let filled_transaction = FilledTransaction {
+            transaction: transaction.clone(),
+            spent_utxos: vec![spent_output.clone()],
+        };
+        let body = Body {
+            coinbase: vec![Output::new(
+                Address::ALL_ZEROS,
+                OutputContent::Bitcoin(BitcoinOutputContent(
+                    bitcoin::Amount::ZERO,
+                )),
+            )],
+            transactions: vec![transaction],
+            authorizations: Vec::new(),
+        };
+        let merkle_root =
+            Body::compute_merkle_root(&body.coinbase, &body.transactions);
+
+        let diff = build_accumulator_diff(
+            merkle_root,
+            &body,
+            std::slice::from_ref(&filled_transaction),
+        )?;
+
+        let mut expected = AccumulatorDiff::default();
+        expected.remove(utreexo_leaf_hash(&spent_outpoint, &spent_output));
+        let coinbase_outpoint = OutPoint::Coinbase {
+            merkle_root,
+            vout: 0,
+        };
+        let coinbase_output = FilledOutput::new_bitcoin_value(
+            Address::ALL_ZEROS,
+            bitcoin::Amount::ZERO,
+        );
+        expected
+            .insert(utreexo_leaf_hash(&coinbase_outpoint, &coinbase_output));
+        let regular_outpoint = OutPoint::Regular {
+            txid: filled_transaction.txid(),
+            vout: 0,
+        };
+        let regular_output = FilledOutput::new_bitcoin_value(
+            Address::ALL_ZEROS,
+            bitcoin::Amount::from_sat(10),
+        );
+        expected.insert(utreexo_leaf_hash(&regular_outpoint, &regular_output));
+
+        assert_eq!(diff, expected);
+        assert_eq!(diff.counts(), (2, 1));
+        Ok(())
     }
 
     #[test]
@@ -818,23 +947,25 @@ mod test {
             )?;
             let seq = state.bitassets.next_seq(&rwtxn)?;
             anyhow::ensure!(seq == BitAssetSeqId(1));
-            state.utxos.put(
+            state.put_utxo(
                 &mut rwtxn,
-                &OutPointKey::from_outpoint(&bitasset_outpoint),
-                &FilledOutput {
+                OutPointKey::from_outpoint(&bitasset_outpoint),
+                FilledOutput {
                     address,
                     content: FilledOutputContent::BitAsset(bitasset_id, 5),
                     memo: Vec::new(),
                 },
+                0,
             )?;
-            state.utxos.put(
+            state.put_utxo(
                 &mut rwtxn,
-                &OutPointKey::from_outpoint(&control_outpoint),
-                &FilledOutput {
+                OutPointKey::from_outpoint(&control_outpoint),
+                FilledOutput {
                     address,
                     content: FilledOutputContent::BitAssetControl(bitasset_id),
                     memo: Vec::new(),
                 },
+                0,
             )?;
             rwtxn.commit()?;
         }

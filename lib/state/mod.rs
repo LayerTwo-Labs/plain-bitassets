@@ -1,21 +1,26 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    sync::Arc,
+};
 
 use fallible_iterator::FallibleIterator as _;
 use futures::Stream;
 use heed::types::SerdeBincode;
 use itertools::Itertools;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use sneed::{DatabaseUnique, RoDatabaseUnique, RoTxn, RwTxn, UnitKey};
 
 use crate::{
     authorization::Authorization,
     types::{
-        Address, AmountOverflowError, Authorized, AuthorizedTransaction,
-        BitAssetId, BlockHash, Body, FilledOutput, FilledTransaction,
-        GetAddress as _, GetBitcoinValue as _, Header, InPoint, M6id, OutPoint,
-        OutPointKey, SpentOutput, Transaction, TxData, VERSION, Verify as _,
-        Version, WithdrawalBundle, WithdrawalBundleStatus,
-        proto::mainchain::TwoWayPegData,
+        Accumulator, Address, AddressOutPointKey, AmountOverflowError,
+        Authorized, AuthorizedTransaction, BitAssetId, BlockHash, Body,
+        FilledOutput, FilledTransaction, GetAddress as _, GetBitcoinValue as _,
+        Header, InPoint, M6id, OutPoint, OutPointKey, SpentOutput, Transaction,
+        TxData, VERSION, Verify as _, Version, WithdrawalBundle,
+        WithdrawalBundleMetadata, WithdrawalBundleStatus,
+        proto::mainchain::{BlockInfo, TwoWayPegData},
     },
     util::Watchable,
 };
@@ -44,6 +49,7 @@ pub struct PrevalidatedBlock {
     pub total_fees: bitcoin::Amount,
     pub coinbase_value: bitcoin::Amount,
     pub next_height: u32, // Precomputed next height to avoid DB read in write txn
+    pub accumulator_diff: crate::types::AccumulatorDiff,
 }
 
 /// Information we have regarding a withdrawal bundle
@@ -68,6 +74,12 @@ type WithdrawalBundlesDb = DatabaseUnique<
     )>,
 >;
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SpentUtxoEntry {
+    pub created_height: u32,
+    pub output: SpentOutput,
+}
+
 #[derive(Clone)]
 pub struct State {
     /// Current tip
@@ -80,7 +92,9 @@ pub struct State {
     /// Associates Dutch auction sequence numbers with auction state
     dutch_auctions: dutch_auction::Db,
     utxos: DatabaseUnique<OutPointKey, SerdeBincode<FilledOutput>>,
-    stxos: DatabaseUnique<OutPointKey, SerdeBincode<SpentOutput>>,
+    utxo_heights_by_address:
+        DatabaseUnique<AddressOutPointKey, SerdeBincode<u32>>,
+    stxos: DatabaseUnique<OutPointKey, SerdeBincode<SpentUtxoEntry>>,
     /// Pending withdrawal bundle. MUST exist in withdrawal_bundles
     pending_withdrawal_bundle: DatabaseUnique<UnitKey, SerdeBincode<M6id>>,
     /// Latest failed (known) withdrawal bundle
@@ -90,6 +104,16 @@ pub struct State {
     /// Some withdrawal bundles may be unknown.
     /// in which case they are `None`.
     withdrawal_bundles: WithdrawalBundlesDb,
+    /// Branch-independent bundle metadata, keyed by the L1-visible m6id.
+    ///
+    /// This is an archival cache rather than rollbackable sidechain state. A
+    /// stale entry is harmless because it is only used after a matching L1
+    /// submission event, while retaining entries allows an L2-only reorg to
+    /// reapply the exact withdrawal reservation.
+    withdrawal_bundle_archive: DatabaseUnique<
+        SerdeBincode<M6id>,
+        SerdeBincode<WithdrawalBundleMetadata>,
+    >,
     /// Deposit blocks and the height at which they were applied, keyed sequentially
     deposit_blocks: DatabaseUnique<
         SerdeBincode<u32>,
@@ -100,13 +124,17 @@ pub struct State {
         SerdeBincode<u32>,
         SerdeBincode<(bitcoin::BlockHash, u32)>,
     >,
+    pub utreexo_accumulator: Arc<Mutex<Accumulator>>,
     _version: DatabaseUnique<UnitKey, SerdeBincode<Version>>,
 }
 
 impl State {
-    pub const NUM_DBS: u32 = bitassets::Dbs::NUM_DBS + 12;
+    pub const NUM_DBS: u32 = bitassets::Dbs::NUM_DBS + 14;
 
-    pub fn new(env: &sneed::Env) -> Result<Self, Error> {
+    pub fn new(
+        env: &sneed::Env,
+        utreexo_accumulator: Accumulator,
+    ) -> Result<Self, Error> {
         let mut rwtxn = env.write_txn()?;
         let tip = DatabaseUnique::create(env, &mut rwtxn, "tip")?;
         let height = DatabaseUnique::create(env, &mut rwtxn, "height")?;
@@ -115,6 +143,8 @@ impl State {
         let dutch_auctions =
             DatabaseUnique::create(env, &mut rwtxn, "dutch_auctions")?;
         let utxos = DatabaseUnique::create(env, &mut rwtxn, "utxos")?;
+        let utxo_heights_by_address =
+            DatabaseUnique::create(env, &mut rwtxn, "utxo_heights_by_address")?;
         let stxos = DatabaseUnique::create(env, &mut rwtxn, "stxos")?;
         let pending_withdrawal_bundle = DatabaseUnique::create(
             env,
@@ -128,6 +158,11 @@ impl State {
         )?;
         let withdrawal_bundles =
             DatabaseUnique::create(env, &mut rwtxn, "withdrawal_bundles")?;
+        let withdrawal_bundle_archive = DatabaseUnique::create(
+            env,
+            &mut rwtxn,
+            "withdrawal_bundle_archive",
+        )?;
         let deposit_blocks =
             DatabaseUnique::create(env, &mut rwtxn, "deposit_blocks")?;
         let withdrawal_bundle_event_blocks = DatabaseUnique::create(
@@ -147,12 +182,15 @@ impl State {
             bitassets,
             dutch_auctions,
             utxos,
+            utxo_heights_by_address,
             stxos,
             pending_withdrawal_bundle,
             latest_failed_withdrawal_bundle,
             withdrawal_bundles,
+            withdrawal_bundle_archive,
             withdrawal_bundle_event_blocks,
             deposit_blocks,
+            utreexo_accumulator: Arc::new(Mutex::new(utreexo_accumulator)),
             _version: version,
         })
     }
@@ -180,8 +218,76 @@ impl State {
 
     pub fn stxos(
         &self,
-    ) -> &RoDatabaseUnique<OutPointKey, SerdeBincode<SpentOutput>> {
+    ) -> &RoDatabaseUnique<OutPointKey, SerdeBincode<SpentUtxoEntry>> {
         &self.stxos
+    }
+
+    fn put_utxo(
+        &self,
+        rwtxn: &mut RwTxn,
+        outpoint_key: OutPointKey,
+        output: FilledOutput,
+        created_height: u32,
+    ) -> Result<AddressOutPointKey, sneed::db::Error> {
+        let address_key = AddressOutPointKey::new(output.address, outpoint_key);
+        self.utxo_heights_by_address.put(
+            rwtxn,
+            &address_key,
+            &created_height,
+        )?;
+        self.utxos.put(rwtxn, &outpoint_key, &output)?;
+        Ok(address_key)
+    }
+
+    fn delete_utxo(
+        &self,
+        rwtxn: &mut RwTxn,
+        address_key: &AddressOutPointKey,
+    ) -> Result<bool, sneed::db::Error> {
+        self.utxo_heights_by_address.delete(rwtxn, address_key)?;
+        Ok(self.utxos.delete(rwtxn, &address_key.outpoint_key())?)
+    }
+
+    fn spend_utxo(
+        &self,
+        rwtxn: &mut RwTxn,
+        outpoint_key: OutPointKey,
+        spent_output: SpentOutput,
+    ) -> Result<bool, sneed::db::Error> {
+        let address_key =
+            AddressOutPointKey::new(spent_output.output.address, outpoint_key);
+        let Some(created_height) =
+            self.utxo_heights_by_address.try_get(rwtxn, &address_key)?
+        else {
+            return Ok(false);
+        };
+
+        let entry = SpentUtxoEntry {
+            created_height,
+            output: spent_output,
+        };
+
+        self.stxos.put(rwtxn, &outpoint_key, &entry)?;
+        self.delete_utxo(rwtxn, &address_key)
+    }
+
+    fn unspend_utxo(
+        &self,
+        rwtxn: &mut RwTxn,
+        outpoint_key: &OutPointKey,
+    ) -> Result<bool, sneed::db::Error> {
+        let Some(entry) = self.stxos.try_get(rwtxn, outpoint_key)? else {
+            return Ok(false);
+        };
+
+        self.put_utxo(
+            rwtxn,
+            *outpoint_key,
+            entry.output.output,
+            entry.created_height,
+        )?;
+
+        Ok(self.stxos.delete(rwtxn, outpoint_key)?)
     }
 
     pub fn withdrawal_bundle_event_blocks(
@@ -222,13 +328,25 @@ impl State {
         &self,
         rotxn: &RoTxn,
         addresses: &HashSet<Address>,
+        height_threshold: u32,
     ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
-        let utxos: HashMap<OutPoint, FilledOutput> = self
-            .utxos
-            .iter(rotxn)?
-            .filter(|(_, output)| Ok(addresses.contains(&output.address)))
-            .map(|(key, output)| Ok((key.to_outpoint(), output)))
-            .collect()?;
+        let mut utxos = HashMap::new();
+        for address in addresses {
+            let start = AddressOutPointKey::start(*address);
+            let end = AddressOutPointKey::end(*address);
+            let mut iter = self
+                .utxo_heights_by_address
+                .range(rotxn, &(start..=end))
+                .map_err(sneed::db::Error::from)?;
+            while let Some((key, created_height)) = iter.next()? {
+                if created_height >= height_threshold {
+                    let outpoint_key = key.outpoint_key();
+                    let outpoint = outpoint_key.to_outpoint();
+                    let output = self.utxos.get(rotxn, &outpoint_key)?;
+                    utxos.insert(outpoint, output);
+                }
+            }
+        }
         Ok(utxos)
     }
 
@@ -300,13 +418,13 @@ impl State {
                 .try_get(rotxn, &key)?
                 .ok_or(Error::NoStxo { outpoint: *input })?;
             assert_eq!(
-                stxo.inpoint,
+                stxo.output.inpoint,
                 InPoint::Regular {
                     txid,
                     vin: vin as u32
                 }
             );
-            spent_utxos.push(stxo.output);
+            spent_utxos.push(stxo.output.output);
         }
         spent_utxos.reverse();
         Ok(FilledTransaction {
@@ -349,6 +467,24 @@ impl State {
         };
         let height = bundle_status.latest().height;
         Ok(Some((bundle, height)))
+    }
+
+    pub(crate) fn try_get_withdrawal_bundle_metadata(
+        &self,
+        rotxn: &RoTxn,
+        m6id: M6id,
+    ) -> Result<Option<WithdrawalBundleMetadata>, Error> {
+        Ok(self.withdrawal_bundle_archive.try_get(rotxn, &m6id)?)
+    }
+
+    pub(crate) fn put_withdrawal_bundle_metadata(
+        &self,
+        rwtxn: &mut RwTxn,
+        metadata: &WithdrawalBundleMetadata,
+    ) -> Result<(), Error> {
+        let m6id = metadata.compute_m6id();
+        self.withdrawal_bundle_archive.put(rwtxn, &m6id, metadata)?;
+        Ok(())
     }
 
     /// Check that
@@ -689,7 +825,8 @@ impl State {
         let mut total_deposit_stxo_value = bitcoin::Amount::ZERO;
         let mut total_withdrawal_stxo_value = bitcoin::Amount::ZERO;
         self.stxos.iter(rotxn)?.map_err(Error::from).for_each(
-            |(outpoint_key, spent_output)| {
+            |(outpoint_key, spent_entry)| {
+                let spent_output = spent_entry.output;
                 let outpoint = outpoint_key.to_outpoint();
                 if let OutPoint::Deposit(_) = outpoint {
                     total_deposit_stxo_value = total_deposit_stxo_value
@@ -743,8 +880,35 @@ impl State {
         &self,
         rwtxn: &mut RwTxn,
         two_way_peg_data: &TwoWayPegData,
-    ) -> Result<(), Error> {
+    ) -> Result<crate::types::AccumulatorDiff, Error> {
         two_way_peg_data::connect(self, rwtxn, two_way_peg_data)
+    }
+
+    pub(crate) fn begin_connect_two_way_peg_data(
+        &self,
+        rwtxn: &mut RwTxn,
+    ) -> Result<two_way_peg_data::ConnectContext, Error> {
+        two_way_peg_data::begin_connect(self, rwtxn)
+    }
+
+    pub(crate) fn connect_two_way_peg_block_info(
+        &self,
+        rwtxn: &mut RwTxn,
+        block_hash: bitcoin::BlockHash,
+        block_info: &BlockInfo,
+        context: &mut two_way_peg_data::ConnectContext,
+    ) -> Result<(), Error> {
+        two_way_peg_data::connect_block_info(
+            self, rwtxn, block_hash, block_info, context,
+        )
+    }
+
+    pub(crate) fn finish_connect_two_way_peg_data(
+        &self,
+        rwtxn: &mut RwTxn,
+        context: two_way_peg_data::ConnectContext,
+    ) -> Result<crate::types::AccumulatorDiff, Error> {
+        two_way_peg_data::finish_connect(self, rwtxn, context)
     }
 
     pub fn disconnect_two_way_peg_data(
@@ -753,6 +917,33 @@ impl State {
         two_way_peg_data: &TwoWayPegData,
     ) -> Result<(), Error> {
         two_way_peg_data::disconnect(self, rwtxn, two_way_peg_data)
+    }
+
+    pub(crate) fn begin_disconnect_two_way_peg_data(
+        &self,
+        rwtxn: &mut RwTxn,
+    ) -> Result<two_way_peg_data::DisconnectContext, Error> {
+        two_way_peg_data::begin_disconnect(self, rwtxn)
+    }
+
+    pub(crate) fn disconnect_two_way_peg_block_info(
+        &self,
+        rwtxn: &mut RwTxn,
+        block_hash: bitcoin::BlockHash,
+        block_info: &BlockInfo,
+        context: &mut two_way_peg_data::DisconnectContext,
+    ) -> Result<(), Error> {
+        two_way_peg_data::disconnect_block_info(
+            self, rwtxn, block_hash, block_info, context,
+        )
+    }
+
+    pub(crate) fn finish_disconnect_two_way_peg_data(
+        &self,
+        rwtxn: &mut RwTxn,
+        context: two_way_peg_data::DisconnectContext,
+    ) -> Result<(), Error> {
+        two_way_peg_data::finish_disconnect(self, rwtxn, context)
     }
 
     pub fn prevalidate_block(
@@ -769,7 +960,7 @@ impl State {
         rwtxn: &mut RwTxn,
         header: &Header,
         body: &Body,
-        prevalidated: PrevalidatedBlock,
+        prevalidated: &PrevalidatedBlock,
     ) -> Result<(), Error> {
         block::connect_prevalidated(self, rwtxn, header, body, prevalidated)
     }
@@ -781,7 +972,7 @@ impl State {
         body: &Body,
     ) -> Result<(), Error> {
         let prevalidated = self.prevalidate_block(rwtxn, header, body)?;
-        self.connect_prevalidated_block(rwtxn, header, body, prevalidated)?;
+        self.connect_prevalidated_block(rwtxn, header, body, &prevalidated)?;
         Ok(())
     }
 }
@@ -804,10 +995,11 @@ mod test {
         authorization,
         state::{Error, State, error},
         types::{
-            Address, AuthorizedTransaction, BitAssetData, BitAssetId,
-            FilledOutput, FilledOutputContent, FilledTransaction, Hash,
-            InPoint, OutPoint, OutPointKey, Output, OutputContent, SpentOutput,
-            Transaction, TxData, Txid, VerifyingKey, WithdrawalOutputContent,
+            Accumulator, Address, AuthorizedTransaction, BitAssetData,
+            BitAssetId, FilledOutput, FilledOutputContent, FilledTransaction,
+            Hash, InPoint, OutPoint, OutPointKey, Output, OutputContent,
+            SpentOutput, Transaction, TxData, Txid, VerifyingKey,
+            WithdrawalOutputContent,
         },
     };
 
@@ -837,7 +1029,7 @@ mod test {
         test_name: &str,
     ) -> anyhow::Result<(temp_dir::TempDir, sneed::Env, State)> {
         let (temp_dir, env) = temp_env(test_name)?;
-        let state = State::new(&env)?;
+        let state = State::new(&env, Accumulator::default())?;
         Ok((temp_dir, env, state))
     }
 
@@ -1082,11 +1274,14 @@ mod test {
                     txid: bitcoin::Txid::from_byte_array([i; 32]),
                     vout: 0,
                 });
-                let stxo = SpentOutput {
-                    output: bitcoin_filled_output(Address::ALL_ZEROS, sats),
-                    inpoint: InPoint::Regular {
-                        txid: [i; 32].into(),
-                        vin: 0,
+                let stxo = super::SpentUtxoEntry {
+                    created_height: 0,
+                    output: SpentOutput {
+                        output: bitcoin_filled_output(Address::ALL_ZEROS, sats),
+                        inpoint: InPoint::Regular {
+                            txid: [i; 32].into(),
+                            vin: 0,
+                        },
                     },
                 };
                 state
@@ -1100,12 +1295,15 @@ mod test {
                     txid: [i; 32].into(),
                     vout: 0,
                 };
-                let stxo = SpentOutput {
-                    output: bitcoin_filled_output(Address::ALL_ZEROS, sats),
-                    inpoint: InPoint::Withdrawal {
-                        m6id: crate::types::M6id(
-                            bitcoin::Txid::from_byte_array([i; 32]),
-                        ),
+                let stxo = super::SpentUtxoEntry {
+                    created_height: 0,
+                    output: SpentOutput {
+                        output: bitcoin_filled_output(Address::ALL_ZEROS, sats),
+                        inpoint: InPoint::Withdrawal {
+                            m6id: crate::types::M6id(
+                                bitcoin::Txid::from_byte_array([i; 32]),
+                            ),
+                        },
                     },
                 };
                 state
@@ -1128,6 +1326,79 @@ mod test {
             expected_sidechain_wealth,
             sidechain_wealth,
         );
+        Ok(())
+    }
+
+    #[test]
+    fn address_utxo_index_stores_height_and_restores_on_unspend()
+    -> anyhow::Result<()> {
+        use std::collections::HashSet;
+
+        let (_, env, state) = fresh_state(
+            "address_utxo_index_stores_height_and_restores_on_unspend",
+        )?;
+        let address = Address([1; 20]);
+        let outpoint = OutPoint::Regular {
+            txid: Txid([2; 32]),
+            vout: 0,
+        };
+        let key = OutPointKey::from_outpoint(&outpoint);
+        let output = bitcoin_filled_output(address, 42);
+        let created_height = 7;
+        let addresses = HashSet::from([address]);
+
+        {
+            let mut rwtxn = env.write_txn()?;
+            let address_key = state.put_utxo(
+                &mut rwtxn,
+                key,
+                output.clone(),
+                created_height,
+            )?;
+            anyhow::ensure!(
+                state.utxo_heights_by_address.get(&rwtxn, &address_key)?
+                    == created_height
+            );
+            rwtxn.commit()?;
+        }
+
+        {
+            let rotxn = env.read_txn()?;
+            let indexed =
+                state.get_utxos_by_addresses(&rotxn, &addresses, 0)?;
+            anyhow::ensure!(indexed.get(&outpoint) == Some(&output));
+            let above_height = state.get_utxos_by_addresses(
+                &rotxn,
+                &addresses,
+                created_height + 1,
+            )?;
+            anyhow::ensure!(above_height.is_empty());
+        }
+
+        {
+            let mut rwtxn = env.write_txn()?;
+            let spent_output = SpentOutput {
+                output: output.clone(),
+                inpoint: InPoint::Regular {
+                    txid: Txid([3; 32]),
+                    vin: 0,
+                },
+            };
+            anyhow::ensure!(state.spend_utxo(&mut rwtxn, key, spent_output)?);
+            anyhow::ensure!(state.unspend_utxo(&mut rwtxn, &key)?);
+            rwtxn.commit()?;
+        }
+
+        let rotxn = env.read_txn()?;
+        let restored =
+            state.get_utxos_by_addresses(&rotxn, &addresses, created_height)?;
+        anyhow::ensure!(restored.get(&outpoint) == Some(&output));
+        let above_height = state.get_utxos_by_addresses(
+            &rotxn,
+            &addresses,
+            created_height + 1,
+        )?;
+        anyhow::ensure!(above_height.is_empty());
         Ok(())
     }
 }

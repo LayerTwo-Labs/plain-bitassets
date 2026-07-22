@@ -16,7 +16,9 @@ use tracing::instrument;
 use crate::{
     archive::Archive,
     state::State,
-    types::{AuthorizedTransaction, Network, THIS_SIDECHAIN, VERSION, Version},
+    types::{
+        AuthorizedTransaction, M6id, Network, THIS_SIDECHAIN, VERSION, Version,
+    },
 };
 
 pub mod error;
@@ -186,6 +188,7 @@ pub struct Net {
     archive: Archive,
     network: Network,
     state: State,
+    canonical_main_tip: Arc<RwLock<Option<bitcoin::BlockHash>>>,
     active_peers: Arc<RwLock<HashMap<SocketAddr, PeerConnectionHandle>>>,
     // None indicates that the stream has ended
     peer_info_tx:
@@ -223,6 +226,14 @@ impl Net {
             drop(peer_connection);
             tracing::info!(%addr, "disconnected");
         }
+    }
+
+    pub(crate) fn canonical_main_tip(&self) -> Option<bitcoin::BlockHash> {
+        *self.canonical_main_tip.read()
+    }
+
+    pub(crate) fn set_canonical_main_tip(&self, main_tip: bitcoin::BlockHash) {
+        *self.canonical_main_tip.write() = Some(main_tip);
     }
 
     /// Apply the provided function to the peer connection handle,
@@ -278,6 +289,7 @@ impl Net {
         let connection_ctxt = PeerConnectionCtxt {
             env,
             archive: self.archive.clone(),
+            canonical_main_tip: Arc::clone(&self.canonical_main_tip),
             network: self.network,
             state: self.state.clone(),
         };
@@ -320,6 +332,7 @@ impl Net {
     ) -> Result<(Self, PeerInfoRx), Error> {
         let (server, _) = make_server_endpoint(bind_addr)?;
         let active_peers = Arc::new(RwLock::new(HashMap::new()));
+        let canonical_main_tip = Arc::new(RwLock::new(None));
         let mut rwtxn = env.write_txn()?;
         let known_peers =
             match DatabaseUnique::open(env, &rwtxn, "known_peers")? {
@@ -344,6 +357,7 @@ impl Net {
             archive,
             network,
             state,
+            canonical_main_tip,
             active_peers,
             peer_info_tx,
             known_peers,
@@ -441,6 +455,7 @@ impl Net {
         let connection_ctxt = PeerConnectionCtxt {
             env,
             archive: self.archive.clone(),
+            canonical_main_tip: Arc::clone(&self.canonical_main_tip),
             network: self.network,
             state: self.state.clone(),
         };
@@ -517,5 +532,48 @@ impl Net {
                     tracing::warn!("Failed to push tx {txid} to peer at {addr}")
                 }
             })
+    }
+
+    /// Request durable withdrawal bundle metadata from connected peers.
+    /// Returns the number of connected peer tasks to which it was queued.
+    pub fn request_withdrawal_bundle(
+        &self,
+        m6id: M6id,
+        preferred: Option<SocketAddr>,
+    ) -> usize {
+        let active_peers = self.active_peers.read();
+        let mut requested = 0;
+        let mut request_peer =
+            |addr: &SocketAddr,
+             peer_connection_handle: &PeerConnectionHandle| {
+                if peer_connection_handle.connection_status()
+                    != PeerConnectionStatus::Connected
+                {
+                    return;
+                }
+                let request: PeerRequest =
+                    peer::message::GetWithdrawalBundleRequest { m6id }.into();
+                if peer_connection_handle
+                    .internal_message_tx
+                    .unbounded_send(request.into())
+                    .is_ok()
+                {
+                    requested += 1;
+                } else {
+                    tracing::warn!(%addr, %m6id, "failed to request withdrawal bundle metadata");
+                }
+            };
+
+        if let Some(preferred) = preferred
+            && let Some(peer) = active_peers.get(&preferred)
+        {
+            request_peer(&preferred, peer);
+        }
+        for (addr, peer) in active_peers.iter() {
+            if Some(*addr) != preferred {
+                request_peer(addr, peer);
+            }
+        }
+        requested
     }
 }

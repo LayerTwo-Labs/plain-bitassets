@@ -147,6 +147,34 @@ impl utoipa::ToSchema for MerkleRoot {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MerkleProof {
+    pub leaf_index: usize,
+    pub siblings: Vec<MerkleProofNode>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct MerkleProofNode {
+    pub hash: Hash,
+    pub is_left: bool,
+}
+
+impl MerkleProof {
+    pub fn verify(&self, leaf: Hash, root: MerkleRoot) -> bool {
+        let mut hash = leaf;
+
+        for sibling in &self.siblings {
+            hash = if sibling.is_left {
+                hash_with_scratch_buffer(&(sibling.hash, hash))
+            } else {
+                hash_with_scratch_buffer(&(hash, sibling.hash))
+            };
+        }
+
+        hash == Hash::from(root)
+    }
+}
+
 #[derive(
     BorshDeserialize,
     BorshSerialize,

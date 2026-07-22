@@ -26,9 +26,9 @@ use crate::{
         Address, AmountOverflowError, AmountUnderflowError, AssetId,
         Authorized, AuthorizedTransaction, BitAssetData, BitAssetId, Block,
         BlockHash, BmmResult, Body, DutchAuctionId, FilledOutput,
-        FilledTransaction, GetBitcoinValue, Header, InPoint, Network, OutPoint,
-        OutPointKey, Output, SpentOutput, Tip, Transaction, TxIn, Txid,
-        WithdrawalBundle,
+        FilledTransaction, GetBitcoinValue, Header, InPoint, M6id, Network,
+        OutPoint, OutPointKey, Output, SpentOutput, Tip, Transaction, TxIn,
+        Txid, WithdrawalBundle,
         proto::{self, mainchain},
     },
     util::Watchable,
@@ -58,6 +58,8 @@ pub enum Error {
     Archive(#[from] archive::Error),
     #[error("CUSF mainchain proto error")]
     CusfMainchain(#[from] proto::Error),
+    #[error("canonical mainchain tip is not initialized")]
+    CanonicalMainTipUnknown,
     #[error(transparent)]
     Db(#[from] DbError),
     #[error("Database env error")]
@@ -190,12 +192,20 @@ where
             unsafe { env_open_opts.flags(fast_flags) };
             unsafe { Env::open(&env_open_opts, &env_path) }?
         };
-        let state = State::new(&env)?;
+        let archive = Archive::new(&env)?;
+        let state = State::new(&env, Default::default())?;
+
+        {
+            let rotxn = env.read_txn()?;
+            let tip = state.try_get_tip(&rotxn)?;
+            let accumulator = archive.accumulator_at(&rotxn, tip)?;
+            *state.utreexo_accumulator.lock() = accumulator;
+        }
+
         #[cfg(feature = "zmq")]
         let zmq_pub_handler = Arc::new(ZmqPubHandler::new(zmq_addr).await?);
-        let archive = Archive::new(&env)?;
         let mempool = MemPool::new(&env)?;
-        let (mainchain_task, mainchain_task_response_rx) =
+        let (mainchain_task, mainchain_task_response_rx, mainchain_event_rx) =
             MainchainTaskHandle::new(
                 env.clone(),
                 archive.clone(),
@@ -211,6 +221,7 @@ where
             archive.clone(),
             mainchain_task.clone(),
             mainchain_task_response_rx,
+            mainchain_event_rx,
             mempool.clone(),
             net.clone(),
             peer_info_rx,
@@ -519,7 +530,7 @@ where
                 .try_get(&rotxn, &outpoint_key)
                 .map_err(state::Error::from)?
             {
-                spent.push((*outpoint, output));
+                spent.push((*outpoint, output.output));
             }
         }
         Ok(spent)
@@ -564,9 +575,14 @@ where
     pub fn get_utxos_by_addresses(
         &self,
         addresses: &HashSet<Address>,
+        height_threshold: u32,
     ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
         let rotxn = self.env.read_txn()?;
-        let utxos = self.state.get_utxos_by_addresses(&rotxn, addresses)?;
+        let utxos = self.state.get_utxos_by_addresses(
+            &rotxn,
+            addresses,
+            height_threshold,
+        )?;
         Ok(utxos)
     }
 
@@ -624,8 +640,13 @@ where
         hash: BlockHash,
     ) -> Result<bitcoin::BlockHash, Error> {
         let rotxn = self.env.read_txn()?;
-        let hash = self.archive.get_best_main_verification(&rotxn, hash)?;
-        Ok(hash)
+        let main_tip = self
+            .net
+            .canonical_main_tip()
+            .ok_or(Error::CanonicalMainTipUnknown)?;
+        self.archive
+            .try_get_best_main_verification_on_lineage(&rotxn, hash, main_tip)?
+            .ok_or_else(|| archive::Error::NoBmmResult(hash).into())
     }
 
     pub fn get_bmm_inclusions(
@@ -824,7 +845,17 @@ where
     pub fn connect_peer(&self, addr: SocketAddr) -> Result<(), Error> {
         self.net
             .connect_peer(self.env.clone(), addr)
-            .map_err(Error::from)
+            .map_err(Error::from)?;
+        for m6id in self.net_task.missing_withdrawal_bundles() {
+            self.net.request_withdrawal_bundle(m6id, Some(addr));
+        }
+        Ok(())
+    }
+
+    /// Withdrawal bundle metadata currently preventing an atomic branch
+    /// replacement from being applied.
+    pub fn missing_withdrawal_bundles(&self) -> HashSet<M6id> {
+        self.net_task.missing_withdrawal_bundles()
     }
 
     pub fn forget_peer(&self, addr: &SocketAddr) -> Result<bool, Error> {

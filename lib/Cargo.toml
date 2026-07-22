@@ -45,6 +45,7 @@ prost-types = { workspace = true }
 quinn = { workspace = true }
 rayon = { workspace = true }
 rcgen = { workspace = true }
+rustreexo = { workspace = true }
 rustls = { workspace = true, features = ["ring"] }
 semver = { workspace = true, features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }

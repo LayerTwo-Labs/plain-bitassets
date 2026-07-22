@@ -1,5 +1,6 @@
 use std::{
     borrow::Borrow,
+    borrow::Cow,
     cmp::Ordering,
     collections::{HashMap, HashSet},
     io::Cursor,
@@ -17,7 +18,7 @@ use crate::{
     types::{
         AmountOverflowError, BitAssetData, BitAssetDataUpdates, GetAddress,
         GetBitcoinValue,
-        address::Address,
+        address::{ADDRESS_SIZE, Address},
         hashes::{
             self, AssetId, BitAssetId, DutchAuctionId, Hash, M6id, MerkleRoot,
             Txid,
@@ -115,6 +116,7 @@ impl std::fmt::Display for OutPoint {
 }
 
 const OUTPOINT_KEY_SIZE: usize = 37;
+const ADDRESS_OUTPOINT_KEY_SIZE: usize = ADDRESS_SIZE + OUTPOINT_KEY_SIZE;
 
 /// Fixed-width key for OutPoint based on its canonical Borsh encoding.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -203,8 +205,8 @@ impl<'a> BytesEncode<'a> for OutPointKey {
     #[inline]
     fn bytes_encode(
         item: &'a Self::EItem,
-    ) -> Result<std::borrow::Cow<'a, [u8]>, BoxedError> {
-        Ok(std::borrow::Cow::Borrowed(item.as_ref()))
+    ) -> Result<Cow<'a, [u8]>, BoxedError> {
+        Ok(Cow::Borrowed(item.as_ref()))
     }
 }
 
@@ -222,6 +224,164 @@ impl<'a> BytesDecode<'a> for OutPointKey {
         OutPoint::deserialize_reader(&mut cursor)
             .map_err(|err| -> BoxedError { Box::new(err) })?;
         Ok(OutPointKey(key))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct AddressOutPointKey([u8; ADDRESS_OUTPOINT_KEY_SIZE]);
+
+impl AddressOutPointKey {
+    #[inline]
+    pub fn new(address: Address, outpoint: OutPointKey) -> Self {
+        let mut bytes = [0u8; ADDRESS_OUTPOINT_KEY_SIZE];
+        bytes[..ADDRESS_SIZE].copy_from_slice(&address.0);
+        bytes[ADDRESS_SIZE..].copy_from_slice(outpoint.as_bytes());
+        Self(bytes)
+    }
+
+    #[inline]
+    pub fn start(address: Address) -> Self {
+        let mut bytes = [0u8; ADDRESS_OUTPOINT_KEY_SIZE];
+        bytes[..ADDRESS_SIZE].copy_from_slice(&address.0);
+        Self(bytes)
+    }
+
+    #[inline]
+    pub fn end(address: Address) -> Self {
+        let mut bytes = [0xffu8; ADDRESS_OUTPOINT_KEY_SIZE];
+        bytes[..ADDRESS_SIZE].copy_from_slice(&address.0);
+        Self(bytes)
+    }
+
+    #[inline]
+    pub fn address(&self) -> Address {
+        let mut address = [0u8; ADDRESS_SIZE];
+        address.copy_from_slice(&self.0[..ADDRESS_SIZE]);
+        Address(address)
+    }
+
+    #[inline]
+    pub fn outpoint_key(&self) -> OutPointKey {
+        <OutPointKey as BytesDecode>::bytes_decode(&self.0[ADDRESS_SIZE..])
+            .expect("AddressOutPointKey should contain a valid OutPointKey")
+    }
+}
+
+impl Ord for AddressOutPointKey {
+    #[inline]
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+
+impl PartialOrd for AddressOutPointKey {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl AsRef<[u8]> for AddressOutPointKey {
+    #[inline]
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl<'a> BytesEncode<'a> for AddressOutPointKey {
+    type EItem = AddressOutPointKey;
+
+    #[inline]
+    fn bytes_encode(
+        item: &'a Self::EItem,
+    ) -> Result<Cow<'a, [u8]>, BoxedError> {
+        Ok(Cow::Borrowed(item.as_ref()))
+    }
+}
+
+impl<'a> BytesDecode<'a> for AddressOutPointKey {
+    type DItem = AddressOutPointKey;
+
+    #[inline]
+    fn bytes_decode(bytes: &'a [u8]) -> Result<Self::DItem, BoxedError> {
+        <OutPointKey as BytesDecode>::bytes_decode(&bytes[ADDRESS_SIZE..])?;
+        let mut key = [0u8; ADDRESS_OUTPOINT_KEY_SIZE];
+        key.copy_from_slice(bytes);
+        Ok(Self(key))
+    }
+}
+
+const TXID_SIZE: usize = blake3::OUT_LEN;
+const ADDR_TXID_DB_KEY_SIZE: usize = ADDRESS_SIZE + TXID_SIZE;
+
+/// Fixed-width txdb key: address || txid.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct AddressTxidKey([u8; ADDR_TXID_DB_KEY_SIZE]);
+
+impl AddressTxidKey {
+    #[inline]
+    pub fn new(address: Address, txid: Txid) -> Self {
+        let mut key = [0u8; ADDR_TXID_DB_KEY_SIZE];
+        key[..ADDRESS_SIZE].copy_from_slice(&address.0);
+        key[ADDRESS_SIZE..].copy_from_slice(txid.as_slice());
+        Self(key)
+    }
+
+    #[inline]
+    pub fn start(address: Address) -> Self {
+        let mut key = [0u8; ADDR_TXID_DB_KEY_SIZE];
+        key[..ADDRESS_SIZE].copy_from_slice(&address.0);
+        Self(key)
+    }
+
+    #[inline]
+    pub fn end(address: Address) -> Self {
+        let mut key = [0xffu8; ADDR_TXID_DB_KEY_SIZE];
+        key[..ADDRESS_SIZE].copy_from_slice(&address.0);
+        Self(key)
+    }
+
+    #[inline]
+    pub fn address(&self) -> Address {
+        let mut address = [0u8; ADDRESS_SIZE];
+        address.copy_from_slice(&self.0[..ADDRESS_SIZE]);
+        Address(address)
+    }
+
+    #[inline]
+    pub fn txid(&self) -> Txid {
+        let mut txid = [0u8; TXID_SIZE];
+        txid.copy_from_slice(&self.0[ADDRESS_SIZE..]);
+        Txid(txid)
+    }
+}
+
+impl AsRef<[u8]> for AddressTxidKey {
+    #[inline]
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl<'a> BytesEncode<'a> for AddressTxidKey {
+    type EItem = AddressTxidKey;
+
+    #[inline]
+    fn bytes_encode(
+        item: &'a Self::EItem,
+    ) -> Result<Cow<'a, [u8]>, BoxedError> {
+        Ok(Cow::Borrowed(item.as_ref()))
+    }
+}
+
+impl<'a> BytesDecode<'a> for AddressTxidKey {
+    type DItem = AddressTxidKey;
+
+    #[inline]
+    fn bytes_decode(bytes: &'a [u8]) -> Result<Self::DItem, BoxedError> {
+        let mut key = [0u8; ADDR_TXID_DB_KEY_SIZE];
+        key.copy_from_slice(bytes);
+        Ok(Self(key))
     }
 }
 

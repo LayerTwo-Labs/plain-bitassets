@@ -6,7 +6,8 @@ use std::{
 
 use bitcoin::{self, hashes::Hash as _};
 use fallible_iterator::{FallibleIterator, IteratorExt};
-use heed::types::SerdeBincode;
+use heed::types::{Bytes, SerdeBincode};
+use serde::{Deserialize, Serialize};
 use sneed::{
     DatabaseUnique, EnvError, RoTxn, RwTxn, RwTxnError, UnitKey,
     db::{self, error::Error as DbError},
@@ -14,9 +15,21 @@ use sneed::{
 };
 
 use crate::types::{
-    Block, BlockHash, BmmResult, Body, Header, Tip, Txid, VERSION, Version,
-    proto::mainchain,
+    Accumulator, AccumulatorDiff, Address, AddressTxidKey, Block, BlockHash,
+    BmmResult, Body, FilledTransaction, Header, MerkleProof, Tip, Txid,
+    VERSION, Version, proto::mainchain,
 };
+
+pub const TXDB_PRUNE_INTERVAL_BLOCKS: u32 = 144 * 7;
+pub const TXDB_RETENTION_SECS: u64 = 28 * 24 * 60 * 60;
+
+/// Check for accumulator history eligible for pruning once per week.
+pub const ACCUMULATOR_PRUNE_INTERVAL_BLOCKS: u32 = 144 * 7;
+/// Maximum number of sidechain blocks that may be disconnected in one reorg.
+/// Snapshots and diffs required to reconstruct this window are retained.
+pub const ACCUMULATOR_REORG_HORIZON_BLOCKS: u32 = 144 * 7 * 4 * 6;
+/// Persist one full accumulator snapshot per week.
+pub const ACCUMULATOR_SNAPSHOT_INTERVAL_BLOCKS: u32 = 144 * 7;
 
 #[allow(clippy::duplicated_attributes)]
 #[derive(Debug, thiserror::Error, transitive::Transitive)]
@@ -76,10 +89,31 @@ pub enum Error {
     NoMainHeight(bitcoin::BlockHash),
     #[error("no tx with txid {0}")]
     NoTx(Txid),
+    #[error("no accumulator diff for block {0}")]
+    NoAccumulatorDiff(BlockHash),
+    #[error(transparent)]
+    Utreexo(#[from] crate::types::UtreexoError),
+    #[error(
+        "txdb filled transaction length mismatch: expected {expected}, actual {actual}"
+    )]
+    TxDbFilledTxLenMismatch { expected: usize, actual: usize },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FilledTxEntry {
+    pub tx: FilledTransaction,
+    pub merkle_proof: MerkleProof,
+    pub block_hash: BlockHash,
+    pub block_height: u32,
+    pub unix_stamp: u64,
 }
 
 #[derive(Clone)]
 pub struct Archive {
+    accumulators: DatabaseUnique<SerdeBincode<BlockHash>, Bytes>,
+    accumulator_diffs:
+        DatabaseUnique<SerdeBincode<BlockHash>, SerdeBincode<AccumulatorDiff>>,
+    accumulator_reorg_floor: DatabaseUnique<UnitKey, SerdeBincode<u32>>,
     block_hash_to_height:
         DatabaseUnique<SerdeBincode<BlockHash>, SerdeBincode<u32>>,
     /// BMM results for each header.
@@ -151,11 +185,13 @@ pub struct Archive {
         SerdeBincode<Txid>,
         SerdeBincode<BTreeMap<BlockHash, u32>>,
     >,
+    /// Capped tx cache, keyed by (address, txid).
+    txdb: DatabaseUnique<AddressTxidKey, SerdeBincode<FilledTxEntry>>,
     _version: DatabaseUnique<UnitKey, SerdeBincode<Version>>,
 }
 
 impl Archive {
-    pub const NUM_DBS: u32 = 14;
+    pub const NUM_DBS: u32 = 15 + 3;
 
     pub fn new(env: &sneed::Env) -> Result<Self, Error> {
         let mut rwtxn = env.write_txn()?;
@@ -180,6 +216,13 @@ impl Archive {
             Some(_) => (),
             None => version.put(&mut rwtxn, &(), &*VERSION)?,
         }
+        let accumulators =
+            DatabaseUnique::create(env, &mut rwtxn, "accumulators")
+                .map_err(EnvError::from)?;
+        let accumulator_diffs =
+            DatabaseUnique::create(env, &mut rwtxn, "accumulator_diffs")?;
+        let accumulator_reorg_floor =
+            DatabaseUnique::create(env, &mut rwtxn, "accumulator_reorg_floor")?;
         let block_hash_to_height =
             DatabaseUnique::create(env, &mut rwtxn, "hash_to_height")?;
         let bmm_results =
@@ -227,8 +270,12 @@ impl Archive {
         let total_work = DatabaseUnique::create(env, &mut rwtxn, "total_work")?;
         let txid_to_inclusions =
             DatabaseUnique::create(env, &mut rwtxn, "txid_to_inclusions")?;
+        let txdb = DatabaseUnique::create(env, &mut rwtxn, "txdb")?;
         rwtxn.commit()?;
         Ok(Self {
+            accumulators,
+            accumulator_diffs,
+            accumulator_reorg_floor,
             block_hash_to_height,
             bmm_results,
             bodies,
@@ -242,6 +289,7 @@ impl Archive {
             successors,
             total_work,
             txid_to_inclusions,
+            txdb,
             _version: version,
         })
     }
@@ -453,6 +501,67 @@ impl Archive {
             .max_by_key(|main_hash| self.get_total_work(rotxn, *main_hash))
     }
 
+    fn best_main_verification_on_lineage(
+        &self,
+        rotxn: &RoTxn,
+        verifications: &HashMap<bitcoin::BlockHash, BmmResult>,
+        main_tip: bitcoin::BlockHash,
+    ) -> Result<Option<bitcoin::BlockHash>, Error> {
+        if main_tip == bitcoin::BlockHash::all_zeros() {
+            return Ok(None);
+        }
+        let mut best = None;
+        for (main_block, result) in verifications {
+            if *result != BmmResult::Verified
+                || !self.is_main_descendant(rotxn, *main_block, main_tip)?
+            {
+                continue;
+            }
+            let work = self.get_total_work(rotxn, *main_block)?;
+            if best.is_none_or(|(_, best_work)| work > best_work) {
+                best = Some((*main_block, work));
+            }
+        }
+        Ok(best.map(|(main_block, _)| main_block))
+    }
+
+    /// Return the newest valid BMM verification for `block_hash` that is on
+    /// the ancestry of `main_tip`.
+    pub fn try_get_best_main_verification_on_lineage(
+        &self,
+        rotxn: &RoTxn,
+        block_hash: BlockHash,
+        main_tip: bitcoin::BlockHash,
+    ) -> Result<Option<bitcoin::BlockHash>, Error> {
+        let verifications = self.get_bmm_results(rotxn, block_hash)?;
+        self.best_main_verification_on_lineage(rotxn, &verifications, main_tip)
+    }
+
+    /// Return every archived sidechain block with a valid BMM verification on
+    /// the specified canonical mainchain lineage.
+    pub fn get_mainchain_verified_tips(
+        &self,
+        rotxn: &RoTxn,
+        main_tip: bitcoin::BlockHash,
+    ) -> Result<Vec<Tip>, Error> {
+        let mut tips = Vec::new();
+        let mut verifications =
+            self.bmm_results.iter(rotxn).map_err(DbError::from)?;
+        while let Some((block_hash, results)) =
+            verifications.next().map_err(DbError::from)?
+        {
+            if let Some(main_block_hash) = self
+                .best_main_verification_on_lineage(rotxn, &results, main_tip)?
+            {
+                tips.push(Tip {
+                    block_hash,
+                    main_block_hash,
+                });
+            }
+        }
+        Ok(tips)
+    }
+
     /// Try to get the best valid mainchain verification for the specified block.
     pub fn get_best_main_verification(
         &self,
@@ -603,6 +712,207 @@ impl Archive {
         Ok(res)
     }
 
+    /// Reconstruct the accumulator at `target` from the newest snapshot on its
+    /// ancestry and the subsequent per-block diffs.
+    ///
+    /// Diffs are deliberately applied one block at a time because combining
+    /// changes across block boundaries loses accumulator insertion history.
+    pub fn accumulator_at(
+        &self,
+        rotxn: &RoTxn,
+        target: Option<BlockHash>,
+    ) -> Result<Accumulator, Error> {
+        let Some(target) = target else {
+            return Ok(Accumulator::default());
+        };
+        let target_height = self.get_height(rotxn, target)?;
+        let mut newest_snapshot: Option<(u32, BlockHash)> = None;
+        let mut snapshots =
+            self.accumulators.iter(rotxn).map_err(DbError::from)?;
+        while let Some((block_hash, snapshot_bytes)) =
+            snapshots.next().map_err(DbError::from)?
+        {
+            let snapshot_height =
+                Self::decode_accumulator_snapshot_height(snapshot_bytes)?;
+            if snapshot_height > target_height
+                || newest_snapshot
+                    .as_ref()
+                    .is_some_and(|(height, _)| *height >= snapshot_height)
+            {
+                continue;
+            }
+            if self.is_descendant(rotxn, block_hash, target)? {
+                newest_snapshot = Some((snapshot_height, block_hash));
+            }
+        }
+        drop(snapshots);
+
+        let (snapshot_height, mut accumulator) =
+            if let Some((height, block_hash)) = newest_snapshot {
+                let snapshot_bytes = self
+                    .accumulators
+                    .get(rotxn, &block_hash)
+                    .map_err(DbError::from)?;
+                let accumulator =
+                    Self::decode_accumulator_snapshot(snapshot_bytes)?;
+                (Some(height), accumulator)
+            } else {
+                (None, Accumulator::default())
+            };
+        let blocks =
+            self.ancestor_hashes_after_height(rotxn, target, snapshot_height)?;
+        for block_hash in blocks {
+            accumulator
+                .apply_diff(self.get_accumulator_diff(rotxn, block_hash)?)?;
+        }
+        Ok(accumulator)
+    }
+
+    /// Store an accumulator snapshot for a specific block.
+    pub fn put_accumulator(
+        &self,
+        rwtxn: &mut RwTxn,
+        block_hash: BlockHash,
+        block_height: u32,
+        accumulator: &Accumulator,
+    ) -> Result<(), Error> {
+        let mut snapshot = Vec::new();
+        snapshot.extend_from_slice(&block_height.to_le_bytes());
+        accumulator.serialize_into(&mut snapshot)?;
+        self.accumulators
+            .put(rwtxn, &block_hash, &snapshot)
+            .map_err(DbError::from)?;
+        Ok(())
+    }
+
+    fn decode_accumulator_snapshot(bytes: &[u8]) -> Result<Accumulator, Error> {
+        Self::decode_accumulator_snapshot_height(bytes)?;
+        let accumulator_bytes = &bytes[4..];
+        Accumulator::deserialize_from(accumulator_bytes).map_err(Into::into)
+    }
+
+    fn decode_accumulator_snapshot_height(bytes: &[u8]) -> Result<u32, Error> {
+        let height_bytes = bytes.first_chunk::<4>().ok_or_else(|| {
+            crate::types::UtreexoError::custom(
+                "accumulator snapshot is shorter than its height prefix",
+            )
+        })?;
+        Ok(u32::from_le_bytes(*height_bytes))
+    }
+
+    /// Oldest sidechain height for which retained accumulator history is
+    /// guaranteed to support reconstruction. This value only moves forward,
+    /// even if the active sidechain later reorganizes to a lower height.
+    pub fn accumulator_reorg_floor(&self, rotxn: &RoTxn) -> Result<u32, Error> {
+        self.accumulator_reorg_floor
+            .try_get(rotxn, &())
+            .map(|floor| floor.unwrap_or_default())
+            .map_err(|err| DbError::from(err).into())
+    }
+
+    pub fn advance_accumulator_reorg_floor(
+        &self,
+        rwtxn: &mut RwTxn,
+        new_floor: u32,
+    ) -> Result<(), Error> {
+        let current_floor = self.accumulator_reorg_floor(rwtxn)?;
+        if new_floor > current_floor {
+            self.accumulator_reorg_floor
+                .put(rwtxn, &(), &new_floor)
+                .map_err(DbError::from)?;
+        }
+        Ok(())
+    }
+
+    pub fn prune_accumulator_older_than(
+        &self,
+        rwtxn: &mut RwTxn,
+        threshold_block_height: u32,
+    ) -> Result<(), Error> {
+        let keys = {
+            let mut keys = Vec::new();
+            let mut iter =
+                self.accumulators.iter(rwtxn).map_err(DbError::from)?;
+            while let Some((block_hash, snapshot_bytes)) =
+                iter.next().map_err(DbError::from)?
+            {
+                let snapshot_height =
+                    Self::decode_accumulator_snapshot_height(snapshot_bytes)?;
+                if snapshot_height < threshold_block_height {
+                    keys.push(block_hash);
+                }
+            }
+            keys
+        };
+        for key in &keys {
+            let _ = self.accumulators.delete(rwtxn, key)?;
+        }
+        Ok(())
+    }
+
+    /// AccumulatorDiff
+    pub fn put_accumulator_diff(
+        &self,
+        rwtxn: &mut RwTxn,
+        block_hash: BlockHash,
+        diff: &AccumulatorDiff,
+    ) -> Result<(), Error> {
+        self.accumulator_diffs
+            .put(rwtxn, &block_hash, diff)
+            .map_err(DbError::from)?;
+        Ok(())
+    }
+
+    pub fn try_get_accumulator_diff(
+        &self,
+        rotxn: &RoTxn,
+        block_hash: BlockHash,
+    ) -> Result<Option<AccumulatorDiff>, Error> {
+        let diff = self
+            .accumulator_diffs
+            .try_get(rotxn, &block_hash)
+            .map_err(DbError::from)?;
+        Ok(diff)
+    }
+
+    pub fn get_accumulator_diff(
+        &self,
+        rotxn: &RoTxn,
+        block_hash: BlockHash,
+    ) -> Result<AccumulatorDiff, Error> {
+        self.try_get_accumulator_diff(rotxn, block_hash)?
+            .ok_or(Error::NoAccumulatorDiff(block_hash))
+    }
+
+    pub fn prune_accumulator_diffs_older_than(
+        &self,
+        rwtxn: &mut RwTxn,
+        threshold_block_height: u32,
+    ) -> Result<(), Error> {
+        let keys = {
+            let mut keys = Vec::new();
+            let mut iter =
+                self.accumulator_diffs.iter(rwtxn).map_err(DbError::from)?;
+
+            while let Some((block_hash, _diff)) =
+                iter.next().map_err(DbError::from)?
+            {
+                let height = self.get_height(rwtxn, block_hash)?;
+                if height < threshold_block_height {
+                    keys.push(block_hash);
+                }
+            }
+
+            keys
+        };
+
+        for key in &keys {
+            let _ = self.accumulator_diffs.delete(rwtxn, key)?;
+        }
+
+        Ok(())
+    }
+
     pub fn try_get_main_successors(
         &self,
         rotxn: &RoTxn,
@@ -673,6 +983,125 @@ impl Archive {
             .try_get(rotxn, &txid)?
             .unwrap_or_default();
         Ok(inclusions)
+    }
+
+    pub fn prune_txdb_block(
+        &self,
+        rwtxn: &mut RwTxn,
+        block_hash: BlockHash,
+    ) -> Result<(), Error> {
+        let keys = {
+            let mut keys = Vec::new();
+            let mut iter = self.txdb.iter(rwtxn).map_err(DbError::from)?;
+            while let Some((key, entry)) = iter.next().map_err(DbError::from)? {
+                if entry.block_hash == block_hash {
+                    keys.push(key);
+                }
+            }
+            keys
+        };
+        for key in &keys {
+            let _ = self.txdb.delete(rwtxn, key)?;
+        }
+        Ok(())
+    }
+
+    pub fn prune_txdb_older_than(
+        &self,
+        rwtxn: &mut RwTxn,
+        cutoff_unix: u64,
+    ) -> Result<(), Error> {
+        let keys = {
+            let mut keys = Vec::new();
+            let mut iter = self.txdb.iter(rwtxn).map_err(DbError::from)?;
+            while let Some((key, entry)) = iter.next().map_err(DbError::from)? {
+                if entry.unix_stamp < cutoff_unix {
+                    keys.push(key);
+                }
+            }
+            keys
+        };
+        for key in &keys {
+            let _ = self.txdb.delete(rwtxn, key)?;
+        }
+        Ok(())
+    }
+
+    pub fn put_txdb_for_connected_block(
+        &self,
+        rwtxn: &mut RwTxn,
+        block_hash: BlockHash,
+        block_height: u32,
+        body: &Body,
+        filled_txs: &[FilledTransaction],
+        unix_stamp: u64,
+    ) -> Result<(), Error> {
+        if body.transactions.len() != filled_txs.len() {
+            return Err(Error::TxDbFilledTxLenMismatch {
+                expected: body.transactions.len(),
+                actual: filled_txs.len(),
+            });
+        }
+        for (tx_index, filled_tx) in filled_txs.iter().enumerate() {
+            let txid = filled_tx.txid();
+            debug_assert_eq!(body.transactions[tx_index].txid(), txid);
+            let merkle_proof = Body::compute_tx_merkle_proof(
+                &body.coinbase,
+                &body.transactions,
+                tx_index,
+            );
+            debug_assert_eq!(merkle_proof.leaf_index, tx_index + 1);
+
+            let mut addresses = HashSet::new();
+            addresses.extend(
+                filled_tx.spent_utxos.iter().map(|output| output.address),
+            );
+            addresses.extend(
+                filled_tx
+                    .transaction
+                    .outputs
+                    .iter()
+                    .map(|output| output.address),
+            );
+
+            for address in addresses {
+                let key = AddressTxidKey::new(address, txid);
+                let entry = FilledTxEntry {
+                    tx: filled_tx.clone(),
+                    merkle_proof: merkle_proof.clone(),
+                    block_hash,
+                    block_height,
+                    unix_stamp,
+                };
+                self.txdb.put(rwtxn, &key, &entry)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn get_txdb_entries_by_address(
+        &self,
+        rotxn: &RoTxn,
+        addresses: &HashSet<Address>,
+        height_threshold: u32,
+    ) -> Result<Vec<FilledTxEntry>, Error> {
+        let mut entries = Vec::new();
+        for address in addresses {
+            let start = AddressTxidKey::start(*address);
+            let end = AddressTxidKey::end(*address);
+            let mut iter = self
+                .txdb
+                .range(rotxn, &(start..=end))
+                .map_err(DbError::from)?;
+            while let Some((_key, entry)) =
+                iter.next().map_err(DbError::from)?
+            {
+                if entry.block_height >= height_threshold {
+                    entries.push(entry);
+                }
+            }
+        }
+        Ok(entries)
     }
 
     /// Store a block body. The header must already exist.
@@ -1016,6 +1445,33 @@ impl Archive {
         Ancestors {
             inner: self.ancestor_headers(rotxn, block_hash),
         }
+    }
+
+    /// Return the ancestry after `exclusive_height`, ordered oldest-to-newest.
+    ///
+    /// If `exclusive_height` is `None`, return the full ancestry, including the
+    /// genesis block at height zero.
+    pub fn ancestor_hashes_after_height(
+        &self,
+        rotxn: &RoTxn,
+        tip_hash: BlockHash,
+        exclusive_height: Option<u32>,
+    ) -> Result<Vec<BlockHash>, Error> {
+        let mut blocks = Vec::new();
+        let mut ancestors = self.ancestors(rotxn, tip_hash);
+
+        while let Some(block_hash) = ancestors.next()? {
+            let block_height = self.get_height(rotxn, block_hash)?;
+
+            if exclusive_height.is_some_and(|height| block_height <= height) {
+                break;
+            }
+
+            blocks.push(block_hash);
+        }
+
+        blocks.reverse();
+        Ok(blocks)
     }
 
     /// Get missing bodies in the ancestry of the specified block, up to the
@@ -1596,5 +2052,241 @@ impl FallibleIterator for AncestorsRev<'_, '_> {
         } else {
             Ok(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bitcoin::hashes::Hash as _;
+
+    use super::*;
+
+    fn temp_env(
+        test_name: &str,
+    ) -> anyhow::Result<(temp_dir::TempDir, sneed::Env)> {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        let temp_dir = temp_dir::TempDir::with_prefix(format!(
+            "plain-bitassets-{test_name}-{}-{nanos}",
+            std::process::id()
+        ))?;
+        let mut opts = heed::EnvOpenOptions::new();
+        opts.map_size(64 * 1024 * 1024).max_dbs(Archive::NUM_DBS);
+        let env = unsafe { sneed::Env::open(&opts, temp_dir.path()) }?;
+        Ok((temp_dir, env))
+    }
+
+    fn clone_accumulator(
+        accumulator: &Accumulator,
+    ) -> Result<Accumulator, crate::types::UtreexoError> {
+        let mut bytes = Vec::new();
+        accumulator.serialize_into(&mut bytes)?;
+        Accumulator::deserialize_from(&bytes)
+    }
+
+    fn header(prev_side_hash: Option<BlockHash>, body: &Body) -> Header {
+        Header {
+            merkle_root: Body::compute_merkle_root(
+                &body.coinbase,
+                &body.transactions,
+            ),
+            prev_side_hash,
+            prev_main_hash: bitcoin::BlockHash::all_zeros(),
+        }
+    }
+
+    fn marked_header(prev_side_hash: Option<BlockHash>, marker: u8) -> Header {
+        Header {
+            merkle_root: [marker; 32].into(),
+            prev_side_hash,
+            prev_main_hash: bitcoin::BlockHash::all_zeros(),
+        }
+    }
+
+    fn apply_insert(
+        accumulator: &mut Accumulator,
+        hash: [u8; 32],
+    ) -> anyhow::Result<()> {
+        let mut diff = AccumulatorDiff::default();
+        diff.insert(hash);
+        accumulator
+            .apply_diff(diff)
+            .map_err(|err| anyhow::anyhow!(err))
+    }
+
+    #[test]
+    fn accumulator_reconstruction_ignores_other_branch_snapshots()
+    -> anyhow::Result<()> {
+        let (_temp_dir, env) = temp_env(
+            "accumulator_reconstruction_ignores_other_branch_snapshots",
+        )?;
+        let archive = Archive::new(&env)?;
+
+        let genesis = marked_header(None, 1);
+        let genesis_hash = genesis.hash();
+        let a1 = marked_header(Some(genesis_hash), 2);
+        let a1_hash = a1.hash();
+        let b1 = marked_header(Some(genesis_hash), 3);
+        let b1_hash = b1.hash();
+        let b2 = marked_header(Some(b1_hash), 4);
+        let b2_hash = b2.hash();
+
+        let mut genesis_accumulator = Accumulator::default();
+        apply_insert(&mut genesis_accumulator, [10; 32])?;
+
+        let mut b1_diff = AccumulatorDiff::default();
+        b1_diff.insert([30; 32]);
+        let mut b2_diff = AccumulatorDiff::default();
+        b2_diff.insert([40; 32]);
+
+        let mut rwtxn = env.write_txn()?;
+        archive.put_header(&mut rwtxn, &genesis)?;
+        archive.put_header(&mut rwtxn, &a1)?;
+        archive.put_header(&mut rwtxn, &b1)?;
+        archive.put_header(&mut rwtxn, &b2)?;
+        archive.put_accumulator(
+            &mut rwtxn,
+            genesis_hash,
+            0,
+            &genesis_accumulator,
+        )?;
+        // A non-ancestral snapshot's forest is never deserialized.
+        let mut malformed_abandoned_snapshot = 1_u32.to_le_bytes().to_vec();
+        malformed_abandoned_snapshot.push(0xff);
+        archive.accumulators.put(
+            &mut rwtxn,
+            &a1_hash,
+            &malformed_abandoned_snapshot,
+        )?;
+        archive.put_accumulator_diff(&mut rwtxn, b1_hash, &b1_diff)?;
+        archive.put_accumulator_diff(&mut rwtxn, b2_hash, &b2_diff)?;
+        rwtxn.commit()?;
+
+        let rotxn = env.read_txn()?;
+        let actual = archive.accumulator_at(&rotxn, Some(b2_hash))?;
+        let mut expected = clone_accumulator(&genesis_accumulator)?;
+        expected.apply_diff(b1_diff)?;
+        expected.apply_diff(b2_diff)?;
+        assert_eq!(
+            bincode::serialize(&actual)?,
+            bincode::serialize(&expected)?
+        );
+        assert_eq!(
+            bincode::serialize(&archive.accumulator_at(&rotxn, None)?)?,
+            bincode::serialize(&Accumulator::default())?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn accumulator_pruning_retains_reconstruction_anchor() -> anyhow::Result<()>
+    {
+        let (_temp_dir, env) =
+            temp_env("accumulator_pruning_retains_reconstruction_anchor")?;
+        let archive = Archive::new(&env)?;
+        let block0 = marked_header(None, 10);
+        let hash0 = block0.hash();
+        let block1 = marked_header(Some(hash0), 11);
+        let hash1 = block1.hash();
+        let block2 = marked_header(Some(hash1), 12);
+        let hash2 = block2.hash();
+
+        let mut diff0 = AccumulatorDiff::default();
+        diff0.insert([10; 32]);
+        let mut diff1 = AccumulatorDiff::default();
+        diff1.insert([11; 32]);
+        let mut diff2 = AccumulatorDiff::default();
+        diff2.insert([12; 32]);
+        let mut accumulator0 = Accumulator::default();
+        accumulator0.apply_diff(diff0.clone())?;
+        let mut accumulator1 = clone_accumulator(&accumulator0)?;
+        accumulator1.apply_diff(diff1.clone())?;
+        let mut expected = clone_accumulator(&accumulator1)?;
+        expected.apply_diff(diff2.clone())?;
+
+        let mut rwtxn = env.write_txn()?;
+        for header in [&block0, &block1, &block2] {
+            archive.put_header(&mut rwtxn, header)?;
+        }
+        archive.put_accumulator(&mut rwtxn, hash0, 0, &accumulator0)?;
+        archive.put_accumulator(&mut rwtxn, hash1, 1, &accumulator1)?;
+        archive.put_accumulator_diff(&mut rwtxn, hash0, &diff0)?;
+        archive.put_accumulator_diff(&mut rwtxn, hash1, &diff1)?;
+        archive.put_accumulator_diff(&mut rwtxn, hash2, &diff2)?;
+        archive.prune_accumulator_older_than(&mut rwtxn, 1)?;
+        archive.prune_accumulator_diffs_older_than(&mut rwtxn, 1)?;
+        archive.advance_accumulator_reorg_floor(&mut rwtxn, 1)?;
+        archive.advance_accumulator_reorg_floor(&mut rwtxn, 0)?;
+        rwtxn.commit()?;
+
+        let rotxn = env.read_txn()?;
+        let actual = archive.accumulator_at(&rotxn, Some(hash2))?;
+        assert_eq!(
+            bincode::serialize(&actual)?,
+            bincode::serialize(&expected)?
+        );
+        assert!(archive.try_get_accumulator_diff(&rotxn, hash0)?.is_none());
+        assert_eq!(archive.accumulator_reorg_floor(&rotxn)?, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn ancestor_hashes_without_height_include_genesis() -> anyhow::Result<()> {
+        let (_temp_dir, env) =
+            temp_env("ancestor_hashes_without_height_include_genesis")?;
+        let archive = Archive::new(&env)?;
+        let body = Body {
+            coinbase: Vec::new(),
+            transactions: Vec::new(),
+            authorizations: Vec::new(),
+        };
+        let genesis = header(None, &body);
+        let genesis_hash = genesis.hash();
+        let child = header(Some(genesis_hash), &body);
+        let child_hash = child.hash();
+        let grandchild = header(Some(child_hash), &body);
+        let grandchild_hash = grandchild.hash();
+
+        let mut rwtxn = env.write_txn()?;
+        archive.put_header(&mut rwtxn, &genesis)?;
+        archive.put_header(&mut rwtxn, &child)?;
+        archive.put_header(&mut rwtxn, &grandchild)?;
+        rwtxn.commit()?;
+
+        let rotxn = env.read_txn()?;
+        assert_eq!(
+            archive.ancestor_hashes_after_height(
+                &rotxn,
+                grandchild_hash,
+                None,
+            )?,
+            vec![genesis_hash, child_hash, grandchild_hash]
+        );
+        assert_eq!(
+            archive.ancestor_hashes_after_height(
+                &rotxn,
+                grandchild_hash,
+                Some(0),
+            )?,
+            vec![child_hash, grandchild_hash]
+        );
+        assert_eq!(
+            archive.ancestor_hashes_after_height(
+                &rotxn,
+                grandchild_hash,
+                Some(1),
+            )?,
+            vec![grandchild_hash]
+        );
+        assert_eq!(
+            archive.ancestor_hashes_after_height(
+                &rotxn,
+                grandchild_hash,
+                Some(2),
+            )?,
+            Vec::new()
+        );
+        Ok(())
     }
 }
