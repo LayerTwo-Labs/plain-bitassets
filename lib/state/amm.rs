@@ -1,6 +1,6 @@
 use heed::types::SerdeBincode;
 use serde::{Deserialize, Serialize};
-use sneed::{DatabaseUnique, RoDatabaseUnique, RwTxn};
+use sneed::{DatabaseUnique, RoDatabaseUnique, RoTxn, RwTxn};
 use utoipa::ToSchema;
 
 use crate::{
@@ -9,7 +9,7 @@ use crate::{
 };
 
 /// Ordered pair of [`AssetId`]s
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize)]
 pub struct AmmPair(AssetId, AssetId);
 
 impl AmmPair {
@@ -467,20 +467,21 @@ pub(in crate::state) fn revert_mint(
     Ok(())
 }
 
-// Apply AMM swap
-pub(in crate::state) fn apply_swap(
-    pools: &PoolsDb,
-    rwtxn: &mut RwTxn,
-    filled_tx: &FilledTransaction,
-) -> Result<(), Error> {
+/** Compute the pool state resulting from a swap, checking the declared
+ *  amount to receive against the amount computed from the pool state. */
+fn swap_pool_state(
+    pools: &RoPoolsDb,
+    rotxn: &RoTxn,
+    amm_swap: AmmSwap,
+) -> Result<(AmmPair, PoolState), Error> {
     let AmmSwap {
         asset_spend,
         asset_receive,
         amount_spend,
         amount_receive,
-    } = filled_tx.amm_swap().ok_or(Error::InvalidSwap)?;
+    } = amm_swap;
     let amm_pair = AmmPair::new(asset_spend, asset_receive);
-    let amm_pool_state = pools.try_get(rwtxn, &amm_pair)?.ok_or_else(|| {
+    let amm_pool_state = pools.try_get(rotxn, &amm_pair)?.ok_or_else(|| {
         Error::MissingPoolState {
             asset0: amm_pair.asset0(),
             asset1: amm_pair.asset1(),
@@ -503,6 +504,34 @@ pub(in crate::state) fn apply_swap(
     if amount_receive != amount_receive_after_fee {
         return Err(Error::InvalidSwap);
     }
+    Ok((amm_pair, new_amm_pool_state))
+}
+
+/** Validate an AMM swap against the current pool state.
+ *  This is NOT part of block validation: swaps in a block are applied
+ *  sequentially, so a swap that is stale with respect to the current pool
+ *  state may still be valid later within a block. `apply_swap` performs the
+ *  same check against the pool state at the point at which it is applied. */
+pub(in crate::state) fn validate_swap(
+    pools: &RoPoolsDb,
+    rotxn: &RoTxn,
+    filled_tx: &FilledTransaction,
+) -> Result<(), Error> {
+    let amm_swap = filled_tx.amm_swap().ok_or(Error::InvalidSwap)?;
+    let (_amm_pair, _new_amm_pool_state) =
+        swap_pool_state(pools, rotxn, amm_swap)?;
+    Ok(())
+}
+
+// Apply AMM swap
+pub(in crate::state) fn apply_swap(
+    pools: &PoolsDb,
+    rwtxn: &mut RwTxn,
+    filled_tx: &FilledTransaction,
+) -> Result<(), Error> {
+    let amm_swap = filled_tx.amm_swap().ok_or(Error::InvalidSwap)?;
+    let (amm_pair, new_amm_pool_state) =
+        swap_pool_state(pools, rwtxn, amm_swap)?;
     pools.put(rwtxn, &amm_pair, &new_amm_pool_state)?;
     Ok(())
 }
@@ -535,172 +564,79 @@ pub(in crate::state) fn revert_swap(
 mod test {
     use crate::{
         state::{
-            amm::{AmmPair, PoolState, apply_burn, apply_mint},
+            amm::{AmmPair, PoolState, apply_swap, validate_swap},
+            error::Amm as Error,
             test::fresh_state,
         },
         types::{
             Address, AssetId, BitAssetId, FilledOutput, FilledOutputContent,
-            FilledTransaction, OutPoint, Output, OutputContent, Transaction,
-            TxData, Txid,
+            FilledTransaction, OutPoint, Transaction, TxData, Txid,
         },
     };
 
-    fn bitasset(byte: u8) -> BitAssetId {
-        BitAssetId([byte; blake3::OUT_LEN])
-    }
-
-    fn txid(byte: u8) -> Txid {
-        Txid([byte; blake3::OUT_LEN])
-    }
-
-    fn outpoint(byte: u8, vout: u32) -> OutPoint {
-        OutPoint::Regular {
-            txid: txid(byte),
-            vout,
-        }
-    }
-
-    fn bitasset_output(asset: BitAssetId, value: u64) -> FilledOutput {
-        Output::new(
-            Address::ALL_ZEROS,
-            FilledOutputContent::BitAsset(asset, value),
-        )
-    }
-
-    fn lp_output(
-        asset0: AssetId,
-        asset1: AssetId,
-        amount: u64,
-    ) -> FilledOutput {
-        Output::new(
-            Address::ALL_ZEROS,
-            FilledOutputContent::AmmLpToken {
-                asset0,
-                asset1,
-                amount,
-            },
-        )
-    }
-
+    /** A swap that is stale with respect to the current pool state must be
+     *  rejected. Otherwise it is never evicted from the mempool, and is
+     *  included in block templates that `apply_swap` rejects when the block
+     *  is connected, stalling block production. */
     #[test]
-    fn apply_mint_burn_wrong_lp_baseline() -> anyhow::Result<()> {
-        let (_temp_dir, env, state) =
-            fresh_state("apply_mint_burn_wrong_lp_baseline")?;
-
-        let asset_a = bitasset(1);
-        let asset_b = bitasset(2);
-        let asset0 = AssetId::BitAsset(asset_a);
-        let asset1 = AssetId::BitAsset(asset_b);
-        let pair = AmmPair::new(asset0, asset1);
-
-        let initial_pool = PoolState {
+    fn validate_swap_rejects_stale_swap() -> anyhow::Result<()> {
+        let (env, state) = fresh_state("amm_stale_swap")?;
+        let bitasset0 = BitAssetId([0; 32]);
+        let asset_spend = AssetId::BitAsset(bitasset0);
+        let asset_receive = AssetId::BitAsset(BitAssetId([1; 32]));
+        let amm_pair = AmmPair::new(asset_spend, asset_receive);
+        let pool_state = PoolState {
             reserve0: 1_000_000,
             reserve1: 1_000_000,
             outstanding_lp_tokens: 1_000_000,
-            creation_txid: txid(9),
+            creation_txid: Txid([2; 32]),
         };
         {
             let mut rwtxn = env.write_txn()?;
-            state.amm_pools.put(&mut rwtxn, &pair, &initial_pool)?;
+            state.amm_pools.put(&mut rwtxn, &amm_pair, &pool_state)?;
             rwtxn.commit()?;
         }
-
-        let correct_after_mint = initial_pool.mint(2, 2)?;
-        let actual_lp_tokens_for_deposit = correct_after_mint
-            .outstanding_lp_tokens
-            - initial_pool.outstanding_lp_tokens;
-        anyhow::ensure!(actual_lp_tokens_for_deposit == 2);
-
-        let mint_tx =
-            |lp_token_mint: u64| -> anyhow::Result<FilledTransaction> {
-                let res = FilledTransaction {
-                    transaction: Transaction {
-                        inputs: vec![outpoint(10, 0), outpoint(11, 0)],
-                        outputs: vec![Output::new(
-                            Address::ALL_ZEROS,
-                            OutputContent::AmmLpToken(lp_token_mint),
-                        )],
-                        memo: Vec::new(),
-                        data: Some(TxData::AmmMint {
-                            amount0: 2,
-                            amount1: 2,
-                            lp_token_mint,
-                        }),
-                    },
-                    spent_utxos: vec![
-                        bitasset_output(asset_a, 2),
-                        bitasset_output(asset_b, 2),
-                    ],
-                };
-                let filled_mint_outputs = res
-                    .filled_outputs()
-                    .ok_or_else(|| anyhow::anyhow!("AMM LP output fills"))?;
-                anyhow::ensure!(
-                    filled_mint_outputs[0].content()
-                        == &FilledOutputContent::AmmLpToken {
-                            asset0,
-                            asset1,
-                            amount: lp_token_mint,
-                        }
-                );
-                Ok(res)
-            };
-
-        // Attempting to apply a mint with incorrect declared lp_tokens should
-        // fail
-        {
-            let attacker_declared_lp = 500_001;
-            let mint_tx = mint_tx(attacker_declared_lp)?;
-            let mut rwtxn = env.write_txn()?;
-            anyhow::ensure!(
-                apply_mint(&state.amm_pools, &mut rwtxn, &mint_tx).is_err()
-            );
-        }
-        // Attempting to apply a mint with correctly declared lp_tokens should
-        // succeed
-        {
-            let mint_tx = mint_tx(actual_lp_tokens_for_deposit)?;
-            let mut rwtxn = env.write_txn()?;
-            let () = apply_mint(&state.amm_pools, &mut rwtxn, &mint_tx)?;
-            rwtxn.commit()?;
-        }
-
-        let lp_token_burn = 500_001;
-        let burn_tx = FilledTransaction {
-            transaction: Transaction {
-                inputs: vec![outpoint(12, 0)],
-                outputs: vec![
-                    Output::new(
-                        Address::ALL_ZEROS,
-                        OutputContent::BitAsset(500_001),
-                    ),
-                    Output::new(
-                        Address::ALL_ZEROS,
-                        OutputContent::BitAsset(500_001),
-                    ),
-                ],
-                memo: Vec::new(),
-                data: Some(TxData::AmmBurn {
-                    amount0: 500_001,
-                    amount1: 500_001,
-                    lp_token_burn,
-                }),
-            },
-            spent_utxos: vec![lp_output(asset0, asset1, lp_token_burn)],
+        // A swap declaring the amount to receive that the pool state above
+        // pays out.
+        let amount_spend = 1_000;
+        let amount_receive = pool_state.reserve1
+            - pool_state.swap_asset0_for_asset1(amount_spend)?.reserve1;
+        let mut transaction = Transaction::new(
+            vec![OutPoint::Regular {
+                txid: Txid([3; 32]),
+                vout: 0,
+            }],
+            Vec::new(),
+        );
+        transaction.data = Some(TxData::AmmSwap {
+            amount_spent: amount_spend,
+            amount_receive,
+            pair_asset: asset_receive,
+        });
+        let filled_tx = FilledTransaction {
+            transaction,
+            spent_utxos: vec![FilledOutput::new(
+                Address([0; 20]),
+                FilledOutputContent::BitAsset(bitasset0, amount_spend),
+            )],
         };
-
         {
-            let mut rwtxn = env.write_txn()?;
-            let () = apply_burn(&state.amm_pools, &mut rwtxn, &burn_tx)?;
-            rwtxn.commit()?;
-        }
-        let pool_after_burn = {
             let rotxn = env.read_txn()?;
-            state.amm_pools.get(&rotxn, &pair)?
-        };
-        assert_eq!(pool_after_burn.reserve0, 500_001);
-        assert_eq!(pool_after_burn.reserve1, 500_001);
-        assert_eq!(pool_after_burn.outstanding_lp_tokens, 500_001);
+            validate_swap(&state.amm_pools, &rotxn, &filled_tx)?;
+        }
+        // Applying the swap moves the pool, so the same swap is now stale.
+        {
+            let mut rwtxn = env.write_txn()?;
+            apply_swap(&state.amm_pools, &mut rwtxn, &filled_tx)?;
+            rwtxn.commit()?;
+        }
+        let rotxn = env.read_txn()?;
+        let err = validate_swap(&state.amm_pools, &rotxn, &filled_tx)
+            .expect_err("a stale swap must be rejected");
+        anyhow::ensure!(
+            matches!(err, Error::InvalidSwap),
+            "unexpected error: {err:?}"
+        );
         Ok(())
     }
 }

@@ -302,7 +302,13 @@ impl MemPool {
                     },
                 )
             })
-            .collect();
+            .try_fold(HashMap::new(), |mut utxos, (outpoint, output)| {
+                // An output spent by another mempool tx is no longer a UTXO
+                if self.spent_utxos.try_get(rotxn, &outpoint)?.is_none() {
+                    utxos.insert(outpoint, output);
+                }
+                Result::<_, Error>::Ok(utxos)
+            })?;
         Ok(res)
     }
 }
