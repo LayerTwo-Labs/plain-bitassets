@@ -404,6 +404,10 @@ impl State {
      *        of BitAsset control coin inputs
      *      * The number of BitAsset outputs is at least
      *        the number of unique BitAssets in the inputs.
+     *      * If there are no unique BitAssets in the inputs, then there must
+     *        be no BitAsset outputs, unless the tx is an AMM burn or a Dutch
+     *        auction collect, which pay out BitAssets held by the AMM pool or
+     *        Dutch auction.
      *  * If the tx is a BitAsset update, then there must be at least one
      *    BitAsset control coin input and output.
      *  * If the tx is an AMM Burn, then
@@ -453,8 +457,15 @@ impl State {
         let n_bitasset_control_inputs: usize =
             tx.spent_bitasset_controls().count();
         let n_bitasset_outputs: usize = tx.bitasset_outputs().count();
-        let n_unique_bitasset_outputs: usize =
-            tx.unique_spent_bitassets().len();
+        /* Only the AMM and Dutch auction checks below use the number of
+         * unique BitAsset outputs, so it is not computed for regular txs.
+         * If the outputs cannot be filled then the tx is invalid,
+         * so those checks must reject it. */
+        let n_unique_bitasset_outputs: usize = if tx.is_regular() {
+            0
+        } else {
+            tx.n_unique_bitasset_outputs().unwrap_or_default()
+        };
         let n_bitasset_control_outputs: usize =
             tx.bitasset_control_outputs().count();
         if tx.is_update()
@@ -593,7 +604,16 @@ impl State {
                     n_bitasset_outputs,
                 });
             }
-            if n_unique_bitasset_inputs == 0 && n_bitasset_outputs != 0 {
+            /* AMM burns and Dutch auction collects pay out BitAssets that are
+             * held by the AMM pool/Dutch auction, rather than by the inputs,
+             * so they may have BitAsset outputs without any BitAsset inputs.
+             * The BitAsset outputs of such txs are constrained by the checks
+             * above, and their values are checked against the pool/auction
+             * state when the tx is applied. */
+            if n_unique_bitasset_inputs == 0
+                && n_bitasset_outputs != 0
+                && !(tx.is_amm_burn() || tx.is_dutch_auction_collect())
+            {
                 return Err(Error::UnbalancedBitAssets {
                     n_unique_bitasset_inputs,
                     n_bitasset_outputs,
@@ -804,10 +824,11 @@ mod test {
         authorization,
         state::{Error, State, error},
         types::{
-            Address, AuthorizedTransaction, BitAssetData, BitAssetId,
-            FilledOutput, FilledOutputContent, FilledTransaction, Hash,
-            InPoint, OutPoint, OutPointKey, Output, OutputContent, SpentOutput,
-            Transaction, TxData, Txid, VerifyingKey, WithdrawalOutputContent,
+            Address, AssetId, AuthorizedTransaction, BitAssetData, BitAssetId,
+            DutchAuctionId, FilledOutput, FilledOutputContent,
+            FilledTransaction, Hash, InPoint, OutPoint, OutPointKey, Output,
+            OutputContent, SpentOutput, Transaction, TxData, Txid,
+            VerifyingKey,
         },
     };
 
@@ -1007,6 +1028,147 @@ mod test {
         );
         state.validate_bitassets(&rotxn, &tx).expect(
             "registration burning the matching reservation should validate",
+        );
+        Ok(())
+    }
+
+    /// An AMM burn spends LP tokens and pays out the underlying BitAssets, so
+    /// it has no BitAsset inputs. Counting the spent BitAssets as the unique
+    /// BitAsset outputs would reject every such burn.
+    #[test]
+    fn validate_bitassets_accepts_amm_burn() -> anyhow::Result<()> {
+        let (env, state) = fresh_state("amm-burn")?;
+        let rotxn = env.read_txn()?;
+        let address = Address([0; 20]);
+        let asset0 = AssetId::BitAsset(BitAssetId([1; 32]));
+        let asset1 = AssetId::BitAsset(BitAssetId([2; 32]));
+        let (amount0, amount1, lp_token_burn) = (10, 20, 5);
+        let mut transaction = Transaction::new(
+            vec![OutPoint::Regular {
+                txid: Txid([0; 32]),
+                vout: 0,
+            }],
+            vec![
+                Output::new(address, OutputContent::BitAsset(amount0)),
+                Output::new(address, OutputContent::BitAsset(amount1)),
+            ],
+        );
+        transaction.data = Some(TxData::AmmBurn {
+            amount0,
+            amount1,
+            lp_token_burn,
+        });
+        let lp_token = FilledOutput::new(
+            address,
+            FilledOutputContent::AmmLpToken {
+                asset0,
+                asset1,
+                amount: lp_token_burn,
+            },
+        );
+        let tx = FilledTransaction {
+            transaction,
+            spent_utxos: vec![lp_token],
+        };
+        state
+            .validate_bitassets(&rotxn, &tx)
+            .expect("an AMM burn paying out both BitAssets should validate");
+        Ok(())
+    }
+
+    /// An AMM mint spends both BitAssets of the pair, and returns the
+    /// remainder as change, so the number of unique BitAsset outputs must
+    /// match the number of unique BitAsset inputs.
+    #[test]
+    fn validate_bitassets_accepts_amm_mint() -> anyhow::Result<()> {
+        let (env, state) = fresh_state("amm-mint")?;
+        let rotxn = env.read_txn()?;
+        let address = Address([0; 20]);
+        let bitasset0 = BitAssetId([1; 32]);
+        let bitasset1 = BitAssetId([2; 32]);
+        let (amount0, amount1, lp_token_mint) = (50, 50, 10);
+        let mut transaction = Transaction::new(
+            vec![
+                OutPoint::Regular {
+                    txid: Txid([0; 32]),
+                    vout: 0,
+                },
+                OutPoint::Regular {
+                    txid: Txid([0; 32]),
+                    vout: 1,
+                },
+            ],
+            vec![
+                Output::new(address, OutputContent::BitAsset(amount0)),
+                Output::new(address, OutputContent::BitAsset(amount1)),
+                Output::new(address, OutputContent::AmmLpToken(lp_token_mint)),
+            ],
+        );
+        transaction.data = Some(TxData::AmmMint {
+            amount0,
+            amount1,
+            lp_token_mint,
+        });
+        let tx = FilledTransaction {
+            transaction,
+            spent_utxos: vec![
+                FilledOutput::new(
+                    address,
+                    FilledOutputContent::BitAsset(bitasset0, 2 * amount0),
+                ),
+                FilledOutput::new(
+                    address,
+                    FilledOutputContent::BitAsset(bitasset1, 2 * amount1),
+                ),
+            ],
+        };
+        state.validate_bitassets(&rotxn, &tx).expect(
+            "an AMM mint returning both BitAssets as change should validate",
+        );
+        Ok(())
+    }
+
+    /// A Dutch auction collect spends an auction receipt and pays out the
+    /// offered and received assets, so it has no BitAsset inputs.
+    #[test]
+    fn validate_bitassets_accepts_dutch_auction_collect() -> anyhow::Result<()>
+    {
+        let (env, state) = fresh_state("dutch-auction-collect")?;
+        let rotxn = env.read_txn()?;
+        let address = Address([0; 20]);
+        let asset_offered = AssetId::BitAsset(BitAssetId([1; 32]));
+        let asset_receive = AssetId::BitAsset(BitAssetId([2; 32]));
+        let (amount_offered_remaining, amount_received) = (10, 20);
+        let mut transaction = Transaction::new(
+            vec![OutPoint::Regular {
+                txid: Txid([0; 32]),
+                vout: 0,
+            }],
+            vec![
+                Output::new(
+                    address,
+                    OutputContent::BitAsset(amount_offered_remaining),
+                ),
+                Output::new(address, OutputContent::BitAsset(amount_received)),
+            ],
+        );
+        transaction.data = Some(TxData::DutchAuctionCollect {
+            asset_offered,
+            asset_receive,
+            amount_offered_remaining,
+            amount_received,
+        });
+        let auction_id = DutchAuctionId(Txid([0; 32]));
+        let auction_receipt = FilledOutput::new(
+            address,
+            FilledOutputContent::DutchAuctionReceipt(auction_id),
+        );
+        let tx = FilledTransaction {
+            transaction,
+            spent_utxos: vec![auction_receipt],
+        };
+        state.validate_bitassets(&rotxn, &tx).expect(
+            "a Dutch auction collect paying out both assets should validate",
         );
         Ok(())
     }

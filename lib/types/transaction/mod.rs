@@ -1076,6 +1076,19 @@ impl FilledTransaction {
             .collect()
     }
 
+    /** Return the number of unique BitAssets occurring in the outputs.
+     *  Returns `None` if the outputs cannot be filled because the tx is
+     *  invalid. */
+    pub fn n_unique_bitasset_outputs(&self) -> Option<usize> {
+        let res = self
+            .filled_outputs()?
+            .iter()
+            .filter_map(FilledOutput::bitasset)
+            .unique()
+            .count();
+        Some(res)
+    }
+
     /** Return a vector of pairs consisting of an [`AssetId`] and the combined
      *  input value for that asset.
      *  The vector is ordered such that assets occur in the same order
