@@ -108,12 +108,21 @@ impl DutchAuctionState {
         if price == 0 {
             do yeet error::Bid::InvalidPrice
         };
-        // Calculate order quantity for this bid, in terms of the base
+        // `price` is the quote amount for the whole remaining base amount, so
+        // a larger bid asks for more base than the auction still offers.
+        // This also keeps `price - bid_amount` below from underflowing.
+        if bid_amount > price {
+            do yeet error::Bid::QuantityTooLarge
+        };
+        // Calculate order quantity for this bid, in terms of the base.
+        // Rounding must be down: rounding up would hand a bid too small to
+        // buy a whole base unit at the current price a full unit anyway,
+        // draining the auction's inventory for less than it is priced at.
         let order_quantity: u128 = {
             /* bid_amount / (price / base_amount_remaining)
              * == (bid_amount * base_amount_remaining) / price */
             (bid_amount as u128 * base_amount_remaining.latest().data as u128)
-                .div_ceil(price as u128)
+                / (price as u128)
         };
         let order_quantity: u64 =
             if order_quantity <= base_amount_remaining.latest().data as u128 {
@@ -483,11 +492,59 @@ mod test {
     }
 
     #[test]
-    fn bid_on_sold_out_auction_fails() -> anyhow::Result<()> {
-        let sold_out = test_auction().bid(Txid::default(), 501, 1)?;
-        anyhow::ensure!(sold_out.base_amount_remaining.latest().data == 0);
-        anyhow::ensure!(sold_out.price_after_most_recent_bid.latest().data > 0);
-        anyhow::ensure!(sold_out.bid(Txid::default(), 1, 2).is_err());
-        Ok(())
+    fn sold_out_auction_rejects_further_bids() {
+        let txid = Txid([0; 32]);
+        let auction = make_auction(2);
+        // First bid legitimately sells the auction out. At height 1 the price
+        // for the remaining 2 base is 900, and selling out requires paying it
+        // in full, which leaves no price remaining.
+        let sold_out =
+            auction.bid(txid, 900, 1).expect("first bid should succeed");
+        assert_eq!(sold_out.base_amount_remaining.latest().data, 0);
+        assert_eq!(sold_out.price_after_most_recent_bid.latest().data, 0);
+        // A further bid on the sold-out auction must be rejected cleanly,
+        // rather than panicking on the next-end-price division.
+        assert!(matches!(
+            sold_out.bid(txid, 1, 2),
+            Err(error::Bid::AuctionExhausted)
+        ));
+    }
+
+    /// A bid too small to buy a whole base unit at the current price must
+    /// receive nothing, rather than being rounded up to a full unit.
+    #[test]
+    fn dust_bid_receives_no_base() {
+        let txid = Txid([0; 32]);
+        let auction = make_auction(2);
+        // The remaining 2 base are priced at 1000, so 1 quote unit buys
+        // `2/1000` of a base unit, i.e. nothing.
+        let after_bid = auction.bid(txid, 1, 0).expect("bid should succeed");
+        assert_eq!(after_bid.base_amount_remaining.latest().data, 2);
+        assert_eq!(after_bid.quote_amount.latest().data, 1);
+    }
+
+    /// Repeated dust bids must not drain the auction's inventory for less
+    /// quote than the inventory is priced at.
+    #[test]
+    fn dust_bids_cannot_drain_inventory() {
+        let txid = Txid([0; 32]);
+        let base_amount = 2;
+        let mut auction = make_auction(base_amount);
+        for _ in 0..100 {
+            auction = auction.bid(txid, 1, 0).expect("bid should succeed");
+        }
+        // 100 quote units is far below the 1000 that the 2 base are priced
+        // at, so none of them may have been sold.
+        assert_eq!(auction.base_amount_remaining.latest().data, base_amount);
+        assert_eq!(auction.quote_amount.latest().data, 100);
+        // Selling out at all requires paying the full remaining price.
+        let price = auction.price_after_most_recent_bid.latest().data;
+        assert!(matches!(
+            auction.bid(txid, price + 1, 0),
+            Err(error::Bid::QuantityTooLarge)
+        ));
+        let sold_out = auction.bid(txid, price, 0).expect("bid should succeed");
+        assert_eq!(sold_out.base_amount_remaining.latest().data, 0);
+        assert_eq!(sold_out.quote_amount.latest().data, 100 + price);
     }
 }

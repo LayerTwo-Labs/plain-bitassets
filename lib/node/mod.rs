@@ -674,6 +674,7 @@ where
         let mut fee = bitcoin::Amount::ZERO;
         let mut returned_transactions = vec![];
         let mut spent_utxos = HashSet::new();
+        let mut swapped_amm_pairs = HashSet::new();
         for transaction in transactions {
             let inputs: HashSet<_> =
                 transaction.transaction.inputs.iter().copied().collect();
@@ -695,6 +696,17 @@ where
             let filled_transaction = self
                 .state
                 .fill_authorized_transaction(&rwtxn, transaction)?;
+            /* Each swap is validated against the pool state as it was before
+             * this block, so at most one swap per pool can be included.
+             * Later swaps on the same pool are left in the mempool, since they
+             * are still valid on their own. */
+            if let Some(amm_swap) = filled_transaction.transaction.amm_swap() {
+                let amm_pair =
+                    AmmPair::new(amm_swap.asset_spend, amm_swap.asset_receive);
+                if !swapped_amm_pairs.insert(amm_pair) {
+                    continue;
+                }
+            }
             let value_in: bitcoin::Amount = filled_transaction
                 .transaction
                 .spent_utxos
