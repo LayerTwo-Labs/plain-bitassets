@@ -7,11 +7,13 @@ use utoipa::ToSchema;
 
 use crate::types::THIS_SIDECHAIN;
 
+pub const ADDRESS_SIZE: usize = 20;
+
 #[derive(Debug, Error)]
 pub enum AddressParseError {
     #[error("bs58 error")]
     Bs58(#[from] bitcoin::base58::InvalidCharacterError),
-    #[error("wrong address length {0} != 20")]
+    #[error("wrong address length {0} != {ADDRESS_SIZE}")]
     WrongLength(usize),
 }
 
@@ -20,10 +22,10 @@ pub enum AddressParseError {
 )]
 #[repr(transparent)]
 #[schema(value_type = String)]
-pub struct Address(pub [u8; 20]);
+pub struct Address(pub [u8; ADDRESS_SIZE]);
 
 impl Address {
-    pub const ALL_ZEROS: Self = Self([0; 20]);
+    pub const ALL_ZEROS: Self = Self([0; ADDRESS_SIZE]);
 
     pub fn as_base58(&self) -> String {
         bitcoin::base58::encode(&self.0)
@@ -50,8 +52,8 @@ impl std::fmt::Debug for Address {
     }
 }
 
-impl From<[u8; 20]> for Address {
-    fn from(other: [u8; 20]) -> Self {
+impl From<[u8; ADDRESS_SIZE]> for Address {
+    fn from(other: [u8; ADDRESS_SIZE]) -> Self {
         Self(other)
     }
 }
@@ -74,7 +76,8 @@ impl<'de> Deserialize<'de> for Address {
         if deserializer.is_human_readable() {
             DisplayFromStr::deserialize_as(deserializer)
         } else {
-            <[u8; 20] as Deserialize>::deserialize(deserializer).map(Self)
+            <[u8; ADDRESS_SIZE] as Deserialize>::deserialize(deserializer)
+                .map(Self)
         }
     }
 }

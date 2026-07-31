@@ -5490,6 +5490,7 @@ dependencies = [
  "rayon",
  "rcgen",
  "rustls",
+ "rustreexo",
  "semver",
  "serde",
  "serde_json",
@@ -6560,6 +6561,14 @@ dependencies = [
  "ring",
  "rustls-pki-types",
  "untrusted",
+]
+
+[[package]]
+name = "rustreexo"
+version = "0.3.0"
+source = "git+https://github.com/mit-dci/rustreexo?rev=6da503b598470f6e87aa9d769b94df64df7ff3ae#6da503b598470f6e87aa9d769b94df64df7ff3ae"
+dependencies = [
+ "bitcoin_hashes",
 ]
 
 [[package]]

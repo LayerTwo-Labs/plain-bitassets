@@ -511,17 +511,19 @@ where
     ) -> Result<Vec<(OutPoint, SpentOutput)>, Error> {
         let rotxn = self.env.read_txn()?;
         let mut spent = vec![];
+
         for outpoint in outpoints {
             let outpoint_key = OutPointKey::from_outpoint(outpoint);
-            if let Some(output) = self
+            if let Some(entry) = self
                 .state
                 .stxos()
                 .try_get(&rotxn, &outpoint_key)
                 .map_err(state::Error::from)?
             {
-                spent.push((*outpoint, output));
+                spent.push((*outpoint, entry.output));
             }
         }
+
         Ok(spent)
     }
 
@@ -564,9 +566,14 @@ where
     pub fn get_utxos_by_addresses(
         &self,
         addresses: &HashSet<Address>,
+        height_threshold: u32,
     ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
         let rotxn = self.env.read_txn()?;
-        let utxos = self.state.get_utxos_by_addresses(&rotxn, addresses)?;
+        let utxos = self.state.get_utxos_by_addresses(
+            &rotxn,
+            addresses,
+            height_threshold,
+        )?;
         Ok(utxos)
     }
 

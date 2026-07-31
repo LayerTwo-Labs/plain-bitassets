@@ -61,7 +61,7 @@ fn update_wallet(node: &Node, wallet: &Wallet) -> Result<(), Error> {
     let addresses = wallet.get_addresses()?;
     let unconfirmed_utxos =
         node.get_unconfirmed_utxos_by_addresses(&addresses)?;
-    let utxos = node.get_utxos_by_addresses(&addresses)?;
+    let utxos = node.get_utxos_by_addresses(&addresses, 0)?;
     let confirmed_outpoints: Vec<_> = wallet.get_utxos()?.into_keys().collect();
     let confirmed_spent = node
         .get_spent_utxos(&confirmed_outpoints)?

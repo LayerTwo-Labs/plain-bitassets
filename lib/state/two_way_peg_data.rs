@@ -12,10 +12,11 @@ use crate::{
         rollback::{HeightStamped, RollBack},
     },
     types::{
-        AggregatedWithdrawal, AmountOverflowError, FilledOutput,
-        FilledOutputContent, InPoint, M6id, OutPoint, OutPointKey, SpentOutput,
-        WithdrawalBundle, WithdrawalBundleEvent, WithdrawalBundleEventStatus,
-        WithdrawalBundleStatus, WithdrawalOutputContent,
+        AddressOutPointKey, AggregatedWithdrawal, AmountOverflowError,
+        FilledOutput, FilledOutputContent, InPoint, M6id, OutPoint,
+        OutPointKey, SpentOutput, WithdrawalBundle, WithdrawalBundleEvent,
+        WithdrawalBundleEventStatus, WithdrawalBundleStatus,
+        WithdrawalOutputContent,
         proto::mainchain::{BlockEvent, TwoWayPegData},
     },
 };
@@ -138,10 +139,12 @@ fn connect_withdrawal_bundle_submitted(
             %m6id,
             "Pending withdrawal bundle submission confirmed"
         );
+
         let (bundle, mut bundle_status) = state
             .withdrawal_bundles
             .try_get(rwtxn, &m6id)?
             .ok_or(error::PendingWithdrawalBundleUnknown(m6id))?;
+
         let bundle = match bundle {
             WithdrawalBundleInfo::Known(bundle) => bundle,
             WithdrawalBundleInfo::Unknown
@@ -150,20 +153,16 @@ fn connect_withdrawal_bundle_submitted(
                 return Err(err.into());
             }
         };
-        for (outpoint, spend_output) in bundle.spend_utxos() {
-            let outpoint_key = OutPointKey::from_outpoint(outpoint);
-            if !state.utxos.delete(rwtxn, &outpoint_key)? {
+
+        for (outpoint, output) in bundle.spend_utxos() {
+            if !spend_withdrawal_utxo(state, rwtxn, m6id, outpoint, output)? {
                 return Err(error::NoUtxo {
                     outpoint: *outpoint,
                 }
                 .into());
-            };
-            let spent_output = SpentOutput {
-                output: spend_output.clone(),
-                inpoint: InPoint::Withdrawal { m6id },
-            };
-            state.stxos.put(rwtxn, &outpoint_key, &spent_output)?;
+            }
         }
+
         assert_eq!(
             bundle_status.latest().value,
             WithdrawalBundleStatus::Pending
@@ -171,6 +170,7 @@ fn connect_withdrawal_bundle_submitted(
         bundle_status
             .push(WithdrawalBundleStatus::Submitted, block_height)
             .expect("push submitted status should be valid");
+
         state.withdrawal_bundles.put(
             rwtxn,
             &m6id,
@@ -182,10 +182,11 @@ fn connect_withdrawal_bundle_submitted(
     {
         match (&bundle, bundle_status.latest().value) {
             (_, WithdrawalBundleStatus::Confirmed) => {
-                let err = error::ConnectWithdrawalBundleSubmitted::ConfirmedResubmitted {
-                    event_block_hash: *event_block_hash,
-                    m6id
-                };
+                let err = error::ConnectWithdrawalBundleSubmitted::
+                    ConfirmedResubmitted {
+                        event_block_hash: *event_block_hash,
+                        m6id,
+                    };
                 return Err(err);
             }
             (
@@ -205,7 +206,11 @@ fn connect_withdrawal_bundle_submitted(
                 WithdrawalBundleInfo::Known(_),
                 WithdrawalBundleStatus::Dropped,
             ) => {
-                tracing::warn!(%event_block_hash, %m6id, "dropped bundle submitted");
+                tracing::warn!(
+                    %event_block_hash,
+                    %m6id,
+                    "dropped bundle submitted"
+                );
             }
             (
                 WithdrawalBundleInfo::Unknown
@@ -245,31 +250,39 @@ fn connect_withdrawal_bundle_submitted(
                 WithdrawalBundleInfo::Known(_) | WithdrawalBundleInfo::Unknown,
                 WithdrawalBundleStatus::Failed,
             ) => {
-                tracing::warn!(%event_block_hash, %m6id, "failed bundle resubmitted");
+                tracing::warn!(
+                    %event_block_hash,
+                    %m6id,
+                    "failed bundle resubmitted"
+                );
             }
             (
                 WithdrawalBundleInfo::UnknownConfirmed { spend_utxos: _ },
                 WithdrawalBundleStatus::Failed,
             ) => {
-                let err = error::ConnectWithdrawalBundleSubmitted::UnknownConfirmedFailed {
-                    m6id,
-                    failed_block_height: bundle_status.latest().height,
-                };
+                let err = error::ConnectWithdrawalBundleSubmitted::
+                    UnknownConfirmedFailed {
+                        m6id,
+                        failed_block_height: bundle_status.latest().height,
+                    };
                 return Err(err);
             }
         }
+
         bundle_status
             .push(WithdrawalBundleStatus::SubmittedUnexpected, block_height)
             .expect("push submitted unexpected status should be valid");
+
         state
             .withdrawal_bundles
-            .put(rwtxn, &m6id, &(bundle, bundle_status))?
+            .put(rwtxn, &m6id, &(bundle, bundle_status))?;
     } else {
         tracing::warn!(
             %event_block_hash,
             %m6id,
             "Unknown withdrawal bundle submitted"
         );
+
         state.withdrawal_bundles.put(
             rwtxn,
             &m6id,
@@ -281,7 +294,8 @@ fn connect_withdrawal_bundle_submitted(
                 ),
             ),
         )?;
-    };
+    }
+
     Ok(())
 }
 
@@ -296,15 +310,18 @@ fn connect_withdrawal_bundle_confirmed(
         .withdrawal_bundles
         .try_get(rwtxn, &m6id)?
         .ok_or(Error::UnknownWithdrawalBundle { m6id })?;
+
     if bundle_status.latest().value == WithdrawalBundleStatus::Confirmed {
         // Already applied
         return Ok(());
     }
+
     assert!(matches!(
         bundle_status.latest().value,
         WithdrawalBundleStatus::Submitted
             | WithdrawalBundleStatus::SubmittedUnexpected
     ));
+
     match &bundle {
         WithdrawalBundleInfo::UnknownConfirmed { spend_utxos: _ } => {
             return Err(Error::UnknownWithdrawalBundleReconfirmed {
@@ -324,24 +341,25 @@ fn connect_withdrawal_bundle_confirmed(
                     %m6id,
                     "Unknown withdrawal bundle confirmed, marking all UTXOs as spent"
                 );
+
                 let utxos: BTreeMap<OutPoint, _> = state
                     .utxos
                     .iter(rwtxn)
                     .map_err(Error::from)?
                     .map(|(key, output)| Ok((key.into(), output)))
                     .collect()?;
+
                 for (outpoint, output) in &utxos {
-                    let spent_output = SpentOutput {
-                        output: output.clone(),
-                        inpoint: InPoint::Withdrawal { m6id },
-                    };
-                    state.stxos.put(
-                        rwtxn,
-                        &OutPointKey::from(outpoint),
-                        &spent_output,
-                    )?;
+                    if !spend_withdrawal_utxo(
+                        state, rwtxn, m6id, outpoint, output,
+                    )? {
+                        return Err(error::NoUtxo {
+                            outpoint: *outpoint,
+                        }
+                        .into());
+                    }
                 }
-                state.utxos.clear(rwtxn)?;
+
                 bundle = WithdrawalBundleInfo::UnknownConfirmed {
                     spend_utxos: utxos,
                 };
@@ -365,9 +383,11 @@ fn connect_withdrawal_bundle_confirmed(
                     %m6id,
                     "Unexpected withdrawal bundle confirmed, marking bundle UTXOs as spent"
                 );
+
                 for (outpoint, output) in bundle.spend_utxos() {
-                    let outpoint_key = OutPointKey::from(outpoint);
-                    if !state.utxos.delete(rwtxn, &outpoint_key)? {
+                    if !spend_withdrawal_utxo(
+                        state, rwtxn, m6id, outpoint, output,
+                    )? {
                         return Err(
                             Error::UnexpectedWithdrawalBundleInsolvency {
                                 event_block_hash: *event_block_hash,
@@ -376,21 +396,19 @@ fn connect_withdrawal_bundle_confirmed(
                             },
                         );
                     }
-                    let spent_output = SpentOutput {
-                        output: output.clone(),
-                        inpoint: InPoint::Withdrawal { m6id },
-                    };
-                    state.stxos.put(rwtxn, &outpoint_key, &spent_output)?;
                 }
             }
         }
     }
+
     bundle_status
         .push(WithdrawalBundleStatus::Confirmed, block_height)
         .expect("Push confirmed status should be valid");
+
     state
         .withdrawal_bundles
         .put(rwtxn, &m6id, &(bundle, bundle_status))?;
+
     Ok(())
 }
 
@@ -403,20 +421,25 @@ fn connect_withdrawal_bundle_failed(
     tracing::debug!(
         %block_height,
         %m6id,
-        "Handling failed withdrawal bundle");
+        "Handling failed withdrawal bundle"
+    );
+
     let (bundle, mut bundle_status) = state
         .withdrawal_bundles
         .try_get(rwtxn, &m6id)?
         .ok_or_else(|| Error::UnknownWithdrawalBundle { m6id })?;
+
     if bundle_status.latest().value == WithdrawalBundleStatus::Failed {
         // Already applied
         return Ok(());
     }
+
     assert!(matches!(
         bundle_status.latest().value,
         WithdrawalBundleStatus::Submitted
             | WithdrawalBundleStatus::SubmittedUnexpected
     ));
+
     match &bundle {
         WithdrawalBundleInfo::Unknown
         | WithdrawalBundleInfo::UnknownConfirmed { .. } => (),
@@ -427,11 +450,16 @@ fn connect_withdrawal_bundle_failed(
             ) {
                 break 'known;
             }
-            for (outpoint, output) in bundle.spend_utxos() {
+
+            for outpoint in bundle.spend_utxos().keys() {
                 let outpoint_key = OutPointKey::from_outpoint(outpoint);
-                state.stxos.delete(rwtxn, &outpoint_key)?;
-                state.utxos.put(rwtxn, &outpoint_key, output)?;
+                if !state.unspend_utxo(rwtxn, &outpoint_key)? {
+                    return Err(Error::NoStxo {
+                        outpoint: *outpoint,
+                    });
+                }
             }
+
             let latest_failed_m6id = if let Some(mut latest_failed_m6id) =
                 state.latest_failed_withdrawal_bundle.try_get(rwtxn, &())?
             {
@@ -442,6 +470,7 @@ fn connect_withdrawal_bundle_failed(
             } else {
                 RollBack::<HeightStamped<_>>::new(m6id, block_height)
             };
+
             state.latest_failed_withdrawal_bundle.put(
                 rwtxn,
                 &(),
@@ -449,12 +478,15 @@ fn connect_withdrawal_bundle_failed(
             )?;
         }
     }
+
     bundle_status
         .push(WithdrawalBundleStatus::Failed, block_height)
         .expect("Push failed status should be valid");
+
     state
         .withdrawal_bundles
         .put(rwtxn, &m6id, &(bundle, bundle_status))?;
+
     Ok(())
 }
 
@@ -510,7 +542,8 @@ fn connect_2wpd_event(
             let outpoint = OutPoint::Deposit(deposit.outpoint);
             let output = deposit.output.clone();
             let outpoint_key = OutPointKey::from_outpoint(&outpoint);
-            state.utxos.put(rwtxn, &outpoint_key, &output)?;
+
+            state.put_utxo(rwtxn, outpoint_key, output, block_height)?;
             *latest_deposit_block_hash = Some(event_block_hash);
         }
         BlockEvent::WithdrawalBundle(withdrawal_bundle_event) => {
@@ -524,6 +557,7 @@ fn connect_2wpd_event(
             *latest_withdrawal_bundle_event_block_hash = Some(event_block_hash);
         }
     }
+
     Ok(())
 }
 
@@ -637,13 +671,16 @@ fn disconnect_withdrawal_bundle_submitted(
             return Err(Error::UnknownWithdrawalBundle { m6id });
         }
     };
+
     let (bundle_status, latest_bundle_status) = bundle_status.pop();
+
     assert!(matches!(
         latest_bundle_status.value,
         WithdrawalBundleStatus::Submitted
             | WithdrawalBundleStatus::SubmittedUnexpected
     ));
     assert_eq!(latest_bundle_status.height, block_height);
+
     match &bundle {
         WithdrawalBundleInfo::Unknown
         | WithdrawalBundleInfo::UnknownConfirmed { .. } => (),
@@ -652,19 +689,20 @@ fn disconnect_withdrawal_bundle_submitted(
                 && bundle_status.latest().value
                     == WithdrawalBundleStatus::Pending
             {
-                for (outpoint, output) in bundle.spend_utxos().iter().rev() {
+                for outpoint in bundle.spend_utxos().keys().rev() {
                     let outpoint_key = OutPointKey::from_outpoint(outpoint);
-                    if !state.stxos.delete(rwtxn, &outpoint_key)? {
+                    if !state.unspend_utxo(rwtxn, &outpoint_key)? {
                         return Err(Error::NoStxo {
                             outpoint: *outpoint,
                         });
-                    };
-                    state.utxos.put(rwtxn, &outpoint_key, output)?;
+                    }
                 }
+
                 state.pending_withdrawal_bundle.put(rwtxn, &(), &m6id)?;
             }
         }
     }
+
     if let Some(bundle_status) = bundle_status {
         state
             .withdrawal_bundles
@@ -672,6 +710,7 @@ fn disconnect_withdrawal_bundle_submitted(
     } else {
         state.withdrawal_bundles.delete(rwtxn, &m6id)?;
     }
+
     Ok(())
 }
 
@@ -685,7 +724,9 @@ fn disconnect_withdrawal_bundle_confirmed(
         .withdrawal_bundles
         .try_get(rwtxn, &m6id)?
         .ok_or_else(|| Error::UnknownWithdrawalBundle { m6id })?;
+
     let (prev_bundle_status, latest_bundle_status) = bundle_status.pop();
+
     if matches!(
         latest_bundle_status.value,
         WithdrawalBundleStatus::Submitted
@@ -694,54 +735,59 @@ fn disconnect_withdrawal_bundle_confirmed(
         // Already applied
         return Ok(());
     }
+
     assert_eq!(
         latest_bundle_status.value,
         WithdrawalBundleStatus::Confirmed
     );
     assert_eq!(latest_bundle_status.height, block_height);
+
     let prev_bundle_status = prev_bundle_status
         .expect("Pop confirmed bundle status should be valid");
+
     assert!(matches!(
         prev_bundle_status.latest().value,
         WithdrawalBundleStatus::Submitted
             | WithdrawalBundleStatus::SubmittedUnexpected
     ));
+
     match &bundle {
         WithdrawalBundleInfo::Known(bundle) => {
             if matches!(
                 prev_bundle_status.latest().value,
                 WithdrawalBundleStatus::SubmittedUnexpected
             ) {
-                for (outpoint, output) in bundle.spend_utxos() {
-                    let outpoint_key = OutPointKey::from(outpoint);
-                    state.utxos.put(rwtxn, &outpoint_key, output)?;
-                    if !state.stxos.delete(rwtxn, &outpoint_key)? {
+                for outpoint in bundle.spend_utxos().keys() {
+                    let outpoint_key = OutPointKey::from_outpoint(outpoint);
+                    if !state.unspend_utxo(rwtxn, &outpoint_key)? {
                         return Err(Error::NoStxo {
                             outpoint: *outpoint,
                         });
-                    };
+                    }
                 }
             }
         }
         WithdrawalBundleInfo::UnknownConfirmed { spend_utxos } => {
-            for (outpoint, output) in spend_utxos {
+            for outpoint in spend_utxos.keys() {
                 let outpoint_key = OutPointKey::from_outpoint(outpoint);
-                state.utxos.put(rwtxn, &outpoint_key, output)?;
-                if !state.stxos.delete(rwtxn, &outpoint_key)? {
+                if !state.unspend_utxo(rwtxn, &outpoint_key)? {
                     return Err(Error::NoStxo {
                         outpoint: *outpoint,
                     });
-                };
+                }
             }
+
             bundle = WithdrawalBundleInfo::Unknown;
         }
         WithdrawalBundleInfo::Unknown => (),
     }
+
     state.withdrawal_bundles.put(
         rwtxn,
         &m6id,
         &(bundle, prev_bundle_status),
     )?;
+
     Ok(())
 }
 
@@ -755,21 +801,27 @@ fn disconnect_withdrawal_bundle_failed(
         .withdrawal_bundles
         .try_get(rwtxn, &m6id)?
         .ok_or_else(|| Error::UnknownWithdrawalBundle { m6id })?;
+
     let (prev_bundle_status, latest_bundle_status) = bundle_status.pop();
+
     if latest_bundle_status.value == WithdrawalBundleStatus::Submitted {
         // Already applied
         return Ok(());
     } else {
         assert_eq!(latest_bundle_status.value, WithdrawalBundleStatus::Failed);
     }
+
     assert_eq!(latest_bundle_status.height, block_height);
+
     let prev_bundle_status =
         prev_bundle_status.expect("Pop failed bundle status should be valid");
+
     assert!(matches!(
         prev_bundle_status.latest().value,
         WithdrawalBundleStatus::Submitted
             | WithdrawalBundleStatus::SubmittedUnexpected
     ));
+
     match &bundle {
         WithdrawalBundleInfo::Unknown
         | WithdrawalBundleInfo::UnknownConfirmed { .. } => (),
@@ -780,27 +832,26 @@ fn disconnect_withdrawal_bundle_failed(
             ) {
                 break 'known;
             }
+
             for (outpoint, output) in bundle.spend_utxos().iter().rev() {
-                let outpoint_key = OutPointKey::from_outpoint(outpoint);
-                let spent_output = SpentOutput {
-                    output: output.clone(),
-                    inpoint: InPoint::Withdrawal { m6id },
-                };
-                state.stxos.put(rwtxn, &outpoint_key, &spent_output)?;
-                if !state.utxos.delete(rwtxn, &outpoint_key)? {
+                if !spend_withdrawal_utxo(state, rwtxn, m6id, outpoint, output)?
+                {
                     return Err(error::NoUtxo {
                         outpoint: *outpoint,
                     }
                     .into());
-                };
+                }
             }
+
             let (prev_latest_failed_m6id, latest_failed_m6id) = state
                 .latest_failed_withdrawal_bundle
                 .try_get(rwtxn, &())?
                 .expect("latest failed withdrawal bundle should exist")
                 .pop();
+
             assert_eq!(latest_failed_m6id.value, m6id);
             assert_eq!(latest_failed_m6id.height, block_height);
+
             if let Some(prev_latest_failed_m6id) = prev_latest_failed_m6id {
                 state.latest_failed_withdrawal_bundle.put(
                     rwtxn,
@@ -812,12 +863,29 @@ fn disconnect_withdrawal_bundle_failed(
             }
         }
     }
+
     state.withdrawal_bundles.put(
         rwtxn,
         &m6id,
         &(bundle, prev_bundle_status),
     )?;
+
     Ok(())
+}
+
+fn spend_withdrawal_utxo(
+    state: &State,
+    rwtxn: &mut RwTxn,
+    m6id: M6id,
+    outpoint: &OutPoint,
+    output: &FilledOutput,
+) -> Result<bool, sneed::db::Error> {
+    let outpoint_key = OutPointKey::from_outpoint(outpoint);
+    let spent_output = SpentOutput {
+        output: output.clone(),
+        inpoint: InPoint::Withdrawal { m6id },
+    };
+    state.spend_utxo(rwtxn, outpoint_key, spent_output)
 }
 
 fn disconnect_withdrawal_bundle_event(
@@ -867,9 +935,13 @@ fn disconnect_event(
         BlockEvent::Deposit(deposit) => {
             let outpoint = OutPoint::Deposit(deposit.outpoint);
             let outpoint_key = OutPointKey::from_outpoint(&outpoint);
-            if !state.utxos.delete(rwtxn, &outpoint_key)? {
+            let address_key =
+                AddressOutPointKey::new(deposit.output.address, outpoint_key);
+
+            if !state.delete_utxo(rwtxn, &address_key)? {
                 return Err(error::NoUtxo { outpoint }.into());
             }
+
             // Blocks are iterated in reverse here, so the first event block
             // hash seen is the latest. Keep it to match what `connect` stored.
             if latest_deposit_block_hash.is_none() {
@@ -883,6 +955,7 @@ fn disconnect_event(
                 block_height,
                 withdrawal_bundle_event,
             )?;
+
             // Blocks are iterated in reverse here, so the first event block
             // hash seen is the latest. Keep it to match what `connect` stored.
             if latest_withdrawal_bundle_event_block_hash.is_none() {
@@ -891,6 +964,7 @@ fn disconnect_event(
             }
         }
     }
+
     Ok(())
 }
 
@@ -1065,7 +1139,7 @@ mod test {
                 &RollBack::<HeightStamped<_>>::new(m6id, 1),
             )?;
             // the failure reinstated the utxo
-            state.utxos.put(&mut rwtxn, &key, &output)?;
+            state.put_utxo(&mut rwtxn, key, output, 0)?;
             rwtxn.commit()?;
             m6id
         };
@@ -1074,7 +1148,7 @@ mod test {
         disconnect_withdrawal_bundle_failed(&state, &mut rwtxn, 1, m6id)?;
         anyhow::ensure!(state.utxos.try_get(&rwtxn, &key)?.is_none());
         let stxo = state.stxos.get(&rwtxn, &key)?;
-        anyhow::ensure!(stxo.inpoint == InPoint::Withdrawal { m6id });
+        anyhow::ensure!(stxo.output.inpoint == InPoint::Withdrawal { m6id });
         Ok(())
     }
 
@@ -1208,10 +1282,11 @@ mod test {
                     ),
                     memo: Vec::new(),
                 };
-                state.utxos.put(
+                state.put_utxo(
                     &mut rwtxn,
-                    &OutPointKey::from(&outpoint),
-                    &output,
+                    OutPointKey::from(&outpoint),
+                    output,
+                    0,
                 )?;
             }
             f(&state, &mut rwtxn)
@@ -1275,7 +1350,14 @@ mod test {
         };
         {
             let mut rwtxn = env.write_txn()?;
-            state.apply_block(&mut rwtxn, &genesis, &empty_body)?;
+            let prevalidated =
+                state.prevalidate_block(&rwtxn, &genesis, &empty_body)?;
+            state.connect_prevalidated_block(
+                &mut rwtxn,
+                &genesis,
+                &empty_body,
+                prevalidated,
+            )?;
             state.connect_two_way_peg_data(
                 &mut rwtxn,
                 &TwoWayPegData::default(),
@@ -1311,7 +1393,14 @@ mod test {
         };
         {
             let mut rwtxn = env.write_txn()?;
-            state.apply_block(&mut rwtxn, &block1, &empty_body)?;
+            let prevalidated =
+                state.prevalidate_block(&rwtxn, &block1, &empty_body)?;
+            state.connect_prevalidated_block(
+                &mut rwtxn,
+                &block1,
+                &empty_body,
+                prevalidated,
+            )?;
             state.connect_two_way_peg_data(&mut rwtxn, &deposit_twpd)?;
             anyhow::ensure!(
                 state.utxos.try_get(&rwtxn, &deposit_key)?.is_some()
