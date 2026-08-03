@@ -6,10 +6,10 @@ use sneed::{RoTxn, RwTxn};
 use crate::{
     state::{Error, PrevalidatedBlock, State, amm, dutch_auction, error},
     types::{
-        AmountOverflowError, Authorization, BitAssetId, Body, FilledOutput,
-        FilledOutputContent, GetAddress as _, GetBitcoinValue as _, Header,
-        InPoint, OutPoint, OutPointKey, OutputContent, SpentOutput, TxData,
-        Verify as _,
+        AmountOverflowError, Authorization, BLOCK_HEADER_VERSION, BitAssetId,
+        Body, FilledOutput, FilledOutputContent, GetAddress as _,
+        GetBitcoinValue as _, Header, InPoint, OutPoint, OutPointKey,
+        OutputContent, SpentOutput, TxData, Verify as _,
     },
 };
 
@@ -45,6 +45,8 @@ pub fn validate(
         let err = Error::InvalidBody {
             expected: header.merkle_root,
             computed: merkle_root,
+            local_header_version: BLOCK_HEADER_VERSION,
+            block_header_version: header.version,
         };
         return Err(err);
     }
@@ -124,6 +126,8 @@ pub fn prevalidate(
         let err = Error::InvalidBody {
             expected: header.merkle_root,
             computed: computed_merkle_root,
+            local_header_version: BLOCK_HEADER_VERSION,
+            block_header_version: header.version,
         };
         return Err(err);
     }
@@ -412,6 +416,8 @@ pub fn connect(
         let err = Error::InvalidBody {
             expected: merkle_root,
             computed: header.merkle_root,
+            local_header_version: BLOCK_HEADER_VERSION,
+            block_header_version: header.version,
         };
         return Err(err);
     }
@@ -574,6 +580,8 @@ pub fn disconnect_tip(
         let err = Error::InvalidBody {
             expected: header.merkle_root,
             computed: merkle_root,
+            local_header_version: BLOCK_HEADER_VERSION,
+            block_header_version: header.version,
         };
         return Err(err);
     }
@@ -726,14 +734,16 @@ mod test {
             test::fresh_state,
         },
         types::{
-            BitAssetData, BitAssetDataUpdates, BitAssetId, BlockHash, Body,
-            FilledOutput, FilledOutputContent, Hash, Header, OutPoint,
-            OutPointKey, Output, OutputContent, Transaction, TxData, Update,
+            BLOCK_HEADER_VERSION, BitAssetData, BitAssetDataUpdates,
+            BitAssetId, BlockHash, Body, FilledOutput, FilledOutputContent,
+            Hash, Header, OutPoint, OutPointKey, Output, OutputContent,
+            Transaction, TxData, Update,
         },
     };
 
     fn header(prev_side_hash: Option<BlockHash>, body: &Body) -> Header {
         Header {
+            version: BLOCK_HEADER_VERSION,
             merkle_root: Body::compute_merkle_root(
                 &body.coinbase,
                 &body.transactions,

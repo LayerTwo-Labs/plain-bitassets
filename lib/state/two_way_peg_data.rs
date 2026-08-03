@@ -1015,8 +1015,8 @@ mod test {
             },
         },
         types::{
-            Address, FilledOutput, FilledOutputContent, InPoint, M6id,
-            OutPoint, OutPointKey, Txid, WithdrawalBundle,
+            Address, BLOCK_HEADER_VERSION, FilledOutput, FilledOutputContent,
+            InPoint, M6id, OutPoint, OutPointKey, Txid, WithdrawalBundle,
             WithdrawalBundleEvent, WithdrawalBundleEventStatus,
             WithdrawalBundleStatus, WithdrawalOutputContent,
             proto::mainchain::{BlockEvent, BlockInfo, Deposit, TwoWayPegData},
@@ -1269,6 +1269,7 @@ mod test {
         let main1 = bitcoin::BlockHash::from_byte_array([11; 32]);
 
         let genesis = Header {
+            version: BLOCK_HEADER_VERSION,
             merkle_root,
             prev_side_hash: None,
             prev_main_hash: main0,
@@ -1284,6 +1285,7 @@ mod test {
         }
 
         let block1 = Header {
+            version: BLOCK_HEADER_VERSION,
             merkle_root,
             prev_side_hash: Some(genesis.hash()),
             prev_main_hash: main1,

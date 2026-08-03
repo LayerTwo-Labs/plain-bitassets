@@ -38,6 +38,7 @@ pub use transaction::{
 };
 
 pub const THIS_SIDECHAIN: u8 = 4;
+pub const BLOCK_HEADER_VERSION: u8 = 0;
 
 #[derive(Debug, Error)]
 #[error("Bitcoin amount overflow")]
@@ -158,6 +159,7 @@ where
     ToSchema,
 )]
 pub struct Header {
+    pub version: u8,
     pub merkle_root: MerkleRoot,
     pub prev_side_hash: Option<BlockHash>,
     #[borsh(serialize_with = "borsh_serialize_bitcoin_block_hash")]

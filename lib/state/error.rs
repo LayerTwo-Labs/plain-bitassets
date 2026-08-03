@@ -136,7 +136,7 @@ pub mod dutch_auction {
         #[error("Invalid tx; Final price cannot be greater than initial price")]
         FinalPrice,
         #[error(
-            "Invalid tx; For a single-block auction, 
+            "Invalid tx; For a single-block auction,
                 final price must be exactly equal to initial price"
         )]
         PriceMismatch,
@@ -374,6 +374,8 @@ pub enum Error {
     InvalidBody {
         expected: MerkleRoot,
         computed: MerkleRoot,
+        local_header_version: u8,
+        block_header_version: u8,
     },
     #[error("invalid header: {0}")]
     InvalidHeader(InvalidHeader),

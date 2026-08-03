@@ -7,8 +7,9 @@ use plain_bitassets::{
     miner::{self, Miner},
     node::{self, Node},
     types::{
-        self, Address, AmountOverflowError, BitcoinOutputContent, Body,
-        FilledOutput, OutPoint, Output, Transaction,
+        self, Address, AmountOverflowError, BLOCK_HEADER_VERSION,
+        BitcoinOutputContent, Body, FilledOutput, OutPoint, Output,
+        Transaction,
         proto::mainchain::{
             self,
             generated::{validator_service_server, wallet_service_server},
@@ -439,6 +440,7 @@ impl App {
                 coinbase,
             );
             let header = types::Header {
+                version: BLOCK_HEADER_VERSION,
                 merkle_root,
                 prev_side_hash,
                 prev_main_hash,
@@ -456,6 +458,7 @@ impl App {
             let merkle_root = Body::compute_merkle_root(&coinbase, &[]);
             let body = Body::new(Vec::new(), coinbase);
             let header = types::Header {
+                version: BLOCK_HEADER_VERSION,
                 merkle_root,
                 prev_side_hash,
                 prev_main_hash,
