@@ -20,7 +20,9 @@ use plain_bitassets::{
     },
     wallet::Balance,
 };
-use plain_bitassets_app_rpc_api::{RpcServer, TxInfo};
+use plain_bitassets_app_rpc_api::{
+    GetBlockTemplateResponse, RpcServer, TxInfo,
+};
 use tower_http::{
     cors::CorsLayer,
     request_id::{
@@ -170,6 +172,25 @@ impl RpcServer for RpcServerImpl {
 
     async fn bitcoin_balance(&self) -> RpcResult<Balance> {
         self.app.wallet.get_bitcoin_balance().map_err(custom_err)
+    }
+
+    async fn connect_block(
+        &self,
+        block: Block,
+        main_block_hash: bitcoin::BlockHash,
+    ) -> RpcResult<bool> {
+        self.app
+            .local_pool
+            .spawn_pinned({
+                let app = self.app.clone();
+                move || async move {
+                    app.connect_block(block, main_block_hash)
+                        .await
+                        .map_err(custom_err)
+                }
+            })
+            .await
+            .unwrap()
     }
 
     async fn connect_peer(&self, addr: SocketAddr) -> RpcResult<()> {
@@ -371,6 +392,29 @@ impl RpcServer for RpcServerImpl {
             .get_block(block_hash)
             .expect("This error should have been handled properly.");
         Ok(block)
+    }
+
+    async fn get_block_template(&self) -> RpcResult<GetBlockTemplateResponse> {
+        let template = self
+            .app
+            .local_pool
+            .spawn_pinned({
+                let app = self.app.clone();
+                move || async move {
+                    app.get_block_template().await.map_err(custom_err)
+                }
+            })
+            .await
+            .unwrap()?;
+        Ok(GetBlockTemplateResponse {
+            critical_hash: template.header.hash(),
+            block: Block {
+                header: template.header,
+                body: template.body,
+                height: template.height,
+            },
+            fees_sats: template.fees.to_sat(),
+        })
     }
 
     async fn get_best_sidechain_block_hash(
