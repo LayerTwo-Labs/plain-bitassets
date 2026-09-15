@@ -387,6 +387,8 @@ pub enum Error {
     MissingBitAssetInput { name_hash: Hash },
     #[error("deposit block doesn't exist")]
     NoDepositBlock,
+    #[error("transaction {txid} has no inputs")]
+    NoInputs { txid: Txid },
     #[error("total fees less than coinbase value")]
     NotEnoughFees,
     #[error("no tip")]

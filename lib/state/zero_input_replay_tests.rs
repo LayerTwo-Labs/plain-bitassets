@@ -25,6 +25,8 @@
 //!
 //! ## The fix (consensus change)
 //!
+//! - `State::validate_filled_transaction`: a transaction must have >= 1 input
+//!   -> `Error::NoInputs` (T1, T2, T8).
 //! - `State::validate_filled_transaction`: a tx output key may not already
 //!   exist in `utxos` or `stxos` -> `Error::OutPointAlreadyExists`. This is
 //!   independent of output content and tx data, so it covers BitAsset, AMM and
@@ -33,8 +35,8 @@
 //!   -> `Error::DuplicateTransaction`; coinbase output keys may not already
 //!   exist in `utxos` or `stxos` -> `Error::OutPointAlreadyExists`.
 //!
-//! A zero-input transaction is still valid the first time it is mined; only
-//! its replay is rejected (T2).
+//! The output-key and body checks alone already reject every re-creation;
+//! the input-count rule additionally rejects zero-input transactions outright.
 //!
 //! `validate_filled_transaction` is shared by the mempool path
 //! (`validate_transaction`: `submit_transaction`, peer `handle_push_tx`, the
@@ -61,6 +63,7 @@ use crate::{
         BitAssetId, BlockHash, Body, DutchAuctionParams, FilledOutput, Header,
         InPoint, OutPoint, OutPointKey, Output, OutputContent, SpentOutput,
         Transaction, TxData, Txid, Update, VerifyingKey,
+        WithdrawalOutputContent,
     },
 };
 
@@ -69,6 +72,10 @@ const ADDR_A: Address = Address([0xAA; 20]);
 // ---------------------------------------------------------------------------
 // Exact reject reasons.
 // ---------------------------------------------------------------------------
+
+fn no_inputs_reason(txid: Txid) -> String {
+    format!("transaction {txid} has no inputs")
+}
 
 fn outpoint_exists_reason(outpoint: OutPoint) -> String {
     format!("output {outpoint} already exists")
@@ -229,90 +236,149 @@ fn fund_deposit(
 }
 
 // ---------------------------------------------------------------------------
-// T2 — replay of a zero-input tx. Z is admitted and mined once; mining it
-// again is rejected by the output-key check whether (Z, 0) is unspent or
-// spent, nothing is written, and undo stays exact.
+// T1 — the input-count rule at mempool: every zero-input shape is rejected with NoInputs.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn zero_input_t2_zero_input_tx_replay_rejected() -> anyhow::Result<()> {
-    let (_tmp, env, state) = fresh_state("zero_input_t2")?;
-    let empty = snapshot(&env, &state);
-    let (sk, addr) = owner(5);
-    let z = unauthorized(Transaction::new(
-        Vec::new(),
-        vec![bitcoin_filled_output(addr, 0).into()],
-    ));
-    let zp = OutPoint::Regular {
-        txid: z.transaction.txid(),
-        vout: 0,
+fn zero_input_t1_mempool_rejects_zero_input_txs() -> anyhow::Result<()> {
+    let (_tmp, env, state) = fresh_state("zero_input_t1")?;
+
+    // (a) Bitcoin(0) output, no inputs, no authorizations.
+    let z = zero_input_tx(0);
+    expect_reject(
+        "T1a zero-input Bitcoin(0): validate_transaction",
+        validate(&env, &state, &unauthorized(z.clone())),
+        &no_inputs_reason(z.txid()),
+    )?;
+    // The authorization layer still accepts 0 == 0: the rule lives in state,
+    // on the shared mempool/connect choke point, not in authorization.
+    let res =
+        authorization::verify_authorized_transaction(&unauthorized(z.clone()));
+    anyhow::ensure!(res.is_ok(), "authorization layer unchanged: {res:?}");
+
+    // (a'') a memo makes a DIFFERENT txid: still rejected.
+    let mut z_memo = zero_input_tx(0);
+    z_memo.memo = b"anything".to_vec();
+    expect_reject(
+        "T1a'' zero-input Bitcoin(0)+memo",
+        validate(&env, &state, &unauthorized(z_memo.clone())),
+        &no_inputs_reason(z_memo.txid()),
+    )?;
+
+    // (b) non-zero output value: rejected before value conservation.
+    let z1 = zero_input_tx(1);
+    expect_reject(
+        "T1b zero-input Bitcoin(1)",
+        validate(&env, &state, &unauthorized(z1.clone())),
+        &no_inputs_reason(z1.txid()),
+    )?;
+
+    // (c) zero-value WITHDRAWAL output from nothing.
+    let main_address = {
+        let pkh = bitcoin::PubkeyHash::hash(b"zero-input withdrawal");
+        bitcoin::Address::p2pkh(pkh, bitcoin::NetworkKind::Test)
+            .into_unchecked()
     };
-
-    // Z validates and connects the first time.
-    let res = validate(&env, &state, &z);
-    anyhow::ensure!(
-        matches!(res, Ok(fee) if fee == bitcoin::Amount::ZERO),
-        "first Z must validate: {res:?}"
+    let zw = Transaction::new(
+        Vec::new(),
+        vec![Output::new(
+            ADDR_A,
+            OutputContent::Withdrawal(WithdrawalOutputContent {
+                value: bitcoin::Amount::ZERO,
+                main_fee: bitcoin::Amount::ZERO,
+                main_address,
+            }),
+        )],
     );
-    let g = make_block(None, vec![z.clone()], Vec::new());
-    apply(&env, &state, &g.0, &g.1)?;
-    let after_g = snapshot(&env, &state);
-    anyhow::ensure!(after_g.utxos.contains_key(&zp));
-    let expected = outpoint_exists_reason(zp);
-
-    // (a) Replay while (Z, 0) is unspent.
     expect_reject(
-        "T2a validate_transaction(Z again, (Z,0) unspent)",
-        validate(&env, &state, &z),
-        &expected,
+        "T1c zero-input Withdrawal(0,0)",
+        validate(&env, &state, &unauthorized(zw.clone())),
+        &no_inputs_reason(zw.txid()),
     )?;
-    let h1 = make_block(Some(g.0.hash()), vec![z.clone()], Vec::new());
-    expect_reject(
-        "T2a apply_block({Z} again, (Z,0) unspent)",
-        apply(&env, &state, &h1.0, &h1.1),
-        &expected,
-    )?;
-    anyhow::ensure!(
-        snapshot(&env, &state) == after_g,
-        "rejected block wrote state"
-    );
 
-    // (b) Spend (Z, 0), then replay Z: the key is now in `stxos`, and
-    // re-creating it would resurrect the spent output.
-    let s = authorization::authorize(
+    // (d) zero-input, ZERO-output tx (creates no keys, so only the input-count
+    // rule stops its unbounded free replay).
+    let empty = Transaction::new(Vec::new(), Vec::new());
+    expect_reject(
+        "T1d zero-input zero-output",
+        validate(&env, &state, &unauthorized(empty.clone())),
+        &no_inputs_reason(empty.txid()),
+    )?;
+
+    // Positive control: a signed 1-input spend of a deposit validates.
+    let (sk, addr) = owner(3);
+    let dep = fund_deposit(&env, &state, addr, 1, 1000);
+    let t = authorization::authorize(
         &[(addr, &sk)],
-        Transaction::new(vec![zp], vec![bitcoin_filled_output(addr, 0).into()]),
+        Transaction::new(
+            vec![dep],
+            vec![bitcoin_filled_output(addr, 900).into()],
+        ),
     )?;
-    let h1 = make_block(Some(g.0.hash()), vec![s], Vec::new());
-    apply(&env, &state, &h1.0, &h1.1)?;
-    let spent = snapshot(&env, &state);
+    let res = validate(&env, &state, &t);
     anyhow::ensure!(
-        !spent.utxos.contains_key(&zp) && spent.stxos.contains_key(&zp)
+        matches!(res, Ok(fee) if fee == bitcoin::Amount::from_sat(100)),
+        "money-path control must validate: {res:?}"
     );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// T2 — the input-count rule at block connect: a body carrying a zero-input tx is rejected, and
+// nothing is written.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn zero_input_t2_block_with_zero_input_tx_rejected() -> anyhow::Result<()> {
+    let (_tmp, env, state) = fresh_state("zero_input_t2")?;
+    let z = zero_input_tx(0);
+
+    let g = make_block(None, Vec::new(), Vec::new());
+    apply(&env, &state, &g.0, &g.1)?;
+    let pre = snapshot(&env, &state);
+
+    // (a) Z alone.
+    let h1 =
+        make_block(Some(g.0.hash()), vec![unauthorized(z.clone())], vec![]);
     expect_reject(
-        "T2b validate_transaction(Z again, (Z,0) spent)",
-        validate(&env, &state, &z),
-        &expected,
-    )?;
-    let h2 = make_block(Some(h1.0.hash()), vec![z.clone()], Vec::new());
-    expect_reject(
-        "T2b apply_block({Z} again, (Z,0) spent)",
-        apply(&env, &state, &h2.0, &h2.1),
-        &expected,
+        "T2a apply_block(body {Z})",
+        apply(&env, &state, &h1.0, &h1.1),
+        &no_inputs_reason(z.txid()),
     )?;
     anyhow::ensure!(
-        snapshot(&env, &state) == spent,
+        snapshot(&env, &state) == pre,
         "rejected block wrote state"
     );
 
-    // Undo is exact, and once g is disconnected (Z, 0) no longer exists, so Z
-    // can be mined again on the new branch.
-    disconnect(&env, &state, &h1.0, &h1.1)?;
-    anyhow::ensure!(snapshot(&env, &state) == after_g, "undo not exact");
-    disconnect(&env, &state, &g.0, &g.1)?;
-    anyhow::ensure!(snapshot(&env, &state) == empty, "undo not exact");
-    apply(&env, &state, &g.0, &g.1)?;
-    anyhow::ensure!(snapshot(&env, &state) == after_g);
+    // (b) Z after a valid signed spend in the same body.
+    let (sk, addr) = owner(5);
+    let dep = fund_deposit(&env, &state, addr, 2, 1000);
+    let pre = snapshot(&env, &state);
+    let t = authorization::authorize(
+        &[(addr, &sk)],
+        Transaction::new(
+            vec![dep],
+            vec![bitcoin_filled_output(addr, 1000).into()],
+        ),
+    )?;
+    let h1b = make_block(
+        Some(g.0.hash()),
+        vec![t.clone(), unauthorized(z.clone())],
+        vec![],
+    );
+    expect_reject(
+        "T2b apply_block(body {T, Z})",
+        apply(&env, &state, &h1b.0, &h1b.1),
+        &no_inputs_reason(z.txid()),
+    )?;
+    anyhow::ensure!(
+        snapshot(&env, &state) == pre,
+        "rejected block wrote state"
+    );
+
+    // Control: the same body without Z connects.
+    let h1c = make_block(Some(g.0.hash()), vec![t], vec![]);
+    apply(&env, &state, &h1c.0, &h1c.1)?;
     Ok(())
 }
 
@@ -528,6 +594,7 @@ fn zero_input_t5_duplicate_txid_in_one_body_rejected() -> anyhow::Result<()> {
 
     // (a) Z twice. Transaction checks run against the pre-block state, so
     // without the body rule both copies would pass the output-key check.
+    // DuplicateTransaction is reported before NoInputs.
     let z = zero_input_tx(0);
     let pre = snapshot(&env, &state);
     let b = make_block(
@@ -830,4 +897,43 @@ fn zero_input_t7g_dutch_auction_collect_output_key_checked()
         }),
         Seed::Unspent,
     )
+}
+
+// ---------------------------------------------------------------------------
+// T8 — the input-count rule for a zero-input BitAsset reservation, the shape the
+// `reserve_bitasset` RPC builds from `Transaction::default()`: no inputs, one
+// reservation output, zero fee, no authorizations. It validated before this
+// rule; now it is rejected (the RPC now funds it with an input).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn zero_input_t8_zero_input_reservation_rejected() -> anyhow::Result<()> {
+    let (_tmp, env, state) = fresh_state("zero_input_t8")?;
+    let reservation = Transaction {
+        inputs: Vec::new(),
+        outputs: vec![Output::new(ADDR_A, OutputContent::BitAssetReservation)],
+        memo: Vec::new(),
+        data: Some(TxData::BitAssetReservation {
+            commitment: [0x08; 32],
+        }),
+    };
+    let expected = no_inputs_reason(reservation.txid());
+    let r = unauthorized(reservation);
+    expect_reject(
+        "T8 validate_transaction(zero-input reservation)",
+        validate(&env, &state, &r),
+        &expected,
+    )?;
+    let pre = snapshot(&env, &state);
+    let b = make_block(pre.tip, vec![r], vec![]);
+    expect_reject(
+        "T8 apply_block({zero-input reservation})",
+        apply(&env, &state, &b.0, &b.1),
+        &expected,
+    )?;
+    anyhow::ensure!(
+        snapshot(&env, &state) == pre,
+        "rejected block wrote state"
+    );
+    Ok(())
 }

@@ -461,6 +461,8 @@ impl Wallet {
     }
 
     /// Create a transaction with a fee only.
+    /// The transaction spends at least one Bitcoin input, even if the fee is
+    /// zero, since consensus requires every transaction to have an input.
     pub fn create_regular_transaction(
         &self,
         fee: bitcoin::Amount,
@@ -549,13 +551,22 @@ impl Wallet {
         fee: bitcoin::Amount,
         memo: Option<Vec<u8>>,
     ) -> Result<Transaction, Error> {
-        let (total_sats, bitcoins) = self.select_bitcoins(fee)?;
+        // The BitAsset inputs fund a zero-fee transfer, so only select
+        // Bitcoin inputs if there is a fee to pay.
+        let (total_sats, bitcoins) = if fee == Amount::ZERO {
+            (Amount::ZERO, HashMap::new())
+        } else {
+            self.select_bitcoins(fee)?
+        };
         let change_sats = total_sats - fee;
         let mut inputs: Vec<_> = bitcoins.into_keys().collect();
         let (total_bitasset, bitasset_utxos) =
             self.select_bitasset_utxos(asset_id, amount)?;
         let bitasset_change = total_bitasset - amount;
         inputs.extend(bitasset_utxos.into_keys());
+        if inputs.is_empty() {
+            return Err(Error::NotEnoughFunds);
+        }
         let mut outputs = vec![Output {
             address,
             content: OutputContent::BitAsset(amount),
@@ -731,6 +742,10 @@ impl Wallet {
         Ok(())
     }
 
+    /// Select Bitcoin UTXOs worth at least `value`.
+    /// At least one UTXO with a non-zero value is selected, even if `value` is
+    /// zero, so that a transaction funded this way always has an input.
+    /// Returns `NotEnoughFunds` if no such UTXO exists.
     pub fn select_bitcoins(
         &self,
         value: bitcoin::Amount,
@@ -773,7 +788,7 @@ impl Wallet {
             {
                 continue;
             }
-            if total >= value {
+            if total >= value && !selected.is_empty() {
                 break;
             }
             total = total
@@ -781,7 +796,7 @@ impl Wallet {
                 .ok_or(AmountOverflowError)?;
             selected.insert(outpoint, output.clone());
         }
-        if total >= value {
+        if total >= value && !selected.is_empty() {
             Ok((total, selected))
         } else {
             Err(Error::NotEnoughFunds)
@@ -1653,7 +1668,135 @@ impl Watchable<()> for Wallet {
 
 #[cfg(test)]
 mod test {
-    use crate::wallet::Wallet;
+    use std::collections::HashMap;
+
+    use bitcoin::{Amount, hashes::Hash as _};
+
+    use crate::{
+        types::{
+            BitAssetId, FilledOutput, FilledOutputContent, OutPoint,
+            OutputContent,
+        },
+        wallet::{Error, Wallet},
+    };
+
+    /// A fresh wallet with a seed, in a unique temp dir.
+    fn seeded_wallet(
+        name: &str,
+    ) -> anyhow::Result<(std::path::PathBuf, Wallet)> {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        let test_dir = std::env::temp_dir()
+            .join(format!("bitassets_test_wallet_{name}_{nanos}"));
+        let wallet = Wallet::new(&test_dir)?;
+        wallet.set_seed(&[2u8; 64])?;
+        Ok((test_dir, wallet))
+    }
+
+    fn deposit_outpoint(tag: u8) -> OutPoint {
+        OutPoint::Deposit(bitcoin::OutPoint {
+            txid: bitcoin::Txid::from_byte_array([tag; 32]),
+            vout: 0,
+        })
+    }
+
+    /// Zero-value builders must still spend an input, since consensus rejects
+    /// transactions without inputs.
+    #[test]
+    fn zero_value_builders_spend_an_input() -> anyhow::Result<()> {
+        let (test_dir, wallet) = seeded_wallet("zero_value")?;
+        let addr = wallet.get_new_address()?;
+
+        // No spendable Bitcoin: a zero-fee regular tx cannot be funded.
+        wallet.put_utxos(&HashMap::from([(
+            deposit_outpoint(1),
+            FilledOutput::new_bitcoin_value(addr, Amount::ZERO),
+        )]))?;
+        let res = wallet.select_bitcoins(Amount::ZERO);
+        anyhow::ensure!(
+            matches!(res, Err(Error::NotEnoughFunds)),
+            "zero-value UTXOs only: {res:?}"
+        );
+        let res = wallet.create_regular_transaction(Amount::ZERO);
+        anyhow::ensure!(
+            matches!(res, Err(Error::NotEnoughFunds)),
+            "zero-value UTXOs only: {res:?}"
+        );
+
+        let funded = deposit_outpoint(2);
+        wallet.put_utxos(&HashMap::from([(
+            funded,
+            FilledOutput::new_bitcoin_value(addr, Amount::from_sat(500)),
+        )]))?;
+        let (total, selected) = wallet.select_bitcoins(Amount::ZERO)?;
+        anyhow::ensure!(total == Amount::from_sat(500));
+        anyhow::ensure!(selected.keys().eq([&funded]), "{selected:?}");
+
+        // Zero-fee regular tx (the funding for a BitAsset reservation).
+        let tx = wallet.create_regular_transaction(Amount::ZERO)?;
+        anyhow::ensure!(tx.inputs == vec![funded], "{tx:?}");
+        let mut reservation = tx;
+        wallet.reserve_bitasset(&mut reservation, "zero-fee-name")?;
+        anyhow::ensure!(reservation.inputs == vec![funded]);
+        anyhow::ensure!(reservation.is_reservation());
+
+        // Zero-value, zero-fee transfer and withdrawal.
+        let tx =
+            wallet.create_transfer(addr, Amount::ZERO, Amount::ZERO, None)?;
+        anyhow::ensure!(tx.inputs == vec![funded], "{tx:?}");
+        let main_address = {
+            let pkh = bitcoin::PubkeyHash::hash(b"zero-value withdrawal");
+            bitcoin::Address::p2pkh(pkh, bitcoin::NetworkKind::Test)
+                .into_unchecked()
+        };
+        let tx = wallet.create_withdrawal(
+            main_address,
+            Amount::ZERO,
+            Amount::ZERO,
+            Amount::ZERO,
+        )?;
+        anyhow::ensure!(tx.inputs == vec![funded], "{tx:?}");
+
+        // A zero-fee BitAsset transfer is funded by its BitAsset input and
+        // does not need Bitcoin.
+        let bitasset = BitAssetId([0x42; 32]);
+        let bitasset_outpoint = deposit_outpoint(3);
+        wallet.put_utxos(&HashMap::from([(
+            bitasset_outpoint,
+            FilledOutput::new(addr, FilledOutputContent::BitAsset(bitasset, 7)),
+        )]))?;
+        let tx = wallet.create_bitasset_transfer(
+            addr,
+            bitasset,
+            7,
+            Amount::ZERO,
+            None,
+        )?;
+        anyhow::ensure!(tx.inputs == vec![bitasset_outpoint], "{tx:?}");
+        anyhow::ensure!(
+            tx.outputs.iter().all(|output| matches!(
+                output.content,
+                OutputContent::BitAsset(7)
+            )),
+            "{tx:?}"
+        );
+        // With no holdings of the BitAsset, there is nothing to spend.
+        let res = wallet.create_bitasset_transfer(
+            addr,
+            BitAssetId([0x43; 32]),
+            0,
+            Amount::ZERO,
+            None,
+        );
+        anyhow::ensure!(
+            matches!(res, Err(Error::NotEnoughFunds)),
+            "no inputs available: {res:?}"
+        );
+
+        let _unused = std::fs::remove_dir_all(&test_dir);
+        Ok(())
+    }
 
     #[test]
     fn test_get_or_generate_last_address() -> anyhow::Result<()> {

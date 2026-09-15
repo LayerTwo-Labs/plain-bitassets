@@ -638,6 +638,15 @@ impl State {
         rotxn: &RoTxn,
         tx: &FilledTransaction,
     ) -> Result<bitcoin::Amount, Error> {
+        // A transaction must spend at least one input. The coinbase is not a
+        // `Transaction` and is not validated here. With this rule every txid
+        // commits to an outpoint that can be spent only once, so a
+        // transaction cannot be mined twice on one chain, and a zero-output
+        // transaction (which creates no keys for the check below to catch)
+        // cannot be replayed either.
+        if tx.transaction.inputs.is_empty() {
+            return Err(Error::NoInputs { txid: tx.txid() });
+        }
         // The outpoints created by this transaction must not already exist
         // (see `ensure_outpoint_is_new`). A transaction's txid is a pure
         // function of its contents, so an identical transaction can be mined
