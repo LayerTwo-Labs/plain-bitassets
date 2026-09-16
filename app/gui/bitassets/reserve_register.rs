@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use eframe::egui;
-use plain_bitassets::types::BitAssetData;
+use plain_bitassets::types::{BitAssetData, Transaction};
 
 use crate::{
     app::App,
@@ -25,7 +25,13 @@ fn register_bitasset(
     bitasset_data: Cow<BitAssetData>,
     fee: bitcoin::Amount,
 ) -> anyhow::Result<()> {
-    let mut tx = app.wallet.create_regular_transaction(fee)?;
+    // The reservation input funds a zero-fee registration, so only select
+    // Bitcoin inputs if there is a fee to pay.
+    let mut tx = if fee == bitcoin::Amount::ZERO {
+        Transaction::default()
+    } else {
+        app.wallet.create_regular_transaction(fee)?
+    };
     let () = app.wallet.register_bitasset(
         &mut tx,
         plaintext_name,

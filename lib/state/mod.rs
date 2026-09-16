@@ -27,6 +27,8 @@ mod dutch_auction;
 pub mod error;
 mod rollback;
 mod two_way_peg_data;
+#[cfg(test)]
+mod zero_input_replay_tests;
 
 pub use amm::{AmmPair, PoolState as AmmPoolState};
 pub use bitassets::SeqId as BitAssetSeqId;
@@ -603,12 +605,72 @@ impl State {
         }
     }
 
+    /// Check that an outpoint that is about to be created does not already
+    /// exist, either unspent (`utxos`) or spent (`stxos`).
+    ///
+    /// Block connection writes created outputs with an unchecked `put`, and
+    /// `disconnect_tip` deletes created outputs by key and restores spent
+    /// outputs from `stxos`. If an outpoint key could be created a second
+    /// time, disconnecting either creating block would delete or fail to find
+    /// the other's output, so the UTXO set would depend on reorg history
+    /// (`NoUtxo` / `NoStxo` on a later disconnect, and nodes that saw a
+    /// different reorg history would diverge on a later spend).
+    /// Keys of different `OutPoint` variants never collide.
+    pub(crate) fn ensure_outpoint_is_new(
+        &self,
+        rotxn: &RoTxn,
+        outpoint: &OutPoint,
+    ) -> Result<(), Error> {
+        let key = OutPointKey::from_outpoint(outpoint);
+        if self.utxos.contains_key(rotxn, &key)?
+            || self.stxos.contains_key(rotxn, &key)?
+        {
+            return Err(Error::OutPointAlreadyExists {
+                outpoint: *outpoint,
+            });
+        }
+        Ok(())
+    }
+
     /// Validates a filled transaction, and returns the fee
     pub fn validate_filled_transaction(
         &self,
         rotxn: &RoTxn,
         tx: &FilledTransaction,
     ) -> Result<bitcoin::Amount, Error> {
+        // A transaction must spend at least one input. The coinbase is not a
+        // `Transaction` and is not validated here. With this rule every txid
+        // commits to an outpoint that can be spent only once, so a
+        // transaction cannot be mined twice on one chain, and a zero-output
+        // transaction (which creates no keys for the check below to catch)
+        // cannot be replayed either.
+        if tx.transaction.inputs.is_empty() {
+            return Err(Error::NoInputs { txid: tx.txid() });
+        }
+        // The outpoints created by this transaction must not already exist
+        // (see `ensure_outpoint_is_new`). A transaction's txid is a pure
+        // function of its contents, so an identical transaction can be mined
+        // again once it has left the mempool if it has no inputs (it carries
+        // no authorization, so anyone can re-broadcast it), which would
+        // re-create its `Regular { txid, vout }` outpoints. A transaction that
+        // spends inputs cannot be mined again (its inputs are gone), and this
+        // check rejects the replay either way.
+        //
+        // `FilledTransaction::filled_outputs` maps `transaction.outputs`
+        // one-to-one and `connect_prevalidated` keys every filled output as
+        // `Regular { txid, vout }`, so this covers outputs of every content
+        // kind, independent of `tx.data`: Bitcoin, withdrawal, BitAsset,
+        // BitAsset control, BitAsset reservation, AMM LP token and Dutch
+        // auction receipt outputs. This runs on the mempool path and, via
+        // `block::prevalidate`, against the pre-block state on connect.
+        let txid = tx.txid();
+        for vout in 0..tx.transaction.outputs.len() {
+            let outpoint = OutPoint::Regular {
+                txid,
+                vout: vout as u32,
+            };
+            let () = self.ensure_outpoint_is_new(rotxn, &outpoint)?;
+        }
         let () = self.validate_reservations(tx)?;
         let () = self.validate_bitassets(rotxn, tx)?;
         let fee = tx.bitcoin_fee()?;

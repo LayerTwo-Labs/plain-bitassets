@@ -599,7 +599,13 @@ impl RpcServer for RpcServerImpl {
     }
 
     async fn reserve_bitasset(&self, plain_name: String) -> RpcResult<Txid> {
-        let mut tx = Transaction::default();
+        // Consensus requires at least one input, so fund the reservation with
+        // a zero-fee regular transaction.
+        let mut tx = self
+            .app
+            .wallet
+            .create_regular_transaction(Amount::ZERO)
+            .map_err(custom_err)?;
         let () = match self.app.wallet.reserve_bitasset(&mut tx, &plain_name) {
             Ok(()) => (),
             Err(err) => return Err(custom_err(err)),

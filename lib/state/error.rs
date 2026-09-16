@@ -366,6 +366,8 @@ pub enum Error {
     Db(Box<sneed::Error>),
     #[error(transparent)]
     DutchAuction(#[from] DutchAuction),
+    #[error("block body contains transaction {txid} more than once")]
+    DuplicateTransaction { txid: Txid },
     #[error(transparent)]
     FillTxOutputContents(#[from] FillTxOutputContents),
     #[error(
@@ -385,6 +387,8 @@ pub enum Error {
     MissingBitAssetInput { name_hash: Hash },
     #[error("deposit block doesn't exist")]
     NoDepositBlock,
+    #[error("transaction {txid} has no inputs")]
+    NoInputs { txid: Txid },
     #[error("total fees less than coinbase value")]
     NotEnoughFees,
     #[error("no tip")]
@@ -397,6 +401,8 @@ pub enum Error {
     SpendWithdrawalOutput { outpoint: OutPoint },
     #[error("Withdrawal bundle event block doesn't exist")]
     NoWithdrawalBundleEventBlock,
+    #[error("output {outpoint} already exists")]
+    OutPointAlreadyExists { outpoint: OutPoint },
     #[error(transparent)]
     PendingWithdrawalBundleUnknown(#[from] PendingWithdrawalBundleUnknown),
     #[error(
