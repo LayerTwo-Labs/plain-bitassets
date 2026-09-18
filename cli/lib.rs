@@ -1,4 +1,5 @@
 use std::{
+    marker::PhantomData,
     net::{Ipv4Addr, SocketAddr},
     time::Duration,
 };
@@ -9,14 +10,28 @@ use jsonrpsee::{core::client::ClientT, http_client::HttpClientBuilder};
 use plain_bitassets::{
     authorization::{Dst, Signature},
     types::{
-        Address, AssetId, BitAssetData, BitAssetId, BlockHash, DutchAuctionId,
-        DutchAuctionParams, EncryptionPubKey, THIS_SIDECHAIN, Txid,
-        VerifyingKey,
+        Address, AssetId, AuthorizedTransaction, BitAssetData, BitAssetId,
+        BlockHash, DutchAuctionId, DutchAuctionParams, EncryptionPubKey,
+        THIS_SIDECHAIN, Txid, VerifyingKey,
     },
 };
 use plain_bitassets_app_rpc_api::RpcClient;
 use tracing_subscriber::layer::SubscriberExt as _;
 use url::{Host, Url};
+
+struct JsonParser<T>(PhantomData<T>);
+
+impl<T> JsonParser<T> {
+    fn parse(
+        s: &str,
+    ) -> Result<T, serde_path_to_error::Error<serde_json::Error>>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let mut deserializer = serde_json::Deserializer::from_str(s);
+        serde_path_to_error::deserialize(&mut deserializer)
+    }
+}
 
 #[derive(Clone, Debug, Subcommand)]
 #[command(arg_required_else_help(true))]
@@ -162,6 +177,11 @@ pub enum Command {
     GetTransactionInfo {
         txid: Txid,
     },
+    /// Get UTXOs for addresses
+    GetUtxos {
+        #[arg(required = true)]
+        addresses: Vec<Address>,
+    },
     GetWalletAddresses,
     /// Get wallet UTXOs
     GetWalletUtxos,
@@ -220,6 +240,11 @@ pub enum Command {
         address: Address,
         #[arg(long)]
         msg: String,
+    },
+    /// Verify and broadcast a transaction
+    SubmitTransaction {
+        #[arg(value_parser = JsonParser::<AuthorizedTransaction>::parse)]
+        transaction: AuthorizedTransaction,
     },
     /// Stop the node
     Stop,
@@ -476,6 +501,11 @@ where
             let tx_info = rpc_client.get_transaction_info(txid).await?;
             serde_json::to_string_pretty(&tx_info)?
         }
+        Command::GetUtxos { addresses } => {
+            let addresses = addresses.into_iter().collect();
+            let utxos = rpc_client.get_utxos(addresses).await?;
+            serde_json::to_string_pretty(&utxos)?
+        }
         Command::GetWalletAddresses => {
             let addresses = rpc_client.get_wallet_addresses().await?;
             serde_json::to_string_pretty(&addresses)?
@@ -557,6 +587,10 @@ where
             let authorization =
                 rpc_client.sign_arbitrary_msg_as_addr(address, msg).await?;
             serde_json::to_string_pretty(&authorization)?
+        }
+        Command::SubmitTransaction { transaction } => {
+            let txid = rpc_client.submit_transaction(transaction).await?;
+            format!("{txid}")
         }
         Command::Stop => {
             let () = rpc_client.stop().await?;

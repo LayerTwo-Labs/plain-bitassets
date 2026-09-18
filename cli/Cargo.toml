@@ -15,7 +15,9 @@ http = { workspace = true }
 jsonrpsee = { workspace = true, features = ["http-client"] }
 plain_bitassets = { path = "../lib", features = ["clap"] }
 plain_bitassets_app_rpc_api = { path = "../rpc-api" }
+serde = { workspace = true }
 serde_json = { workspace = true }
+serde_path_to_error = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

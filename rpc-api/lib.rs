@@ -1,6 +1,6 @@
 //! RPC API
 
-use std::net::SocketAddr;
+use std::{collections::HashSet, net::SocketAddr};
 
 use fraction::Fraction;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
@@ -11,9 +11,9 @@ use plain_bitassets::{
     net::{Peer, PeerConnectionStatus},
     state::{AmmPoolState, BitAssetSeqId, DutchAuctionState},
     types::{
-        Address, AssetId, Authorization, BitAssetData, BitAssetDataUpdates,
-        BitAssetId, BitcoinOutputContent, Block, BlockHash, Body,
-        DutchAuctionId, DutchAuctionParams, EncryptionPubKey,
+        Address, AssetId, Authorization, AuthorizedTransaction, BitAssetData,
+        BitAssetDataUpdates, BitAssetId, BitcoinOutputContent, Block,
+        BlockHash, Body, DutchAuctionId, DutchAuctionParams, EncryptionPubKey,
         FilledOutputContent, Header, MerkleRoot, OutPoint, Output,
         OutputContent, PointedOutput, Transaction, TxData, TxIn, Txid,
         VerifyingKey, WithdrawalBundle, WithdrawalOutputContent,
@@ -265,6 +265,16 @@ pub trait Rpc {
         txid: Txid,
     ) -> RpcResult<Option<Transaction>>;
 
+    /// Get UTXOs for addresses
+    #[open_api_method(output_schema(
+        ToSchema = "Vec<PointedOutput<FilledOutputContent>>"
+    ))]
+    #[method(name = "get_utxos")]
+    async fn get_utxos(
+        &self,
+        addresses: HashSet<Address>,
+    ) -> RpcResult<Vec<PointedOutput<FilledOutputContent>>>;
+
     /// Get information about a transaction in the current chain
     #[method(name = "get_transaction_info")]
     async fn get_transaction_info(
@@ -379,6 +389,13 @@ pub trait Rpc {
         address: Address,
         msg: String,
     ) -> RpcResult<Authorization>;
+
+    /// Verify and broadcast a transaction
+    #[method(name = "submit_transaction")]
+    async fn submit_transaction(
+        &self,
+        transaction: AuthorizedTransaction,
+    ) -> RpcResult<Txid>;
 
     /// Stop the node
     #[method(name = "stop")]

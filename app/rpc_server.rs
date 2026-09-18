@@ -1,4 +1,4 @@
-use std::{borrow::Cow, cmp::Ordering, net::SocketAddr};
+use std::{borrow::Cow, cmp::Ordering, collections::HashSet, net::SocketAddr};
 
 use bitcoin::Amount;
 use fraction::Fraction;
@@ -13,10 +13,10 @@ use plain_bitassets::{
     net::Peer,
     state::{self, AmmPair, AmmPoolState, BitAssetSeqId, DutchAuctionState},
     types::{
-        Address, AssetId, Authorization, BitAssetData, BitAssetId, Block,
-        BlockHash, DutchAuctionId, DutchAuctionParams, EncryptionPubKey,
-        FilledOutputContent, PointedOutput, Transaction, Txid, VerifyingKey,
-        WithdrawalBundle, keys::Ecies,
+        Address, AssetId, Authorization, AuthorizedTransaction, BitAssetData,
+        BitAssetId, Block, BlockHash, DutchAuctionId, DutchAuctionParams,
+        EncryptionPubKey, FilledOutputContent, PointedOutput, Transaction,
+        Txid, VerifyingKey, WithdrawalBundle, keys::Ecies,
     },
     wallet::Balance,
 };
@@ -425,6 +425,21 @@ impl RpcServer for RpcServerImpl {
         self.app.node.try_get_transaction(txid).map_err(custom_err)
     }
 
+    async fn get_utxos(
+        &self,
+        addresses: HashSet<Address>,
+    ) -> RpcResult<Vec<PointedOutput<FilledOutputContent>>> {
+        let res = self
+            .app
+            .node
+            .get_utxos_by_addresses(&addresses)
+            .map_err(custom_err)?
+            .into_iter()
+            .map(|(outpoint, output)| PointedOutput { outpoint, output })
+            .collect();
+        Ok(res)
+    }
+
     async fn get_transaction_info(
         &self,
         txid: Txid,
@@ -642,6 +657,18 @@ impl RpcServer for RpcServerImpl {
             .wallet
             .sign_arbitrary_msg_as_addr(&address, &msg)
             .map_err(custom_err)
+    }
+
+    async fn submit_transaction(
+        &self,
+        transaction: AuthorizedTransaction,
+    ) -> RpcResult<Txid> {
+        let txid = transaction.transaction.txid();
+        let () = self
+            .app
+            .submit_transaction(transaction)
+            .map_err(custom_err)?;
+        Ok(txid)
     }
 
     async fn stop(&self) {
